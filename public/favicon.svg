@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="lg" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#1f6f68" />
+      <stop offset="1" stop-color="#33c2b0" />
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="#14315c" />
+  <!-- ascending bars -->
+  <rect x="16" y="36" width="5" height="12" rx="1.5" fill="url(#lg)" />
+  <rect x="23" y="30" width="5" height="18" rx="1.5" fill="url(#lg)" />
+  <rect x="30" y="24" width="5" height="24" rx="1.5" fill="url(#lg)" />
+  <!-- node-dot trend line -->
+  <polyline points="20,44 32,36 44,20" fill="none" stroke="#37d2c0" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
+  <circle cx="20" cy="44" r="3.5" fill="#37d2c0" />
+  <circle cx="32" cy="36" r="3.5" fill="#37d2c0" />
+  <circle cx="44" cy="20" r="3.5" fill="#37d2c0" />
+</svg>

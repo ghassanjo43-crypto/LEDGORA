@@ -1,0 +1,137 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-slate-50 text-slate-900 antialiased;
+  font-feature-settings: 'cv11', 'ss01';
+}
+
+.dark body {
+  @apply bg-slate-950 text-slate-100;
+}
+
+/* Thin, unobtrusive scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.4) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background-color: rgba(148, 163, 184, 0.4);
+  border-radius: 9999px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Focus ring consistency */
+.focus-ring {
+  @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-950;
+}
+
+@layer components {
+  /* Surface = the standard card/panel background used across the ERP shell. */
+  .surface {
+    @apply rounded-xl border border-slate-200/80 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900;
+  }
+
+  /* Sticky data-table header used by every table in the app. */
+  .table-head-sticky {
+    @apply sticky top-0 z-10 bg-slate-50/95 backdrop-blur supports-[backdrop-filter]:bg-slate-50/80 dark:bg-slate-900/95 dark:supports-[backdrop-filter]:bg-slate-900/80;
+  }
+
+  /* Skeleton shimmer block for loading states. */
+  .skeleton {
+    @apply relative overflow-hidden rounded-md bg-slate-200/70 dark:bg-slate-800/70;
+  }
+  .skeleton::after {
+    content: '';
+    @apply absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/40 to-transparent dark:via-white/5;
+    animation: shimmer 1.5s infinite;
+  }
+}
+
+@keyframes shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+/* Journal entry expand reveal. */
+@keyframes expandIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Respect reduced-motion preferences. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ─────────────────────────── Print documents ────────────────────────────
+ * A PrintDocument renders an A4 document at <body> level and marks <html> with
+ * `has-print-document`. In print we then hide the whole app shell (#root) and
+ * show only that document — so a printed invoice / receipt / credit note is the
+ * single A4 page, with no surrounding list, filters or blank second page.
+ */
+.print-document {
+  display: none;
+}
+
+@media print {
+  @page {
+    size: A4;
+    margin: 0;
+  }
+
+  html.has-print-document,
+  html.has-print-document body {
+    background: #ffffff !important;
+  }
+
+  /* Hide the application (navigation, filters, lists, modal chrome). */
+  html.has-print-document #root {
+    display: none !important;
+  }
+
+  /* Show only the print document and let it flow from the top of the page. */
+  html.has-print-document .print-document {
+    display: block !important;
+  }
+
+  /* The document itself sits flush at the page origin; drop screen chrome and
+   * collapse the fixed A4 min-height so a short document never spills onto a
+   * second, blank page. */
+  .print-document .invoice-page {
+    margin: 0 auto !important;
+    box-shadow: none !important;
+    min-height: auto !important;
+    break-inside: avoid-page;
+  }
+}
