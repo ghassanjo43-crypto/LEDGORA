@@ -50,6 +50,14 @@ export interface BankDetails {
   branch: string;
   /** Free-text remittance instructions shown on the invoice. */
   instructions: string;
+  /**
+   * True while these are the shipped placeholder details (no real account has
+   * been configured). Drives the "do not transfer real money" warning. It is a
+   * structured flag rather than a text match so the warning cannot be defeated —
+   * or accidentally triggered — by wording changes. Cleared automatically the
+   * first time an administrator saves real details.
+   */
+  isPlaceholder?: boolean;
 }
 
 /** Global billing configuration. */
@@ -91,7 +99,16 @@ export interface PaymentProof {
   fileSize: number;
   /** Base64 data URL (image or PDF), size-capped. */
   dataUrl: string;
+  /** The LEDGORA payment reference the customer says they quoted. */
   reference: string;
+  /** The bank's own transaction/reference number, when the customer supplies it. */
+  bankTransactionReference?: string;
+  /**
+   * Whether `reference` matched the invoice's payment reference at upload time.
+   * Recorded for the administrator reviewing the proof — a mismatch never blocks
+   * the upload, and never activates anything on its own.
+   */
+  matchesInvoiceReference?: boolean;
   amount: number;
   paidAt: string;
   note: string;
@@ -103,6 +120,12 @@ export interface SubscriptionInvoice {
   id: string;
   number: string;
   organizationId: string;
+  /**
+   * Unique bank-remittance reference (`LG-XXXX-XXXX`) the customer must quote on
+   * the transfer. This — not the invoice number — is what reconciles an incoming
+   * payment. Issued by the payment-reference service at invoice creation.
+   */
+  paymentReference: string;
 
   planId: string;
   planCode: string;

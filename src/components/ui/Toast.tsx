@@ -79,3 +79,13 @@ export function useToast(): ToastContextValue {
   if (!ctx) throw new Error('useToast must be used within a ToastProvider');
   return ctx;
 }
+
+/**
+ * Toast access for components that may also be rendered outside a provider
+ * (isolated previews, tests). Falls back to a no-op notifier.
+ */
+export function useOptionalToast(): ToastContextValue {
+  const ctx = useContext(ToastContext);
+  const fallback = useMemo<ToastContextValue>(() => ({ notify: () => {} }), []);
+  return ctx ?? fallback;
+}

@@ -23,7 +23,7 @@ beforeEach(() => {
   useCostCenterStore.getState().resetToDefault?.();
   useInventoryStore.getState().resetToDefault();
   useManufacturingStore.getState().resetToDefault();
-  useSessionStore.setState({ role: 'admin', userName: 'Plant Manager' });
+  useSessionStore.setState({ platformRole: 'super-admin', userName: 'Plant Manager' });
   useManufacturingStore.getState().ensureSeeded();
 });
 

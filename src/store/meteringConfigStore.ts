@@ -19,7 +19,7 @@ import type {
   RenderCostAssumptions,
 } from '@/types/metering';
 import { makeSeedMeteringConfig } from '@/lib/meteringSeed';
-import { getCurrentRole, getCurrentUserName } from './sessionStore';
+import { getPlatformRole, getCurrentUserName } from './sessionStore';
 import { assertCanManageMetering } from '@/lib/meteringPermissions';
 import { generateId, nowIso } from '@/lib/utils';
 
@@ -65,7 +65,7 @@ function seedState(): Pick<MeteringConfigState, 'config' | 'orgBundles' | 'audit
 }
 
 function guard(): MeteringActionResult | null {
-  const perm = assertCanManageMetering(getCurrentRole());
+  const perm = assertCanManageMetering(getPlatformRole());
   return perm.ok ? null : { ok: false, error: perm.error };
 }
 

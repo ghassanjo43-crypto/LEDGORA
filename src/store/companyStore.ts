@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { businessJSONStorage } from '@/lib/workspaceStorage';
 import type { Account, BusinessEntity, CompanySettings } from '@/types';
 import type { JournalEntry } from '@/types/journal';
 import { SEED_ACCOUNTS } from '@/data/seedAccounts';
@@ -118,7 +119,7 @@ export const useCompanyStore = create<CompanyState>()(
         })),
     }),
     {
-      name: 'ledgerly-companies',
+      name: 'ledgerly-companies', storage: businessJSONStorage,
       version: 1,
       partialize: (s) => ({ companies: s.companies, activeCompanyId: s.activeCompanyId }),
     },

@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { businessJSONStorage } from '@/lib/workspaceStorage';
 import type { Account, BusinessEntity, CompanySettings } from '@/types';
 import type { InvoiceCompanySnapshot, InvoiceCustomerSnapshot, InvoiceTemplateSnapshot } from '@/types/invoice';
 import type {
@@ -466,7 +467,7 @@ export const useBillStore = create<BillState>()(
       replaceAll: (bills) => set({ bills }),
       resetToDefault: () => set({ bills: [], numbering: { [INVOICE_ENTITY_ID]: makeDefaultBillNumberingConfig(INVOICE_ENTITY_ID) } }),
     }),
-    { name: 'ledgerly-bills', version: 1 },
+    { name: 'ledgerly-bills', storage: businessJSONStorage, version: 1 },
   ),
 );
 

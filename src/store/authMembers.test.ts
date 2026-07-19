@@ -21,7 +21,7 @@ function ownerSignedIn(userLimit: number): string {
 beforeEach(() => {
   useAuthStore.getState().resetToDefault();
   useEntitlementStore.getState().resetToDefault();
-  useSessionStore.setState({ role: 'member', userName: 'Olive Owner' }); // rely on org role, not platform admin
+  useSessionStore.setState({ platformRole: 'none', userName: 'Olive Owner' }); // rely on org role, not platform admin
 });
 
 describe('member management', () => {

@@ -4,6 +4,7 @@
  * bank details, metering plans); the lists here are UI vocabulary only.
  */
 import type { SelectOption } from '@/components/ui/Select';
+import { generateDevelopmentReference } from '@/services/paymentReferenceService';
 
 /** A compact country list (extend freely — UI vocabulary, not billing config). */
 export const COUNTRY_OPTIONS: SelectOption[] = [
@@ -85,12 +86,14 @@ export function makeVerificationToken(): string {
 }
 
 /**
- * Unique, human-quotable bank-remittance payment reference, e.g.
- * `LG-7F3K-9QX2`. Uniqueness is checked against existing references by the
- * caller; the entropy here makes collisions negligible.
+ * Human-quotable bank-remittance payment reference, e.g. `LG-7F3K-9QX2`.
+ *
+ * Delegates to the payment-reference service so there is ONE generator in the
+ * codebase and one place a backend implementation replaces it. Pass `isTaken` to
+ * check against references the caller already holds; in production the database
+ * UNIQUE constraint is what actually guarantees uniqueness.
+ * @see services/paymentReferenceService
  */
-export function makePaymentReference(): string {
-  const block = (): string =>
-    Math.random().toString(36).replace(/[^a-z0-9]/g, '').slice(0, 4).toUpperCase().padEnd(4, '0');
-  return `LG-${block()}-${block()}`;
+export function makePaymentReference(isTaken?: (reference: string) => boolean): string {
+  return generateDevelopmentReference(isTaken);
 }

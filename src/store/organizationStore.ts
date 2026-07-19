@@ -25,13 +25,18 @@ import type {
 import type { OrganizationSubscription } from '@/types/subscription';
 import { priceSubscription, type SubscriptionCart } from '@/lib/onboardingPricing';
 import { resolveEntitlementActivation } from '@/lib/accessControl';
-import { makePaymentReference, mockHashPassword } from '@/lib/onboardingData';
+import { mockHashPassword } from '@/lib/onboardingData';
+import {
+  generateDevelopmentReference,
+  paymentReferenceMatches,
+} from '@/services/paymentReferenceService';
 import { useMeteringConfigStore } from './meteringConfigStore';
 import { useEntitlementStore } from './entitlementStore';
 import { useBillingStore } from './billingStore';
 import { useAuthStore, getCurrentUser } from './authStore';
-import { getCurrentRole, getCurrentUserName } from './sessionStore';
+import { getPlatformRole, getCurrentUserName } from './sessionStore';
 import { assertCanVerifyPayments } from '@/lib/billingPermissions';
+import { isPlaceholderBankConfig } from '@/lib/bankDetails';
 import { useStore } from './useStore';
 import { generateId, nowIso } from '@/lib/utils';
 
@@ -85,7 +90,10 @@ export interface ProofInput {
   fileType: string;
   fileSize: number;
   dataUrl: string;
+  /** The LEDGORA payment reference (`LG-XXXX-XXXX`) quoted on the transfer. */
   reference: string;
+  /** The bank's own transaction/reference number, when the customer has one. */
+  bankTransactionReference?: string;
   amount: number;
   paidAt: string;
   note?: string;
@@ -113,15 +121,23 @@ function bankFromBilling(): BankInstructions {
     swift: bank.swift,
     branch: bank.branch,
     instructions: bank.instructions,
+    // Carry the placeholder flag onto the frozen snapshot so the development
+    // warning stays accurate for invoices issued before real details existed.
+    isPlaceholder: isPlaceholderBankConfig(bank),
   };
 }
 
-/** Unique payment reference across all issued invoices. */
+/**
+ * Unique payment reference across all issued invoices.
+ *
+ * BACKEND SEAM: production references are generated server-side inside the
+ * invoice-creation transaction, with a UNIQUE database constraint as the real
+ * guarantee — this local scan only covers invoices this browser knows about.
+ * @see services/paymentReferenceService
+ */
 function uniquePaymentReference(existing: OnboardingInvoice[]): string {
   const used = new Set(existing.map((i) => i.paymentReference));
-  let ref = makePaymentReference();
-  while (used.has(ref)) ref = makePaymentReference();
-  return ref;
+  return generateDevelopmentReference((ref) => used.has(ref));
 }
 
 function nextInvoiceNumber(existing: OnboardingInvoice[]): string {
@@ -283,7 +299,7 @@ export const useOrganizationStore = create<OrganizationState>()(
         if (invoice.status === 'paid') return { ok: false, error: 'This invoice is already paid.' };
         const fieldErrors: Record<string, string> = {};
         if (!input.fileName) fieldErrors.file = 'Attach a proof of payment.';
-        if (!input.reference.trim()) fieldErrors.reference = 'Enter the bank transfer reference.';
+        if (!input.reference.trim()) fieldErrors.reference = 'Enter the LEDGORA payment reference you quoted.';
         if (!(input.amount > 0)) fieldErrors.amount = 'Enter the amount paid.';
         if (!input.paidAt) fieldErrors.paidAt = 'Enter the payment date.';
         if (Object.keys(fieldErrors).length > 0) {
@@ -297,6 +313,10 @@ export const useOrganizationStore = create<OrganizationState>()(
           fileSize: input.fileSize,
           dataUrl: input.dataUrl,
           reference: input.reference.trim(),
+          bankTransactionReference: input.bankTransactionReference?.trim() || undefined,
+          // Recorded for the reviewing administrator. A mismatch is surfaced as
+          // a warning; it neither blocks the upload nor decides the outcome.
+          matchesInvoiceReference: paymentReferenceMatches(input.reference, invoice.paymentReference),
           amount: input.amount,
           paidAt: input.paidAt,
           note: input.note?.trim(),
@@ -317,7 +337,7 @@ export const useOrganizationStore = create<OrganizationState>()(
 
       /* ── Administrator approval → activation ───────────────────────────── */
       approvePayment: (invoiceId) => {
-        const perm = assertCanVerifyPayments(getCurrentRole());
+        const perm = assertCanVerifyPayments(getPlatformRole());
         if (!perm.ok) return { ok: false, error: perm.error };
         const invoice = get().invoices.find((i) => i.id === invoiceId);
         if (!invoice) return { ok: false, error: 'Invoice not found.' };
@@ -390,7 +410,7 @@ export const useOrganizationStore = create<OrganizationState>()(
       },
 
       rejectPayment: (invoiceId, reason) => {
-        const perm = assertCanVerifyPayments(getCurrentRole());
+        const perm = assertCanVerifyPayments(getPlatformRole());
         if (!perm.ok) return { ok: false, error: perm.error };
         const invoice = get().invoices.find((i) => i.id === invoiceId);
         if (!invoice) return { ok: false, error: 'Invoice not found.' };
@@ -408,7 +428,7 @@ export const useOrganizationStore = create<OrganizationState>()(
       },
 
       requestMoreInfo: (invoiceId, note) => {
-        const perm = assertCanVerifyPayments(getCurrentRole());
+        const perm = assertCanVerifyPayments(getPlatformRole());
         if (!perm.ok) return { ok: false, error: perm.error };
         const invoice = get().invoices.find((i) => i.id === invoiceId);
         if (!invoice) return { ok: false, error: 'Invoice not found.' };
@@ -434,7 +454,7 @@ export const useOrganizationStore = create<OrganizationState>()(
       },
 
       suspendSubscription: (reason) => {
-        const perm = assertCanVerifyPayments(getCurrentRole());
+        const perm = assertCanVerifyPayments(getPlatformRole());
         if (!perm.ok) return { ok: false, error: perm.error };
         const sub = get().subscription;
         if (!sub) return { ok: false, error: 'No subscription to suspend.' };

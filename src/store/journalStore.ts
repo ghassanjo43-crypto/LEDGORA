@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { businessJSONStorage } from '@/lib/workspaceStorage';
 import type { Account, BusinessEntity } from '@/types';
 import type { CostCenter } from '@/types/costCenter';
 import type { Project } from '@/types/project';
@@ -542,7 +543,7 @@ export const useJournalStore = create<JournalState>()(
         set({ entries: SEED_JOURNAL_ENTRIES.map((e) => ({ ...e })) }),
     }),
     {
-      name: 'ifrs-journal-store',
+      name: 'ifrs-journal-store', storage: businessJSONStorage,
       version: 3,
       partialize: (state) => ({ entries: state.entries }),
       // v3 refreshes the demo dataset to the 10 seeded dummy transactions

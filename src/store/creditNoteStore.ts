@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { businessJSONStorage } from '@/lib/workspaceStorage';
 import type { Account, BusinessEntity, CompanySettings } from '@/types';
 import type { InvoiceCompanySnapshot, InvoiceCustomerSnapshot, InvoiceTemplateSnapshot } from '@/types/invoice';
 import type {
@@ -505,7 +506,7 @@ export const useCreditNoteStore = create<CreditNoteState>()(
       replaceAll: (creditNotes) => set({ creditNotes }),
       resetToDefault: () => set({ creditNotes: [], numbering: { [INVOICE_ENTITY_ID]: makeDefaultCreditNoteNumberingConfig(INVOICE_ENTITY_ID) } }),
     }),
-    { name: 'ledgerly-credit-notes', version: 1 },
+    { name: 'ledgerly-credit-notes', storage: businessJSONStorage, version: 1 },
   ),
 );
 

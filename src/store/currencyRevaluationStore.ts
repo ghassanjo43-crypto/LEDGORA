@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { businessJSONStorage } from '@/lib/workspaceStorage';
 import type { Account } from '@/types';
 import type { CurrencyRevaluationRun } from '@/types/currencyRevaluation';
 import { buildCurrencyRevaluation } from '@/lib/currencyRevaluation';
@@ -116,6 +117,6 @@ export const useCurrencyRevaluationStore = create<RevaluationState>()(
       replaceAll: (runs) => set({ runs }),
       resetToDefault: () => set({ runs: [] }),
     }),
-    { name: 'ledgerly-currency-revaluations', version: 1 },
+    { name: 'ledgerly-currency-revaluations', storage: businessJSONStorage, version: 1 },
   ),
 );

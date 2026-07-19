@@ -6,6 +6,9 @@ import { PageSkeleton } from '@/components/ui/Skeleton';
 import { VIEW_META, VIEW_MODULE_REQUIREMENTS } from '@/config/navigation';
 import { ModuleRoute } from '@/components/entitlements/ModuleRoute';
 import { ModuleUnavailablePage } from '@/components/entitlements/ModuleUnavailablePage';
+import { AccessGate } from '@/components/access/AccessGate';
+import { FreeDemoBanner } from '@/components/onboarding/FreeDemoBanner';
+import { FreeDemoNotices } from '@/components/onboarding/FreeDemoNotices';
 
 /**
  * Route-level code splitting: each page ships in its own chunk that is only
@@ -83,6 +86,7 @@ const SubscriptionPage = lazy(() =>
   import('@/pages/SubscriptionPage').then((m) => ({ default: m.SubscriptionPage })),
 );
 const MembersPage = lazy(() => import('@/pages/MembersPage').then((m) => ({ default: m.MembersPage })));
+const SuperAdminConsolePage = lazy(() => import('@/pages/SuperAdminConsolePage').then((m) => ({ default: m.SuperAdminConsolePage })));
 const InventoryDashboardPage = lazy(() => import('@/pages/inventory/InventoryDashboardPage').then((m) => ({ default: m.InventoryDashboardPage })));
 const ItemsPage = lazy(() => import('@/pages/inventory/ItemsPage').then((m) => ({ default: m.ItemsPage })));
 const ItemCategoriesPage = lazy(() => import('@/pages/inventory/ItemCategoriesPage').then((m) => ({ default: m.ItemCategoriesPage })));
@@ -199,6 +203,8 @@ export default function App() {
         return <SubscriptionPage />;
       case 'members':
         return <MembersPage />;
+      case 'super-admin':
+        return <SuperAdminConsolePage />;
       case 'inventory-dashboard':
         return <InventoryDashboardPage />;
       case 'inventory-items':
@@ -278,8 +284,17 @@ export default function App() {
 
   return (
     <ToastProvider>
+      <FreeDemoNotices />
+      <FreeDemoBanner />
       <AppLayout>
-        <Suspense fallback={<PageSkeleton />}>{guarded}</Suspense>
+        {/*
+          Onboarding access gate. A view is only rendered when the account
+          status permits the application at all, and — in a Free Demo — only
+          when the view is on the demo allow-list.
+        */}
+        <AccessGate view={activeView} fallback={<ModuleUnavailablePage />}>
+          <Suspense fallback={<PageSkeleton />}>{guarded}</Suspense>
+        </AccessGate>
       </AppLayout>
     </ToastProvider>
   );

@@ -38,7 +38,7 @@ beforeEach(() => {
   useBillingStore.getState().ensureSeeded();
   useMeteringConfigStore.getState().resetToDefault();
   useEntitlementStore.getState().resetToDefault();
-  useSessionStore.setState({ role: 'admin', userName: 'Platform Admin' });
+  useSessionStore.setState({ platformRole: 'super-admin', userName: 'Platform Admin' });
 });
 
 describe('organization creation', () => {
@@ -140,7 +140,7 @@ describe('subscription lifecycle', () => {
     org().confirmSubscription();
     const invoiceId = org().subscription!.invoiceId!;
     org().uploadPaymentProof({ fileName: 'p.pdf', fileType: 'application/pdf', fileSize: 10, dataUrl: 'data:,x', reference: 'X', amount: 1, paidAt: '2026-07-14' });
-    useSessionStore.setState({ role: 'member' });
+    useSessionStore.setState({ platformRole: 'none' });
     expect(org().approvePayment(invoiceId).ok).toBe(false);
     expect(org().subscription?.status).toBe('pending_verification');
   });

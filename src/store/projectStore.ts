@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { businessJSONStorage } from '@/lib/workspaceStorage';
 import type { Project, ProjectAuditEvent, ProjectChangeOrder, ProjectMilestone, ProjectRequirementRule, ProjectStatus } from '@/types/project';
 import { validateProjectForActivation } from '@/lib/projectValidation';
 import { SEED_PROJECTS, SEED_PROJECT_REQUIREMENT_RULES, PRIMARY_ENTITY_ID } from '@/data/projectSeed';
@@ -155,6 +156,6 @@ export const useProjectStore = create<ProjectState>()(
       replaceAll: (state) => set((s) => ({ ...s, ...state })),
       resetToDefault: () => set({ projects: SEED_PROJECTS.map((p) => ({ ...p })), requirementRules: SEED_PROJECT_REQUIREMENT_RULES.map((r) => ({ ...r })) }),
     }),
-    { name: 'ledgerly-projects', version: 2 },
+    { name: 'ledgerly-projects', storage: businessJSONStorage, version: 2 },
   ),
 );

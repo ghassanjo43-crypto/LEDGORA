@@ -12,7 +12,7 @@ const thisPeriod = () => periodKeyOf(new Date().toISOString());
 beforeEach(() => {
   useUsageStore.getState().resetToDefault();
   useMeteringConfigStore.getState().resetToDefault();
-  useSessionStore.setState({ role: 'admin', userName: 'Finance Manager' });
+  useSessionStore.setState({ platformRole: 'super-admin', userName: 'Finance Manager' });
 });
 
 /* ── Recording usage ──────────────────────────────────────────────────────── */
@@ -69,7 +69,7 @@ describe('immutable usage ledger', () => {
   });
 
   it('requires an administrator to close periods and record adjustments', () => {
-    useSessionStore.setState({ role: 'member' });
+    useSessionStore.setState({ platformRole: 'none' });
     expect(usage().closePeriod(thisPeriod()).ok).toBe(false);
     expect(usage().recordAdjustment(thisPeriod(), 'invoices', 1, 'x').ok).toBe(false);
   });
@@ -124,7 +124,7 @@ describe('metering configuration', () => {
   });
 
   it('blocks non-super-admins from editing configuration', () => {
-    useSessionStore.setState({ role: 'member' });
+    useSessionStore.setState({ platformRole: 'none' });
     const coreId = cfg().config.basePlans.find((p) => p.code === 'core')!.id;
     expect(cfg().updateBasePlan(coreId, { priceMonthly: 1 }).ok).toBe(false);
     expect(cfg().updateOverageRates({ storagePerGbMonth: 9 }).ok).toBe(false);

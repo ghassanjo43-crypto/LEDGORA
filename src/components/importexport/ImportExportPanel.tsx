@@ -15,6 +15,7 @@ import { Badge } from '@/components/ui/Badge';
 import { Icon } from '@/components/ui/icons';
 import { ValidationPanel } from '@/components/validation/ValidationPanel';
 import { useToast } from '@/components/ui/Toast';
+import { useDemoActionGuard } from '@/components/onboarding/FreeDemoNotices';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 
 export function ImportExportPanel() {
@@ -22,6 +23,8 @@ export function ImportExportPanel() {
   const replaceAll = useStore((s) => s.replaceAll);
   const companyName = useStore((s) => s.settings.companyName);
   const { notify } = useToast();
+  // Import/export needs permanent storage — prompt instead in a Free Demo.
+  const demoGuard = useDemoActionGuard();
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [preview, setPreview] = useState<ImportResult | null>(null);
@@ -32,16 +35,19 @@ export function ImportExportPanel() {
   const stamp = new Date().toISOString().slice(0, 10);
 
   const handleExportJson = (): void => {
+    if (demoGuard('import-export')) return;
     downloadFile(`${slug}-coa-${stamp}.json`, exportToJson(accounts), 'application/json');
     notify('Exported chart of accounts as JSON.', 'success');
   };
 
   const handleExportCsv = (): void => {
+    if (demoGuard('import-export')) return;
     downloadFile(`${slug}-coa-${stamp}.csv`, exportToCsv(accounts), 'text/csv');
     notify('Exported chart of accounts as CSV.', 'success');
   };
 
   const handleFile = async (file: File): Promise<void> => {
+    if (demoGuard('import-export')) return;
     const text = await file.text();
     const isJson = file.name.toLowerCase().endsWith('.json');
     const result = isJson ? importFromJson(text) : importFromCsv(text);

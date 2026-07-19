@@ -81,7 +81,18 @@ export function PaymentVerificationPanel() {
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                   <div className="sm:col-span-2">
                     <dl className="grid grid-cols-2 gap-2 text-sm">
-                      <Meta label="Reference" value={proof.reference} mono />
+                      <Meta
+                        label={proof.matchesInvoiceReference === false ? 'Quoted reference (mismatch)' : 'LEDGORA reference'}
+                        value={
+                          proof.matchesInvoiceReference === false
+                            ? `${proof.reference} — invoice expects ${inv.paymentReference}`
+                            : proof.reference
+                        }
+                        mono
+                      />
+                      {proof.bankTransactionReference && (
+                        <Meta label="Bank transaction ref" value={proof.bankTransactionReference} mono />
+                      )}
                       <Meta label="Amount paid" value={formatCurrency(proof.amount, inv.currency)} />
                       <Meta label="Paid on" value={formatDate(proof.paidAt)} />
                       <Meta label="Uploaded" value={`${formatDate(proof.uploadedAt)} by ${proof.uploadedBy}`} />

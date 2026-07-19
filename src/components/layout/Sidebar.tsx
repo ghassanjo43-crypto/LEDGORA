@@ -1,14 +1,34 @@
 import { useMemo } from 'react';
 import { useStore } from '@/store/useStore';
+import { useSessionStore } from '@/store/sessionStore';
+import { hasPlatformCapability } from '@/lib/platformAccess';
 import { cn } from '@/lib/utils';
 import { filterNavigationByEntitlements, type NavItem } from '@/config/navigation';
 import { useEffectiveModules } from '@/store/entitlementHooks';
+import { useIsFreeDemo } from '@/hooks/useSession';
+import { isFreeDemoView } from '@/config/freeDemo';
 
 export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const activeView = useStore((s) => s.activeView);
   const setActiveView = useStore((s) => s.setActiveView);
   const moduleIds = useEffectiveModules();
-  const groups = useMemo(() => filterNavigationByEntitlements(moduleIds), [moduleIds]);
+  const isPlatformAdmin = useSessionStore((s) =>
+    hasPlatformCapability(s.platformRole, 'manage-any-organization'),
+  );
+  const isDemo = useIsFreeDemo();
+  const groups = useMemo(() => {
+    const entitled = filterNavigationByEntitlements(moduleIds);
+    // Platform-super-admin-only items are hidden from regular subscribers, and a
+    // Free Demo only lists the modules the demo is allowed to open.
+    return entitled
+      .map((g) => ({
+        ...g,
+        items: g.items.filter(
+          (i) => (!i.platformAdminOnly || (isPlatformAdmin && !isDemo)) && (!isDemo || isFreeDemoView(i.key)),
+        ),
+      }))
+      .filter((g) => g.items.length > 0);
+  }, [moduleIds, isPlatformAdmin, isDemo]);
 
   return (
     <aside className="flex h-full w-[264px] flex-col border-r border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">

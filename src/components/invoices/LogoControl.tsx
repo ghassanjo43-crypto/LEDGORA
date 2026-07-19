@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { cn } from '@/lib/utils';
 import { LogoImage } from './LogoImage';
+import { useDemoActionGuard } from '@/components/onboarding/FreeDemoNotices';
 
 interface Props {
   value: InvoiceLogoConfig;
@@ -33,6 +34,8 @@ export function LogoControl({ value, companyDefaultLogoUrl, disabled, onChange, 
   const fileRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Permanent document uploads are not part of the Free Demo.
+  const demoGuard = useDemoActionGuard();
 
   const previewUrl = cfg.mode === 'hidden' ? undefined : cfg.mode === 'custom' ? cfg.customLogoUrl : companyDefaultLogoUrl;
   const sizePreset = LOGO_SIZE_PRESETS.find((p) => p.maxWidth === cfg.maxWidth && p.maxHeight === cfg.maxHeight)?.id ?? 'custom';
@@ -43,6 +46,8 @@ export function LogoControl({ value, companyDefaultLogoUrl, disabled, onChange, 
 
   const onFile = async (file: File | undefined): Promise<void> => {
     if (!file) return;
+    // Uploaded files are never stored permanently in a Free Demo.
+    if (demoGuard('upload')) return;
     const v = validateLogoFile(file);
     if (!v.ok) { setError(v.error ?? 'Invalid file.'); return; }
     setBusy(true);

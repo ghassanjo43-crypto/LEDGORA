@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { businessJSONStorage } from '@/lib/workspaceStorage';
 import type { Account, BusinessEntity, CompanySettings } from '@/types';
 import type {
   Invoice,
@@ -452,7 +453,7 @@ export const useInvoiceStore = create<InvoiceState>()(
       resetToDefault: () => set({ invoices: [] }),
     }),
     {
-      name: 'ledgerly-invoices',
+      name: 'ledgerly-invoices', storage: businessJSONStorage,
       version: 2,
       // v2 adds `creditsApplied` (credit-note subledger allocation). Backfill 0
       // and recompute balanceDue so persisted invoices load consistently.

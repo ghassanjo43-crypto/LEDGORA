@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { businessJSONStorage } from '@/lib/workspaceStorage';
 import type { CostCenterBudget, CostCenterBudgetLine } from '@/types/costCenterBudget';
 import { isDuplicateBudgetLine } from '@/lib/costCenterBudget';
 import { roundMoney } from '@/lib/journalValidation';
@@ -119,6 +120,6 @@ export const useCostCenterBudgetStore = create<BudgetState>()(
       replaceAll: (budgets) => set({ budgets }),
       resetToDefault: () => set({ budgets: [] }),
     }),
-    { name: 'ledgerly-cost-center-budgets', version: 1 },
+    { name: 'ledgerly-cost-center-budgets', storage: businessJSONStorage, version: 1 },
   ),
 );

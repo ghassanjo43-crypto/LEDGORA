@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { businessJSONStorage } from '@/lib/workspaceStorage';
 import type { Account } from '@/types';
 import type { CostCenterAllocationRule, CostCenterAllocationRun } from '@/types/costCenterAllocation';
 import { buildCostCenterAllocationRun, buildCostCenterAllocationJournal } from '@/lib/costCenterAllocationPosting';
@@ -136,6 +137,6 @@ export const useCostCenterAllocationStore = create<AllocationState>()(
       replaceAll: (state) => set((s) => ({ ...s, ...state })),
       resetToDefault: () => set({ rules: [], runs: [] }),
     }),
-    { name: 'ledgerly-cost-center-allocations', version: 1 },
+    { name: 'ledgerly-cost-center-allocations', storage: businessJSONStorage, version: 1 },
   ),
 );

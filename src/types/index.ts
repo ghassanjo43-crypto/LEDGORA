@@ -228,6 +228,7 @@ export type ViewKey =
   | 'manufacturing-reports'
   | 'subscription'
   | 'members'
+  | 'super-admin'
   | 'module-unavailable';
 
 /** Result of an import parse + validation step. */

@@ -36,7 +36,7 @@ beforeEach(() => {
   useBillingStore.getState().resetToDefault();
   useEntitlementStore.getState().resetToDefault();
   useJournalStore.getState().resetToDefault();
-  useSessionStore.setState({ role: 'admin', userName: 'Finance Manager' });
+  useSessionStore.setState({ platformRole: 'super-admin', userName: 'Finance Manager' });
 });
 
 /* ── Data-driven, editable packages ───────────────────────────────────────── */
@@ -74,7 +74,7 @@ describe('packages are data-driven and editable', () => {
 
 describe('permission checks', () => {
   it('blocks non-administrators from editing packages, bank details and verifying payments', () => {
-    useSessionStore.setState({ role: 'member' });
+    useSessionStore.setState({ platformRole: 'none' });
     expect(billing().updatePlan(planId('core'), { priceMonthly: 1 }).ok).toBe(false);
     expect(billing().updateBankDetails({ iban: 'x' }).ok).toBe(false);
     expect(billing().createPlan({
@@ -84,7 +84,7 @@ describe('permission checks', () => {
   });
 
   it('allows any role to request a subscription and upload proof', () => {
-    useSessionStore.setState({ role: 'member' });
+    useSessionStore.setState({ platformRole: 'none' });
     const req = billing().requestSubscription(planId('core'));
     expect(req.ok).toBe(true);
     expect(billing().uploadPaymentProof(req.id!, goodProof()).ok).toBe(true);
@@ -150,7 +150,7 @@ describe('payment process: selection → invoice → proof → verification → 
   it('a member cannot approve — administrator required', () => {
     const req = billing().requestSubscription(planId('core'));
     billing().uploadPaymentProof(req.id!, goodProof());
-    useSessionStore.setState({ role: 'member' });
+    useSessionStore.setState({ platformRole: 'none' });
     const res = billing().approvePayment(req.id!);
     expect(res.ok).toBe(false);
     expect(billing().invoices.find((i) => i.id === req.id)!.status).toBe('proof-submitted');

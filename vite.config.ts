@@ -1,10 +1,21 @@
-import { defineConfig } from 'vite';
+import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 import path from 'node:path';
 
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
+  test: {
+    /**
+     * The unit suite runs as an approved LOCAL DEVELOPMENT machine: DEV is true
+     * under Vitest and this supplies the same explicit opt-in a developer puts
+     * in their uncommitted `.env.local`. Tests that assert production behaviour
+     * override it with `vi.stubEnv`.
+     */
+    env: {
+      VITE_LEDGORA_DEV_TOOLS: 'true',
+    },
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),

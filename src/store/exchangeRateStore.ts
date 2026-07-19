@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { businessJSONStorage } from '@/lib/workspaceStorage';
 import type { ExchangeRate, ExchangeRateType } from '@/types/exchangeRate';
 import { validateExchangeRate } from '@/lib/exchangeRateValidation';
 import { resolveExchangeRate, type RateResolution } from '@/lib/exchangeRateResolution';
@@ -92,6 +93,6 @@ export const useExchangeRateStore = create<ExchangeRateState>()(
       replaceAll: (rates) => set({ rates }),
       resetToDefault: () => set({ rates: SEED_EXCHANGE_RATES.map((r) => ({ ...r })) }),
     }),
-    { name: 'ledgerly-exchange-rates', version: 1 },
+    { name: 'ledgerly-exchange-rates', storage: businessJSONStorage, version: 1 },
   ),
 );

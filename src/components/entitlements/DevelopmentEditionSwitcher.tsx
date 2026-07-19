@@ -5,15 +5,15 @@ import { ALL_EDITIONS } from '@/config/editions';
 import { EDITION_INFO } from '@/config/editionCommercialInfo';
 import { cn } from '@/lib/utils';
 
-/** Whether development-only tooling should be shown. */
-export function devToolsEnabled(): boolean {
-  if (typeof import.meta !== 'undefined' && import.meta.env?.DEV) return true;
-  try {
-    return localStorage.getItem('ledgora-dev-tools') === '1';
-  } catch {
-    return false;
-  }
-}
+/**
+ * Whether development-only tooling should be shown. Delegates to the single
+ * platform-wide switch so the edition/role switchers can never appear on the
+ * public welcome, registration or sign-in screens, during package selection, or
+ * in a production build.
+ */
+import { platformAdminToolsAllowed } from '@/lib/platformAccess';
+
+export { platformAdminToolsAllowed as devToolsEnabled };
 
 /**
  * Development-only edition switcher. Switching edition updates the entitlement
@@ -26,7 +26,7 @@ export function DevelopmentEditionSwitcher({ compact = false }: { compact?: bool
   const edition = useEntitlementStore((s) => s.subscription.edition);
   const setEdition = useEntitlementStore((s) => s.setEdition);
 
-  if (!devToolsEnabled()) return null;
+  if (!platformAdminToolsAllowed()) return null;
 
   return (
     <div

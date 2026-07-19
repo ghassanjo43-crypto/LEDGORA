@@ -17,6 +17,8 @@ import { Input, Textarea } from '@/components/ui/Input';
 import { formatCurrency } from '@/lib/money';
 import { formatDate } from '@/lib/utils';
 import { MAX_PROOF_BYTES, ALLOWED_PROOF_TYPES, type ProofInput } from '@/lib/billingCalculations';
+import { DevelopmentBankWarning } from './DevelopmentBankWarning';
+import { paymentReferenceMatches } from '@/services/paymentReferenceService';
 import { cn } from '@/lib/utils';
 
 const STEPS = ['Invoice', 'Bank instructions', 'Proof upload', 'Pending verification', 'Approved'] as const;
@@ -42,7 +44,9 @@ export function SubscriptionInvoicePanel({ invoice }: { invoice: SubscriptionInv
   const fileRef = useRef<HTMLInputElement>(null);
 
   const [file, setFile] = useState<{ name: string; type: string; size: number; dataUrl: string } | null>(null);
-  const [reference, setReference] = useState('');
+  // Pre-filled with the reference LEDGORA issued for this invoice.
+  const [reference, setReference] = useState(invoice.paymentReference ?? '');
+  const [bankTransactionReference, setBankTransactionReference] = useState('');
   const [amount, setAmount] = useState<string>(String(invoice.amount));
   const [paidAt, setPaidAt] = useState<string>(new Date().toISOString().slice(0, 10));
   const [note, setNote] = useState('');
@@ -52,6 +56,9 @@ export function SubscriptionInvoicePanel({ invoice }: { invoice: SubscriptionInv
 
   const activeStep = stepIndex(invoice.status);
   const bank = invoice.bankSnapshot;
+  // Warn (never block) when the entered reference is not the invoice's.
+  const referenceMismatch =
+    reference.trim().length > 0 && !paymentReferenceMatches(reference, invoice.paymentReference);
 
   const onFile = (e: React.ChangeEvent<HTMLInputElement>): void => {
     const f = e.target.files?.[0];
@@ -83,6 +90,7 @@ export function SubscriptionInvoicePanel({ invoice }: { invoice: SubscriptionInv
       fileSize: file?.size ?? 0,
       dataUrl: file?.dataUrl ?? '',
       reference,
+      bankTransactionReference,
       amount: Number(amount),
       paidAt,
       note,
@@ -142,8 +150,12 @@ export function SubscriptionInvoicePanel({ invoice }: { invoice: SubscriptionInv
 
       {/* Bank instructions */}
       <Card>
-        <CardHeader title="Bank instructions" description="Transfer the invoice total and quote the invoice number as the reference." />
+        <CardHeader
+          title="Bank instructions"
+          description="Transfer the invoice total and quote the LEDGORA payment reference exactly as shown."
+        />
         <CardBody>
+          <DevelopmentBankWarning bank={bank} className="mb-3" />
           <div className="flex items-start gap-3 rounded-lg bg-slate-50 p-3 text-sm dark:bg-slate-800/50">
             <Landmark className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
             <dl className="grid flex-1 grid-cols-1 gap-x-6 gap-y-1.5 sm:grid-cols-2">
@@ -153,7 +165,8 @@ export function SubscriptionInvoicePanel({ invoice }: { invoice: SubscriptionInv
               <Field label="IBAN" value={bank.iban} mono />
               <Field label="SWIFT / BIC" value={bank.swift} mono />
               <Field label="Branch" value={bank.branch} />
-              <Field label="Payment reference" value={invoice.number} mono />
+              <Field label="Invoice number" value={invoice.number} mono />
+              <Field label="LEDGORA payment reference (quote this)" value={invoice.paymentReference} mono />
             </dl>
           </div>
           {bank.instructions && <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">{bank.instructions}</p>}
@@ -200,8 +213,17 @@ export function SubscriptionInvoicePanel({ invoice }: { invoice: SubscriptionInv
                   <input ref={fileRef} type="file" accept={ALLOWED_PROOF_TYPES.join(',')} className="hidden" onChange={onFile} />
                   {fieldErrors.file && <p className="mt-1 text-xs text-red-600">{fieldErrors.file}</p>}
                 </div>
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                  <LabeledInput label="Bank reference" value={reference} onChange={setReference} error={fieldErrors.reference} placeholder="e.g. TT-2026-00184" />
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <LabeledInput label="LEDGORA payment reference" value={reference} onChange={setReference} error={fieldErrors.reference} placeholder={invoice.paymentReference} />
+                  <LabeledInput label="Bank transaction reference (optional)" value={bankTransactionReference} onChange={setBankTransactionReference} placeholder="e.g. TT-2026-00184" />
+                </div>
+                {referenceMismatch && (
+                  <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
+                    This is not the reference on your invoice ({invoice.paymentReference}). Leave it as entered if that is what
+                    your transfer quoted — the reviewer will match it manually, which may take longer.
+                  </p>
+                )}
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                   <LabeledInput label="Amount paid" value={amount} onChange={setAmount} error={fieldErrors.amount} type="number" />
                   <LabeledInput label="Payment date" value={paidAt} onChange={setPaidAt} error={fieldErrors.paidAt} type="date" />
                 </div>

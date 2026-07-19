@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { businessJSONStorage } from '@/lib/workspaceStorage';
 import type { StatementOptions } from '@/types/statementOfAccount';
 
 /** Sensible default period: the current calendar year to date. */
@@ -47,6 +48,6 @@ export const useStatementStore = create<StatementState>()(
       setOptions: (patch) => set((s) => ({ options: { ...s.options, ...patch } })),
       resetOptions: () => set({ options: defaultOptions() }),
     }),
-    { name: 'ledgerly-statement-view', version: 1 },
+    { name: 'ledgerly-statement-view', storage: businessJSONStorage, version: 1 },
   ),
 );

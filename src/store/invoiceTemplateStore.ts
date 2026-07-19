@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { businessJSONStorage } from '@/lib/workspaceStorage';
 import type {
   InvoiceNumberingConfig,
   InvoiceTemplate,
@@ -175,7 +176,7 @@ export const useInvoiceTemplateStore = create<InvoiceTemplateState>()(
       resetToDefault: () => set({ ...seed() }),
     }),
     {
-      name: 'ledgerly-invoice-templates',
+      name: 'ledgerly-invoice-templates', storage: businessJSONStorage,
       version: 1,
       merge: (persisted, current) => {
         const p = (persisted ?? {}) as Partial<InvoiceTemplateState>;

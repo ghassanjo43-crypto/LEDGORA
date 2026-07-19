@@ -13,6 +13,7 @@
  */
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { businessJSONStorage } from '@/lib/workspaceStorage';
 import type {
   InventoryItem,
   InventorySettings,
@@ -588,7 +589,7 @@ export const useInventoryStore = create<InventoryState>()(
       };
     },
     {
-      name: 'ledgora-inventory',
+      name: 'ledgora-inventory', storage: businessJSONStorage,
       version: 1,
       partialize: (s) => ({
         items: s.items,

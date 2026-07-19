@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { businessJSONStorage } from '@/lib/workspaceStorage';
 import type { CostCenter, CostCenterAuditEvent, CostCenterRequirementRule, CostCenterType } from '@/types/costCenter';
 import { moveCostCenter as moveInTree } from '@/lib/costCenterHierarchy';
 import { validateCostCenterForActivation } from '@/lib/costCenterValidation';
@@ -138,7 +139,7 @@ export const useCostCenterStore = create<CostCenterState>()(
       replaceAll: (state) => set((s) => ({ ...s, ...state })),
       resetToDefault: () => set({ costCenters: SEED_COST_CENTERS.map((c) => ({ ...c })), requirementRules: SEED_REQUIREMENT_RULES.map((r) => ({ ...r })) }),
     }),
-    { name: 'ledgerly-cost-centers', version: 1 },
+    { name: 'ledgerly-cost-centers', storage: businessJSONStorage, version: 1 },
   ),
 );
 

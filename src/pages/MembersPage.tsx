@@ -19,10 +19,13 @@ import { Badge } from '@/components/ui/Badge';
 import { Alert } from '@/components/ui/Alert';
 import { MetricCard } from '@/components/ui/MetricCard';
 import { Users, UserPlus, ShieldCheck } from 'lucide-react';
+import { useDemoActionGuard } from '@/components/onboarding/FreeDemoNotices';
 
 const ROLE_OPTIONS = [
   { value: 'admin', label: 'Admin' },
+  { value: 'accountant', label: 'Accountant' },
   { value: 'member', label: 'Member' },
+  { value: 'viewer', label: 'Viewer' },
 ];
 
 function statusTone(status?: string): 'green' | 'amber' | 'red' | 'slate' {
@@ -46,9 +49,12 @@ export function MembersPage() {
   const [form, setForm] = useState<{ fullName: string; email: string; role: OrgUserRole }>({ fullName: '', email: '', role: 'member' });
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [banner, setBanner] = useState<{ tone: 'success' | 'error' | 'info'; text: string } | null>(null);
+  const demoGuard = useDemoActionGuard();
 
   const invite = (): void => {
     setBanner(null);
+    // Collaboration is not part of the Free Demo.
+    if (demoGuard('invite')) return;
     const res = inviteMember(form);
     if (!res.ok) { setErrors(res.fieldErrors ?? {}); setBanner({ tone: 'error', text: res.error ?? 'Could not send the invitation.' }); return; }
     setErrors({});

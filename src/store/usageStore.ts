@@ -11,6 +11,7 @@
  */
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { businessJSONStorage } from '@/lib/workspaceStorage';
 import type {
   DocumentMeta,
   MeteringAuditEntry,
@@ -21,7 +22,7 @@ import type {
   UsageSummary,
 } from '@/types/metering';
 import { useCompanyStore } from './companyStore';
-import { getCurrentRole, getCurrentUserName } from './sessionStore';
+import { getPlatformRole, getCurrentUserName } from './sessionStore';
 import { assertCanClosePeriods } from '@/lib/meteringPermissions';
 import { dayKeyOf, periodKeyOf, summarizeUsage } from '@/lib/meteringCalculations';
 import { generateId, nowIso } from '@/lib/utils';
@@ -163,7 +164,7 @@ export const useUsageStore = create<UsageState>()(
       },
 
       closePeriod: (period) => {
-        const perm = assertCanClosePeriods(getCurrentRole());
+        const perm = assertCanClosePeriods(getPlatformRole());
         if (!perm.ok) return { ok: false, error: perm.error };
         if (get().isPeriodClosed(period)) return { ok: false, error: 'Period is already closed.' };
         const lastDay = `${period}-${String(new Date(Date.UTC(Number(period.slice(0, 4)), Number(period.slice(5, 7)), 0)).getUTCDate()).padStart(2, '0')}`;
@@ -182,7 +183,7 @@ export const useUsageStore = create<UsageState>()(
       },
 
       reopenPeriod: (period) => {
-        const perm = assertCanClosePeriods(getCurrentRole());
+        const perm = assertCanClosePeriods(getPlatformRole());
         if (!perm.ok) return { ok: false, error: perm.error };
         set((s) => ({
           periods: s.periods.map((p) => (p.period === period ? { ...p, status: 'open', closedAt: undefined } : p)),
@@ -192,7 +193,7 @@ export const useUsageStore = create<UsageState>()(
       },
 
       recordAdjustment: (period, metric, quantity, reason) => {
-        const perm = assertCanClosePeriods(getCurrentRole());
+        const perm = assertCanClosePeriods(getPlatformRole());
         if (!perm.ok) return { ok: false, error: perm.error };
         if (!reason.trim()) return { ok: false, error: 'An adjustment reason is required.' };
         const adjustment = { id: generateId('adj'), metric, quantity, reason: reason.trim(), at: nowIso(), actor: getCurrentUserName() };
@@ -210,7 +211,7 @@ export const useUsageStore = create<UsageState>()(
       resetToDefault: () => set({ events: [], documents: [], periods: [], auditTrail: [], userSeats: 1 }),
     }),
     {
-      name: 'ledgora-usage',
+      name: 'ledgora-usage', storage: businessJSONStorage,
       version: 1,
       partialize: (s) => ({ events: s.events, documents: s.documents, periods: s.periods, auditTrail: s.auditTrail, userSeats: s.userSeats }),
     },

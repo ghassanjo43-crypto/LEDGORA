@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { businessJSONStorage } from '@/lib/workspaceStorage';
 import type { Account } from '@/types';
 import type { ProductTaxCategory, TaxCode, TaxGroup, TaxRateVersion, TaxAuditEvent } from '@/types/taxCode';
 import type { TaxAdjustment, TaxJurisdiction, TaxRegistration, TaxReportingBox } from '@/types/taxReporting';
@@ -226,7 +227,7 @@ export const useTaxCodeStore = create<TaxCodeState>()(
         taxGroups: [], jurisdictions: [SEED_TAX_JURISDICTION], registrations: [], reportingBoxes: SEED_TAX_REPORTING_BOXES.map((b) => ({ ...b })), productCategories: [], adjustments: [],
       }),
     }),
-    { name: 'ledgerly-tax-codes', version: 1 },
+    { name: 'ledgerly-tax-codes', storage: businessJSONStorage, version: 1 },
   ),
 );
 

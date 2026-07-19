@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { businessJSONStorage } from '@/lib/workspaceStorage';
 import type { Account } from '@/types';
 import type { ProjectRecognitionRun, RecognitionPostingConfig } from '@/types/projectRecognition';
 import { computeRecognition, recognizedRevenueToDate, buildRecognitionJournalEntry } from '@/lib/projectRevenueRecognition';
@@ -126,6 +127,6 @@ export const useProjectRecognitionStore = create<RecognitionState>()(
       replaceAll: (runs) => set({ runs }),
       resetToDefault: () => set({ runs: [] }),
     }),
-    { name: 'ledgerly-project-recognition', version: 1 },
+    { name: 'ledgerly-project-recognition', storage: businessJSONStorage, version: 1 },
   ),
 );

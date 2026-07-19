@@ -24,12 +24,18 @@ import {
   ROUTES,
   type AccessContext,
 } from '@/lib/accessControl';
+import { useAccountSessionStore } from '@/store/accountSessionStore';
+import { readSessionState } from '@/store/sessionSnapshot';
+import { syncWorkspaceStorageMode } from '@/lib/freeDemoSession';
+import { effectivePlatformRole, platformAdminToolsAllowed } from '@/lib/platformAccess';
+import { platformRoleHasCapability, type PlatformRole } from '@/types/roles';
+import { WelcomePage } from '@/pages/onboarding/WelcomePage';
+import { SubscriptionOnboardingPage } from '@/pages/onboarding/SubscriptionOnboardingPage';
 import { PricingPage } from '@/pages/onboarding/PricingPage';
 import { RegisterPage } from '@/pages/onboarding/RegisterPage';
 import { LoginPage } from '@/pages/onboarding/LoginPage';
 import { VerifyEmailPage } from '@/pages/onboarding/VerifyEmailPage';
 import { OnboardingOrganizationPage } from '@/pages/onboarding/OnboardingOrganizationPage';
-import { OnboardingSubscriptionPage } from '@/pages/onboarding/OnboardingSubscriptionPage';
 import { BillingPaymentPage } from '@/pages/onboarding/BillingPaymentPage';
 import { AdminPaymentReviewPage } from '@/pages/onboarding/AdminPaymentReviewPage';
 import {
@@ -48,16 +54,20 @@ function readContext(): AccessContext {
     user: user ? { emailVerified: user.emailVerified } : null,
     hasOrganization: !!org.organization,
     subscriptionStatus: org.subscription?.status ?? null,
+    demoActive: useAccountSessionStore.getState().demoActive,
   };
 }
 
 export function AppShell() {
-  // Seed config + provision a dev tenant once, before any effect reads state,
-  // so an existing install still boots straight into the app.
+  // Seed public configuration (packages/metering) once, before any effect reads
+  // state. Provisioning a ready-made tenant is a DEVELOPMENT aid only: without
+  // it an unregistered visitor correctly lands on the welcome page instead of
+  // being handed an administrator account.
   useState(() => {
     useBillingStore.getState().ensureSeeded();
     useMeteringConfigStore.getState().ensureSeeded();
-    useOrganizationStore.getState().ensureBootstrapped();
+    if (platformAdminToolsAllowed()) useOrganizationStore.getState().ensureBootstrapped();
+    else useOrganizationStore.getState().applyLifecycleTransitions();
     return true;
   });
 
@@ -67,9 +77,17 @@ export function AppShell() {
   const usersLen = useAuthStore((s) => s.users.length);
   const orgId = useOrganizationStore((s) => s.organization?.id ?? null);
   const subStatus = useOrganizationStore((s) => s.subscription?.status ?? null);
-  const platformRole = useSessionStore((s) => s.role);
+  // Resolved through the platform policy — 'none' in any production build.
+  const platformRole = useSessionStore((s) => effectivePlatformRole(s.platformRole));
+  const demoActive = useAccountSessionStore((s) => s.demoActive);
 
   useEffect(() => initRouter(), []);
+
+  // Keep business-data storage aligned with the account status: an anonymous
+  // visitor or a Free Demo never writes to durable storage.
+  useEffect(() => {
+    syncWorkspaceStorageMode(readSessionState().accountStatus);
+  }, [currentUserId, orgId, subStatus, demoActive]);
 
   // Access enforcement.
   useEffect(() => {
@@ -77,21 +95,25 @@ export function AppShell() {
     const ctx = readContext();
     const surface = surfaceOf(path);
 
-    // Root → the user's home (or the public pricing page).
-    if (path === '/' || path === '') {
-      navigate(ctx.user ? resolvePostLoginRoute(ctx) : ROUTES.pricing, { replace: true });
+    // Root is the public welcome page for a visitor with nothing to return to;
+    // everyone else is sent to where they belong.
+    if (path === ROUTES.welcome || path === '') {
+      if (ctx.user || ctx.demoActive) navigate(resolvePostLoginRoute(ctx), { replace: true });
       return;
     }
 
-    // Not signed in → only public paths are reachable.
-    if (!ctx.user) {
-      if (!PUBLIC_PATHS.includes(path)) navigate(ROUTES.login, { replace: true });
+    // Not signed in → only public paths are reachable (a Free Demo is allowed
+    // into the application without an account).
+    if (!ctx.user && !ctx.demoActive) {
+      if (!PUBLIC_PATHS.includes(path)) navigate(ROUTES.welcome, { replace: true });
       return;
     }
 
     // Admin surface requires the platform super-admin role.
     if (surface === 'admin') {
-      if (platformRole !== 'admin') navigate(resolvePostLoginRoute(ctx), { replace: true });
+      if (!platformRoleHasCapability(platformRole as PlatformRole, 'verify-payments')) {
+        navigate(resolvePostLoginRoute(ctx), { replace: true });
+      }
       return;
     }
 
@@ -107,7 +129,7 @@ export function AppShell() {
       navigate(resolvePostLoginRoute(ctx), { replace: true });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [path, currentUserId, usersLen, orgId, subStatus, platformRole]);
+  }, [path, currentUserId, usersLen, orgId, subStatus, platformRole, demoActive]);
 
   return <Surface path={path} platformRole={platformRole} />;
 }
@@ -117,17 +139,24 @@ function Surface({ path, platformRole }: { path: string; platformRole: string })
   const ctx = readContext();
 
   // Guard render: don't paint a protected surface while a redirect is pending.
+  // The application is never rendered from a view key or a stored value — only
+  // an active subscription or a running Free Demo reaches it.
   if (surface === 'app') {
-    if (ctx.subscriptionStatus !== 'active') return <Blank />;
+    if (!ctx.demoActive && ctx.subscriptionStatus !== 'active') return <Blank />;
     return <App />;
   }
   if (surface === 'admin') {
-    if (platformRole !== 'admin') return <Blank />;
+    // Administration is never available to a demo visitor or a normal customer.
+    if (ctx.demoActive || !platformRoleHasCapability(platformRole as PlatformRole, 'verify-payments')) {
+      return <Blank />;
+    }
     return <AdminPaymentReviewPage />;
   }
-  if (!ctx.user && !PUBLIC_PATHS.includes(path)) return <Blank />;
+  if (!ctx.user && !ctx.demoActive && !PUBLIC_PATHS.includes(path)) return <Blank />;
 
   switch (path) {
+    case ROUTES.welcome:
+      return <WelcomePage />;
     case ROUTES.pricing:
       return <PricingPage />;
     case ROUTES.register:
@@ -139,7 +168,8 @@ function Surface({ path, platformRole }: { path: string; platformRole: string })
     case ROUTES.onboardingOrganization:
       return <OnboardingOrganizationPage />;
     case ROUTES.onboardingSubscription:
-      return <OnboardingSubscriptionPage />;
+      // Package selection + the Free Demo option (wraps the existing flow).
+      return <SubscriptionOnboardingPage />;
     case ROUTES.billingPayment:
       return <BillingPaymentPage />;
     case ROUTES.subscriptionStatus:

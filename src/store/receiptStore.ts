@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { businessJSONStorage } from '@/lib/workspaceStorage';
 import type { Account, BusinessEntity, CompanySettings } from '@/types';
 import type { InvoiceCompanySnapshot, InvoiceCustomerSnapshot, InvoiceTemplateSnapshot } from '@/types/invoice';
 import type {
@@ -435,7 +436,7 @@ export const useReceiptStore = create<ReceiptState>()(
       replaceAll: (receipts) => set({ receipts }),
       resetToDefault: () => set({ receipts: [], numbering: { [INVOICE_ENTITY_ID]: makeDefaultReceiptNumberingConfig(INVOICE_ENTITY_ID) } }),
     }),
-    { name: 'ledgerly-receipts', version: 1 },
+    { name: 'ledgerly-receipts', storage: businessJSONStorage, version: 1 },
   ),
 );
 

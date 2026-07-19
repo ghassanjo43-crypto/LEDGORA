@@ -23,7 +23,12 @@ import type {
   SubscriptionPlan,
 } from '@/types/billing';
 import { useEntitlementStore } from './entitlementStore';
-import { getCurrentRole, getCurrentUserName } from './sessionStore';
+import { getPlatformRole, getCurrentUserName } from './sessionStore';
+import {
+  generateDevelopmentReference,
+  paymentReferenceMatches,
+} from '@/services/paymentReferenceService';
+import { isPlaceholderBankConfig, patchLeavesPlaceholder } from '@/lib/bankDetails';
 import {
   assertCanManagePlans,
   assertCanManageBillingSettings,
@@ -135,7 +140,7 @@ export const useBillingStore = create<BillingState>()(
 
       /* ── Plan administration ─────────────────────────────────────────── */
       createPlan: (input) => {
-        const perm = assertCanManagePlans(getCurrentRole());
+        const perm = assertCanManagePlans(getPlatformRole());
         if (!perm.ok) return { ok: false, error: perm.error };
         const errors = validatePlan(input);
         if (hasErrors(errors)) return { ok: false, error: 'Please fix the highlighted fields.', fieldErrors: errors };
@@ -149,7 +154,7 @@ export const useBillingStore = create<BillingState>()(
       },
 
       updatePlan: (id, patch) => {
-        const perm = assertCanManagePlans(getCurrentRole());
+        const perm = assertCanManagePlans(getPlatformRole());
         if (!perm.ok) return { ok: false, error: perm.error };
         const existing = get().plans.find((p) => p.id === id);
         if (!existing) return { ok: false, error: 'Package not found.' };
@@ -164,7 +169,7 @@ export const useBillingStore = create<BillingState>()(
       },
 
       archivePlan: (id) => {
-        const perm = assertCanManagePlans(getCurrentRole());
+        const perm = assertCanManagePlans(getPlatformRole());
         if (!perm.ok) return { ok: false, error: perm.error };
         const existing = get().plans.find((p) => p.id === id);
         if (!existing) return { ok: false, error: 'Package not found.' };
@@ -176,7 +181,7 @@ export const useBillingStore = create<BillingState>()(
       },
 
       restorePlan: (id) => {
-        const perm = assertCanManagePlans(getCurrentRole());
+        const perm = assertCanManagePlans(getPlatformRole());
         if (!perm.ok) return { ok: false, error: perm.error };
         set((s) => ({
           plans: s.plans.map((p) => (p.id === id ? { ...p, isActive: true, isPublic: true, updatedAt: nowIso() } : p)),
@@ -186,17 +191,26 @@ export const useBillingStore = create<BillingState>()(
 
       /* ── Bank details & settings ─────────────────────────────────────── */
       updateBankDetails: (patch) => {
-        const perm = assertCanManageBillingSettings(getCurrentRole());
+        const perm = assertCanManageBillingSettings(getPlatformRole());
         if (!perm.ok) return { ok: false, error: perm.error };
         set((s) => ({
-          settings: { ...s.settings, bank: { ...s.settings.bank, ...patch }, updatedAt: nowIso() },
+          settings: {
+            ...s.settings,
+            bank: {
+              ...s.settings.bank,
+              ...patch,
+              // Saving real account details retires the placeholder warning.
+              isPlaceholder: patchLeavesPlaceholder(s.settings.bank, patch),
+            },
+            updatedAt: nowIso(),
+          },
           auditTrail: [...s.auditTrail, audit('bank-details-updated', 'Bank remittance details updated.')],
         }));
         return { ok: true };
       },
 
       updateBillingSettings: (patch) => {
-        const perm = assertCanManageBillingSettings(getCurrentRole());
+        const perm = assertCanManageBillingSettings(getPlatformRole());
         if (!perm.ok) return { ok: false, error: perm.error };
         if (patch.graceDays !== undefined && patch.graceDays < 0) return { ok: false, error: 'Grace days cannot be negative.' };
         if (patch.termMonths !== undefined && patch.termMonths < 1) return { ok: false, error: 'Term must be at least 1 month.' };
@@ -232,6 +246,11 @@ export const useBillingStore = create<BillingState>()(
         const invoice: SubscriptionInvoice = {
           id: generateId('subinv'),
           number,
+          // BACKEND SEAM: a real deployment receives this from the invoice API,
+          // generated server-side under a UNIQUE database constraint.
+          paymentReference: generateDevelopmentReference((ref) =>
+            get().invoices.some((i) => i.paymentReference === ref),
+          ),
           organizationId: current.organizationId,
           planId: plan.id,
           planCode: plan.code,
@@ -276,6 +295,10 @@ export const useBillingStore = create<BillingState>()(
           fileSize: input.fileSize,
           dataUrl: input.dataUrl,
           reference: input.reference.trim(),
+          bankTransactionReference: input.bankTransactionReference?.trim() || undefined,
+          // Recorded for the reviewer. A mismatch is a warning, never an
+          // automatic approval or rejection.
+          matchesInvoiceReference: paymentReferenceMatches(input.reference, invoice.paymentReference),
           amount: input.amount,
           paidAt: input.paidAt,
           note: input.note?.trim() ?? '',
@@ -313,7 +336,7 @@ export const useBillingStore = create<BillingState>()(
 
       /* ── Administrator verification ──────────────────────────────────── */
       approvePayment: (invoiceId) => {
-        const perm = assertCanVerifyPayments(getCurrentRole());
+        const perm = assertCanVerifyPayments(getPlatformRole());
         if (!perm.ok) return { ok: false, error: perm.error };
         const invoice = get().invoices.find((i) => i.id === invoiceId);
         if (!invoice) return { ok: false, error: 'Invoice not found.' };
@@ -354,7 +377,7 @@ export const useBillingStore = create<BillingState>()(
       },
 
       rejectPayment: (invoiceId, reason) => {
-        const perm = assertCanVerifyPayments(getCurrentRole());
+        const perm = assertCanVerifyPayments(getPlatformRole());
         if (!perm.ok) return { ok: false, error: perm.error };
         const invoice = get().invoices.find((i) => i.id === invoiceId);
         if (!invoice) return { ok: false, error: 'Invoice not found.' };
@@ -397,7 +420,7 @@ export const useBillingStore = create<BillingState>()(
     }),
     {
       name: 'ledgora-billing',
-      version: 1,
+      version: 2,
       partialize: (s) => ({
         plans: s.plans,
         settings: s.settings,
@@ -406,6 +429,43 @@ export const useBillingStore = create<BillingState>()(
         activePlanId: s.activePlanId,
         seeded: s.seeded,
       }),
+      /**
+       * v2 introduces the per-invoice bank-remittance payment reference and the
+       * structured placeholder-bank flag. Existing invoices are backfilled with
+       * a generated reference (uniqueness preserved within the migration), and
+       * legacy bank settings are classified by the heuristic in `lib/bankDetails`
+       * so a real configured account never shows the development warning.
+       */
+      migrate: (persisted, version) => {
+        const state = (persisted ?? {}) as {
+          invoices?: SubscriptionInvoice[];
+          settings?: BillingSettings;
+        };
+        if (version >= 2) return state;
+
+        const used = new Set<string>();
+        const invoices = (state.invoices ?? []).map((invoice) => {
+          if (invoice.paymentReference) {
+            used.add(invoice.paymentReference);
+            return invoice;
+          }
+          const reference = generateDevelopmentReference((ref) => used.has(ref));
+          used.add(reference);
+          return { ...invoice, paymentReference: reference };
+        });
+
+        const settings = state.settings
+          ? {
+              ...state.settings,
+              bank: {
+                ...state.settings.bank,
+                isPlaceholder: isPlaceholderBankConfig(state.settings.bank),
+              },
+            }
+          : state.settings;
+
+        return { ...state, invoices, settings };
+      },
     },
   ),
 );

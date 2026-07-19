@@ -20,8 +20,10 @@ import { useStore } from '@/store/useStore';
 import { useJournalStore } from '@/store/journalStore';
 import { useCompanyStore } from '@/store/companyStore';
 import { useAuthStore } from '@/store/authStore';
+import { useSessionStore } from '@/store/sessionStore';
 import { useRouterStore } from '@/store/routerStore';
 import { ROUTES } from '@/lib/accessControl';
+import { ShieldCheck, ShieldOff } from 'lucide-react';
 import { useTheme } from '@/hooks/useTheme';
 import { validateChart } from '@/lib/validation';
 import { computeJournalStats } from '@/lib/journalSelectors';
@@ -30,6 +32,8 @@ import { Dropdown, MenuItem, MenuLabel, MenuSeparator } from '@/components/ui/Dr
 import { AddCompanyDialog } from '@/components/company/AddCompanyDialog';
 import { EditionBadge } from '@/components/entitlements/EditionBadge';
 import { DevelopmentEditionSwitcher } from '@/components/entitlements/DevelopmentEditionSwitcher';
+import { hasPlatformCapability, platformAdminToolsAllowed } from '@/lib/platformAccess';
+import { authService } from '@/services';
 import { cn } from '@/lib/utils';
 import { CreditCard } from 'lucide-react';
 
@@ -76,10 +80,19 @@ export function Topbar({
   );
   const userName = currentUser?.fullName ?? USER.name;
   const userSubtitle = currentUser?.email ?? USER.role;
+  // Effective capability: always false in a production build, whatever is
+  // stored in the browser.
+  const isPlatformAdmin = useSessionStore((s) =>
+    hasPlatformCapability(s.platformRole, 'manage-any-organization'),
+  );
+  const setPlatformRole = useSessionStore((s) => s.setPlatformRole);
   const signOut = (): void => {
-    logout();
-    navigate(ROUTES.login);
+    // Clears the authenticated session AND every temporary demo record, then
+    // returns to the public welcome page. Durable records of other accounts are
+    // untouched (see services/devAuthService.signOut).
+    void authService.signOut().then(() => navigate(ROUTES.welcome, { replace: true }));
   };
+  void logout; // sign-out goes through the AuthService, not the store directly
 
   const companies = useCompanyStore((s) => s.companies);
   const activeCompanyId = useCompanyStore((s) => s.activeCompanyId);
@@ -320,6 +333,20 @@ export function Topbar({
         <MenuItem icon={Settings} onClick={() => setActiveView('settings')}>Company settings</MenuItem>
         <MenuItem icon={CreditCard} onClick={() => setActiveView('subscription')}>Subscription</MenuItem>
         <MenuSeparator />
+        {/* Platform super-admin entry points. The "enter" switch is a
+            development tool and is never offered to ordinary customers. */}
+        {isPlatformAdmin ? (
+          <>
+            <MenuItem icon={ShieldCheck} onClick={() => setActiveView('super-admin')}>Super Admin console</MenuItem>
+            <MenuItem icon={ShieldOff} onClick={() => setPlatformRole('none')}>Exit super-admin mode</MenuItem>
+            <MenuSeparator />
+          </>
+        ) : platformAdminToolsAllowed() ? (
+          <>
+            <MenuItem icon={ShieldCheck} onClick={() => setPlatformRole('super-admin')}>Enter super-admin mode (local development only)</MenuItem>
+            <MenuSeparator />
+          </>
+        ) : null}
         <MenuItem icon={LogOut} onClick={signOut}>Sign out</MenuItem>
       </Dropdown>
     </header>

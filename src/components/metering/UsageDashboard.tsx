@@ -14,7 +14,7 @@ import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { formatCurrency } from '@/lib/money';
 import { BYTES_PER_GB } from '@/lib/meteringSeed';
-import { devToolsEnabled } from '@/components/entitlements/DevelopmentEditionSwitcher';
+import { platformAdminToolsAllowed } from '@/lib/platformAccess';
 import { cn } from '@/lib/utils';
 
 const BAND_BAR: Record<ThresholdBand, string> = {
@@ -112,7 +112,7 @@ export function UsageDashboard() {
         </Card>
       )}
 
-      {devToolsEnabled() && <UsageSimulator />}
+      {platformAdminToolsAllowed() && <UsageSimulator />}
     </div>
   );
 }

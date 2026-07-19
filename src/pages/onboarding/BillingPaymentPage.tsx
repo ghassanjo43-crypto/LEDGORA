@@ -11,6 +11,8 @@ import { ROUTES } from '@/lib/accessControl';
 import { Field, Input, Textarea } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { Alert } from '@/components/ui/Alert';
+import { DevelopmentBankWarning } from '@/components/billing/DevelopmentBankWarning';
+import { paymentReferenceMatches } from '@/services/paymentReferenceService';
 
 const MAX_PROOF_BYTES = 5_000_000;
 
@@ -26,7 +28,10 @@ export function BillingPaymentPage() {
   );
 
   const [file, setFile] = useState<{ name: string; type: string; size: number; dataUrl: string } | null>(null);
+  // Pre-filled with the reference LEDGORA issued for this invoice; the customer
+  // may correct it if their transfer quoted something else.
   const [reference, setReference] = useState(invoice?.paymentReference ?? '');
+  const [bankTransactionReference, setBankTransactionReference] = useState('');
   const [amount, setAmount] = useState(invoice ? String(invoice.total) : '');
   const [paidAt, setPaidAt] = useState(new Date().toISOString().slice(0, 10));
   const [note, setNote] = useState('');
@@ -68,6 +73,7 @@ export function BillingPaymentPage() {
       fileSize: file?.size ?? 0,
       dataUrl: file?.dataUrl ?? '',
       reference,
+      bankTransactionReference,
       amount: Number(amount),
       paidAt,
       note,
@@ -81,6 +87,9 @@ export function BillingPaymentPage() {
   };
 
   const bank = invoice.bank;
+  // Warn (never block) when the entered reference is not the invoice's.
+  const referenceMismatch =
+    reference.trim().length > 0 && !paymentReferenceMatches(reference, invoice.paymentReference);
 
   return (
     <CenteredCard title="Complete your payment" subtitle="Transfer the amount below, then upload your proof of payment." width="xl">
@@ -116,9 +125,17 @@ export function BillingPaymentPage() {
           </div>
 
           <div className="rounded-xl border border-brand-200 bg-brand-50/50 p-4 dark:border-brand-500/30 dark:bg-brand-500/10">
-            <p className="text-xs font-medium text-slate-500 dark:text-slate-400">Payment reference (quote this on your transfer)</p>
+            <p className="text-xs font-medium text-slate-500 dark:text-slate-400">
+              LEDGORA payment reference — put this in your bank transfer's reference/description field
+            </p>
             <p className="mt-1 font-mono text-xl font-bold tracking-wide text-brand-700 dark:text-brand-300">{invoice.paymentReference}</p>
+            <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+              Invoice number <span className="font-mono font-medium text-slate-700 dark:text-slate-200">{invoice.number}</span> — for
+              your records. Quote the payment reference above, not the invoice number.
+            </p>
           </div>
+
+          <DevelopmentBankWarning bank={bank} />
 
           <div className="rounded-xl border border-slate-200 p-4 text-sm dark:border-slate-800">
             <p className="mb-2 text-sm font-semibold text-slate-800 dark:text-slate-100">Bank details</p>
@@ -142,8 +159,40 @@ export function BillingPaymentPage() {
             <input type="file" accept="image/*,application/pdf" onChange={onFile} className="block w-full text-xs text-slate-600 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-100 file:px-3 file:py-2 file:text-xs dark:text-slate-300 dark:file:bg-slate-800" />
             {file && <p className="mt-1 text-xs text-emerald-600">Attached: {file.name}</p>}
           </Field>
-          <Field label="Bank transfer reference" required error={errors.reference}>
-            <Input value={reference} onChange={(e) => setReference(e.target.value)} hasError={!!errors.reference} />
+          <Field
+            label="LEDGORA payment reference"
+            htmlFor="proof-ledgora-reference"
+            required
+            error={errors.reference}
+            hint="Pre-filled from your invoice — change it only if you quoted something different."
+          >
+            <Input
+              id="proof-ledgora-reference"
+              value={reference}
+              onChange={(e) => setReference(e.target.value)}
+              hasError={!!errors.reference}
+              className="font-mono"
+            />
+          </Field>
+          {referenceMismatch && (
+            <Alert variant="warning" title="This is not the reference on your invoice">
+              Your invoice expects <b className="font-mono">{invoice.paymentReference}</b>. If your transfer quoted something
+              else, leave it as entered and explain in the note — the reviewer will match it manually. Verification may take
+              longer.
+            </Alert>
+          )}
+          <Field
+            label="Bank transaction reference"
+            htmlFor="proof-bank-reference"
+            error={errors.bankTransactionReference}
+            hint="Optional — the transaction number your bank issued (e.g. TT-2026-00184)."
+          >
+            <Input
+              id="proof-bank-reference"
+              value={bankTransactionReference}
+              onChange={(e) => setBankTransactionReference(e.target.value)}
+              className="font-mono"
+            />
           </Field>
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Amount paid" required error={errors.amount}>

@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, fireEvent, cleanup } from '@testing-library/react';
 import { useEntitlementStore } from '@/store/entitlementStore';
 import { FeatureGate } from './FeatureGate';
@@ -10,12 +10,6 @@ const ent = () => useEntitlementStore.getState();
 
 beforeEach(() => {
   ent().resetToDefault();
-  // Ensure dev-only tooling renders under the test environment.
-  try {
-    localStorage.setItem('ledgora-dev-tools', '1');
-  } catch {
-    /* no-op */
-  }
 });
 
 afterEach(() => cleanup());
@@ -69,6 +63,22 @@ describe('ModuleRoute', () => {
 });
 
 describe('DevelopmentEditionSwitcher', () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('is hidden without the explicit development opt-in', () => {
+    // No VITE_LEDGORA_DEV_TOOLS → the switcher must not render.
+    vi.stubEnv('VITE_LEDGORA_DEV_TOOLS', '');
+    render(<DevelopmentEditionSwitcher />);
+    expect(screen.queryByRole('button', { name: 'Projects' })).toBeNull();
+  });
+
+  it('is hidden in a production build even with the opt-in set', () => {
+    vi.stubEnv('VITE_LEDGORA_DEV_TOOLS', 'true');
+    vi.stubEnv('DEV', false);
+    render(<DevelopmentEditionSwitcher />);
+    expect(screen.queryByRole('button', { name: 'Projects' })).toBeNull();
+  });
+
   it('switches edition and updates a gated child immediately (no reload, no crash)', () => {
     ent().setEdition('core');
     render(

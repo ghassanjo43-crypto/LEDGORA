@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { businessJSONStorage } from '@/lib/workspaceStorage';
 import type { Currency, CurrencyAuditEvent, EntityCurrencyConfig } from '@/types/currency';
 import { validateCurrency } from '@/lib/currencyValidation';
 import { SEED_CURRENCIES, SEED_ENTITY_CURRENCY_CONFIG, PRIMARY_ENTITY_ID } from '@/data/currencySeed';
@@ -104,6 +105,6 @@ export const useCurrencyStore = create<CurrencyState>()(
       replaceAll: (state) => set((s) => ({ ...s, ...state })),
       resetToDefault: () => set({ currencies: SEED_CURRENCIES.map((c) => ({ ...c })), entityConfigs: { [PRIMARY_ENTITY_ID]: { ...SEED_ENTITY_CURRENCY_CONFIG } } }),
     }),
-    { name: 'ledgerly-currencies', version: 1 },
+    { name: 'ledgerly-currencies', storage: businessJSONStorage, version: 1 },
   ),
 );

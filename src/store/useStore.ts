@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { businessJSONStorage } from '@/lib/workspaceStorage';
 import type {
   Account,
   AccountType,
@@ -397,7 +398,7 @@ export const useStore = create<COAState>()(
         }),
     }),
     {
-      name: 'ifrs-coa-store',
+      name: 'ifrs-coa-store', storage: businessJSONStorage,
       version: 1,
       partialize: (state) => ({
         accounts: state.accounts,

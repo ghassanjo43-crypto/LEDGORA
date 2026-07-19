@@ -76,7 +76,15 @@ export function AdminPaymentReviewPage() {
                     {proof && (
                       <div className="mt-3 grid gap-2 rounded-lg bg-slate-50 p-3 text-xs dark:bg-slate-800/50 sm:grid-cols-2">
                         <span>Paid: <b>{money(proof.amount, inv.currency)}</b> on {proof.paidAt}</span>
-                        <span>Bank ref: <b>{proof.reference}</b></span>
+                        <span>
+                          Quoted LEDGORA ref: <b>{proof.reference}</b>{' '}
+                          {proof.matchesInvoiceReference === false && (
+                            <b className="text-amber-600 dark:text-amber-400">(does not match {inv.paymentReference} — verify manually)</b>
+                          )}
+                        </span>
+                        {proof.bankTransactionReference && (
+                          <span>Bank transaction ref: <b>{proof.bankTransactionReference}</b></span>
+                        )}
                         <span className="sm:col-span-2">
                           Proof: {proof.dataUrl ? (
                             <a href={proof.dataUrl} target="_blank" rel="noreferrer" className="font-medium text-brand-600 hover:underline">

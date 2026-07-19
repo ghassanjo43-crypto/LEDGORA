@@ -25,7 +25,7 @@ function seed(): void {
 beforeEach(() => {
   useJournalStore.getState().resetToDefault();
   useEntitlementStore.getState().resetToDefault(); // enterprise dev, active → posting allowed
-  useSessionStore.setState({ role: 'admin', userName: 'Inv Tester' });
+  useSessionStore.setState({ platformRole: 'super-admin', userName: 'Inv Tester' });
   useInventoryStore.getState().resetToDefault();
   seed();
 });

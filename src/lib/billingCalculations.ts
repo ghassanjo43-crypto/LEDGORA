@@ -250,7 +250,10 @@ export interface ProofInput {
   fileType: string;
   fileSize: number;
   dataUrl: string;
+  /** The LEDGORA payment reference (`LG-XXXX-XXXX`) quoted on the transfer. */
   reference: string;
+  /** The bank's own transaction/reference number, when the customer has one. */
+  bankTransactionReference?: string;
   amount: number;
   paidAt: string;
   note?: string;
@@ -265,7 +268,7 @@ export function validateProof(input: Partial<ProofInput>): FieldErrors {
   if (input.fileType && !ALLOWED_PROOF_TYPES.includes(input.fileType)) {
     errors.file = 'Only PNG, JPEG, WEBP or PDF receipts are accepted.';
   }
-  if (!input.reference || !input.reference.trim()) errors.reference = 'Bank reference is required.';
+  if (!input.reference || !input.reference.trim()) errors.reference = 'The LEDGORA payment reference is required.';
   if (input.amount === undefined || Number.isNaN(input.amount) || input.amount <= 0) {
     errors.amount = 'Enter the amount paid.';
   }

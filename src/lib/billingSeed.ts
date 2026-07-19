@@ -56,6 +56,11 @@ export function makeSeedPlans(now: string): SubscriptionPlan[] {
   });
 }
 
+/**
+ * Shipped placeholder bank details. `isPlaceholder` drives the development
+ * warning shown next to them; it is cleared the moment an administrator saves
+ * real account information.
+ */
 export const DEFAULT_BANK_DETAILS: BankDetails = {
   bankName: 'Ledgora Bank (example)',
   accountName: 'Ledgora Software FZ-LLC',
@@ -63,8 +68,11 @@ export const DEFAULT_BANK_DETAILS: BankDetails = {
   iban: 'AE00 0000 0000 0000 0000 000',
   swift: 'LEDGAEXX',
   branch: 'Business Bay, Dubai',
+  // The customer quotes the generated LEDGORA payment reference — NOT the
+  // invoice number — because that reference is what reconciles the transfer.
   instructions:
-    'Transfer the invoice total to the account below and quote the invoice number as the payment reference. Upload the transfer receipt for verification.',
+    'Transfer the invoice total to the account below and quote the LEDGORA payment reference exactly as shown. Upload the transfer receipt for verification.',
+  isPlaceholder: true,
 };
 
 export function makeSeedBillingSettings(now: string): BillingSettings {

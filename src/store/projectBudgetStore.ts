@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { businessJSONStorage } from '@/lib/workspaceStorage';
 import type { ProjectBudget, ProjectBudgetCategory, ProjectBudgetLine, ProjectBudgetScenario } from '@/types/projectBudget';
 import { isDuplicateProjectBudgetLine } from '@/lib/projectBudget';
 import { roundMoney } from '@/lib/journalValidation';
@@ -128,6 +129,6 @@ export const useProjectBudgetStore = create<ProjectBudgetState>()(
       replaceAll: (budgets) => set({ budgets }),
       resetToDefault: () => set({ budgets: [] }),
     }),
-    { name: 'ledgerly-project-budgets', version: 1 },
+    { name: 'ledgerly-project-budgets', storage: businessJSONStorage, version: 1 },
   ),
 );

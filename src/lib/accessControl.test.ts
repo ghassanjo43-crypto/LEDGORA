@@ -18,8 +18,14 @@ const verified = { emailVerified: true };
 describe('resolvePostLoginRoute', () => {
   const base: AccessContext = { user: verified, hasOrganization: true, subscriptionStatus: 'active' };
 
-  it('sends an unauthenticated visitor to login', () => {
-    expect(resolvePostLoginRoute({ user: null, hasOrganization: false, subscriptionStatus: null })).toBe(ROUTES.login);
+  it('sends an unauthenticated visitor to the public welcome page', () => {
+    expect(resolvePostLoginRoute({ user: null, hasOrganization: false, subscriptionStatus: null })).toBe(ROUTES.welcome);
+  });
+
+  it('sends a Free Demo visitor to the application', () => {
+    expect(
+      resolvePostLoginRoute({ user: null, hasOrganization: false, subscriptionStatus: null, demoActive: true }),
+    ).toBe(ROUTES.appDashboard);
   });
 
   it('routes each stage exactly as specified', () => {

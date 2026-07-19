@@ -13,7 +13,8 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { MemberStatus, OrgUserRole, RegisteredUser } from '@/types/onboarding';
 import { useEntitlementStore } from './entitlementStore';
-import { getCurrentRole } from './sessionStore';
+import { getPlatformRole } from './sessionStore';
+import { hasPlatformCapability } from '@/lib/platformAccess';
 import {
   isValidEmail,
   isValidMobile,
@@ -69,7 +70,9 @@ interface AuthState {
 
 /** Only an org owner/admin (or the platform super-admin) may manage members. */
 function assertCanManageMembers(actor: RegisteredUser | null): AuthResult {
-  if (getCurrentRole() === 'admin') return { ok: true };
+  // A LEDGORA operator may administer any tenant — but only when the
+  // platform policy actually grants it (never in production).
+  if (hasPlatformCapability(getPlatformRole(), 'manage-any-organization')) return { ok: true };
   if (actor && (actor.role === 'owner' || actor.role === 'admin')) return { ok: true };
   return { ok: false, error: 'Only an organization owner or admin can manage members.' };
 }
@@ -93,7 +96,9 @@ export const useAuthStore = create<AuthState>()(
         const mobile = input.mobile.trim();
         if (!fullName) fieldErrors.fullName = 'Full name is required.';
         if (!isValidEmail(email)) fieldErrors.email = 'Enter a valid business email.';
-        if (!isValidMobile(mobile)) fieldErrors.mobile = 'Enter a valid mobile number.';
+        // Mobile is optional at signup (a contact number can be added later),
+        // but a supplied value must still be a valid number.
+        if (mobile && !isValidMobile(mobile)) fieldErrors.mobile = 'Enter a valid mobile number.';
         if (!input.country) fieldErrors.country = 'Select your country.';
         const pw = passwordProblem(input.password);
         if (pw) fieldErrors.password = pw;
@@ -288,5 +293,8 @@ export function membersOf(users: RegisteredUser[], organizationId?: string): Reg
 /** Whether the signed-in user may manage members (owner/admin or platform admin). */
 export function canManageMembers(): boolean {
   const actor = getCurrentUser();
-  return getCurrentRole() === 'admin' || (!!actor && (actor.role === 'owner' || actor.role === 'admin'));
+  return (
+    hasPlatformCapability(getPlatformRole(), 'manage-any-organization') ||
+    (!!actor && (actor.role === 'owner' || actor.role === 'admin'))
+  );
 }

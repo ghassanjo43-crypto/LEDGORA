@@ -13,6 +13,7 @@
  */
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { businessJSONStorage } from '@/lib/workspaceStorage';
 import type {
   BillOfMaterials,
   ManufacturingPlant,
@@ -660,7 +661,7 @@ export const useManufacturingStore = create<MfgState>()(
       };
     },
     {
-      name: 'ledgora-manufacturing',
+      name: 'ledgora-manufacturing', storage: businessJSONStorage,
       version: 1,
       partialize: (s) => ({ settings: s.settings, plants: s.plants, lines: s.lines, workCenters: s.workCenters, boms: s.boms, routings: s.routings, workOrders: s.workOrders, standardCostVersions: s.standardCostVersions, materialIssues: s.materialIssues, materialReturns: s.materialReturns, productionReceipts: s.productionReceipts, operationCosts: s.operationCosts, scraps: s.scraps, auditTrail: s.auditTrail, seeded: s.seeded }),
     },

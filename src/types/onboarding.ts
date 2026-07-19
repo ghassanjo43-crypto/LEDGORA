@@ -14,6 +14,8 @@
  *     API would enforce is enforced here too, not only by hiding menus.
  */
 
+import type { OrganizationRole } from './roles';
+
 /** A registered customer user (the person). The first user of an org is owner. */
 export interface RegisteredUser {
   id: string;
@@ -42,7 +44,11 @@ export interface RegisteredUser {
   lastLoginAt?: string;
 }
 
-export type OrgUserRole = 'owner' | 'admin' | 'member';
+/**
+ * Membership role inside a subscriber organization. Distinct from the LEDGORA
+ * platform operator role — see `types/roles`.
+ */
+export type OrgUserRole = OrganizationRole;
 export type MemberStatus = 'active' | 'invited' | 'suspended';
 
 /** The subscriber organization (tenant). */
@@ -129,6 +135,8 @@ export interface BankInstructions {
   swift: string;
   branch: string;
   instructions: string;
+  /** True while these are the shipped placeholder details (see BankDetails). */
+  isPlaceholder?: boolean;
 }
 
 export type OnboardingInvoiceStatus =
@@ -146,7 +154,16 @@ export interface OnboardingPaymentProof {
   fileSize: number;
   /** Data URL for the demo; a real backend stores the object + a signed URL. */
   dataUrl: string;
+  /** The LEDGORA payment reference the customer says they quoted. */
   reference: string;
+  /** The bank's own transaction/reference number, when the customer supplies it. */
+  bankTransactionReference?: string;
+  /**
+   * Whether `reference` matched the invoice's payment reference at upload time.
+   * Recorded for the reviewing administrator; a mismatch never blocks the
+   * upload and never activates anything on its own.
+   */
+  matchesInvoiceReference?: boolean;
   amount: number;
   paidAt: string;
   note?: string;

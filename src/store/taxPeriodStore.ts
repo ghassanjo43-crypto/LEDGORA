@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { businessJSONStorage } from '@/lib/workspaceStorage';
 import type { TaxPeriod, TaxPeriodAuditEvent, TaxPeriodStatus } from '@/types/taxReporting';
 import { generateId, nowIso } from '@/lib/utils';
 
@@ -104,6 +105,6 @@ export const useTaxPeriodStore = create<TaxPeriodState>()(
       replaceAll: (periods) => set({ periods }),
       resetToDefault: () => set({ periods: [] }),
     }),
-    { name: 'ledgerly-tax-periods', version: 1 },
+    { name: 'ledgerly-tax-periods', storage: businessJSONStorage, version: 1 },
   ),
 );

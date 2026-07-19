@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { businessJSONStorage } from '@/lib/workspaceStorage';
 import type { BusinessEntity, EntityType } from '@/types';
 import type { EntityFormValues } from '@/lib/entityValidation';
 import { SEED_ENTITIES } from '@/data/seedEntities';
@@ -165,7 +166,7 @@ export const useEntityStore = create<EntityState>()(
       resetToDefault: () => set({ entities: SEED_ENTITIES.map((e) => ({ ...e })) }),
     }),
     {
-      name: 'ifrs-entity-store',
+      name: 'ifrs-entity-store', storage: businessJSONStorage,
       version: 1,
       partialize: (state) => ({ entities: state.entities }),
     },

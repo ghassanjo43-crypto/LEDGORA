@@ -4,6 +4,12 @@ dist-ssr
 *.local
 .vite
 
+# Local environment / secrets — NEVER commit. `.env.local` carries the
+# VITE_LEDGORA_DEV_TOOLS opt-in that enables local platform-admin tooling.
+.env
+.env.*
+!.env.example
+
 # Editor
 .vscode/*
 !.vscode/extensions.json

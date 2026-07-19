@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { businessJSONStorage } from '@/lib/workspaceStorage';
 import type { ProjectTimeEntry } from '@/types/projectTime';
 import type { ProjectExpense } from '@/types/projectExpense';
 import type { ProjectCommitment } from '@/types/projectCommitment';
@@ -128,6 +129,6 @@ export const useProjectDeliveryStore = create<DeliveryState>()(
       replaceAll: (state) => set((s) => ({ ...s, ...state })),
       resetToDefault: () => set({ timeEntries: [], expenses: [], commitments: [] }),
     }),
-    { name: 'ledgerly-project-delivery', version: 1 },
+    { name: 'ledgerly-project-delivery', storage: businessJSONStorage, version: 1 },
   ),
 );

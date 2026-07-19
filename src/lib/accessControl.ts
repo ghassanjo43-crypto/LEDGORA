@@ -20,6 +20,8 @@ import { EDITION_MODULES, sortModules } from '@/config/editions';
 /* ── Route constants (the literal paths from the specification) ────────────── */
 
 export const ROUTES = {
+  /** Public landing surface for an unauthenticated visitor. */
+  welcome: '/',
   pricing: '/pricing',
   login: '/login',
   register: '/register',
@@ -49,6 +51,7 @@ export type Surface =
 
 /** Paths visitors may open with no authenticated session. */
 export const PUBLIC_PATHS: string[] = [
+  ROUTES.welcome,
   ROUTES.pricing,
   ROUTES.login,
   ROUTES.register,
@@ -84,6 +87,12 @@ export interface AccessContext {
   user: { emailVerified: boolean } | null;
   hasOrganization: boolean;
   subscriptionStatus: OnboardingSubscriptionStatus | null;
+  /**
+   * A Free Demo workspace is running. The demo is not a subscription: it opens
+   * the application without a plan, and only the demo-permitted views (see
+   * `config/freeDemo`) render inside it.
+   */
+  demoActive?: boolean;
 }
 
 /**
@@ -95,7 +104,9 @@ export interface AccessContext {
  *   rejected → /billing/payment.
  */
 export function resolvePostLoginRoute(ctx: AccessContext): string {
-  if (!ctx.user) return ROUTES.login;
+  // A running Free Demo owns the application surface until it is exited.
+  if (ctx.demoActive) return ROUTES.appDashboard;
+  if (!ctx.user) return ROUTES.welcome;
   if (!ctx.user.emailVerified) return ROUTES.verifyEmail;
   if (!ctx.hasOrganization) return ROUTES.onboardingOrganization;
 
@@ -129,6 +140,10 @@ export function resolvePostLoginRoute(ctx: AccessContext): string {
 export function isPathAllowed(ctx: AccessContext, path: string): boolean {
   const surface = surfaceOf(path);
   if (surface === 'admin') return true; // gated by platform role in the shell
+  // A Free Demo may open the application (view-level limits are applied by the
+  // AccessGate). The admin surface returned above is separately gated by the
+  // platform role in the shell, which a demo visitor never has.
+  if (ctx.demoActive) return true;
   if (ctx.subscriptionStatus === 'active') return true;
   return INACTIVE_ALLOWED_SURFACES.includes(surface);
 }

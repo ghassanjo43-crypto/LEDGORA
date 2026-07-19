@@ -8,6 +8,7 @@ import type { RenewalReminder, SubscriptionInvoice, SubscriptionPlan } from '@/t
 import { useEntitlementStore } from './entitlementStore';
 import { useBillingStore, getActivePlan } from './billingStore';
 import { useSessionStore } from './sessionStore';
+import { hasPlatformCapability } from '@/lib/platformAccess';
 import { computeRenewalReminder } from '@/lib/billingCalculations';
 
 function todayIso(): string {
@@ -55,7 +56,8 @@ export function useActivePlan(): SubscriptionPlan | undefined {
 }
 
 export function useIsAdmin(): boolean {
-  return useSessionStore((s) => s.role === 'admin');
+  // Effective, production-locked: always false in a deployed build.
+  return useSessionStore((s) => hasPlatformCapability(s.platformRole, 'verify-payments'));
 }
 
 export { getActivePlan };
