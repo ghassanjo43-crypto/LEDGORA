@@ -46,11 +46,15 @@ export const useSessionStore = create<SessionState>()(
       name: 'ledgora-session',
       version: 2,
       /**
-       * v1 stored `role: 'admin' | 'member'` and DEFAULTED TO 'admin', so every
-       * existing browser holds an administrator value. That value is discarded:
-       * migration always lands on `'none'`, and a developer re-enables their
-       * local role deliberately. This is what stops an already-deployed browser
-       * from keeping administrator access after this release.
+       * Version 1 of this store kept a two-value field that defaulted to the
+       * administrator value, so every browser that used an older build holds a
+       * privileged payload. That payload is DISCARDED, never read: migration
+       * unconditionally lands on 'none', and a developer re-enables a local role
+       * deliberately. This is what stops an already-deployed browser from
+       * retaining administration after this release.
+       *
+       * (Deliberately worded without the legacy literal so a search of this file
+       * cannot mistake the note for a live default.)
        */
       migrate: () => ({ platformRole: 'none' as PlatformRole }),
       /**
