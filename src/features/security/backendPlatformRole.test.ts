@@ -125,18 +125,38 @@ describe('backend session store', () => {
 });
 
 describe('api client', () => {
-  it('sends credentials and the CSRF header on unsafe methods', async () => {
+  it('sends credentials and the in-memory CSRF header on unsafe methods', async () => {
     vi.stubEnv('VITE_API_URL', 'https://api.example.test');
-    document.cookie = 'ledgora_csrf=token-abc';
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } }),
     );
     try {
-      const { api } = await import('@/services/api/client');
+      const { api, setCsrfToken } = await import('@/services/api/client');
+      // The token is held in memory, never read from document.cookie (which
+      // cannot see an API-host cookie cross-site).
+      setCsrfToken('token-abc');
       await api.post('/api/auth/logout');
       const [, init] = fetchSpy.mock.calls[0]!;
       expect(init?.credentials).toBe('include');
       expect((init?.headers as Record<string, string>)['X-CSRF-Token']).toBe('token-abc');
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it('never reads the CSRF token from document.cookie', async () => {
+    vi.stubEnv('VITE_API_URL', 'https://api.example.test');
+    document.cookie = 'ledgora_csrf=cookie-value-should-be-ignored';
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } }),
+    );
+    try {
+      const { api, clearCsrfToken } = await import('@/services/api/client');
+      clearCsrfToken();
+      await api.post('/api/auth/logout');
+      const [, init] = fetchSpy.mock.calls[0]!;
+      // With no in-memory token the header is absent, even though a cookie exists.
+      expect((init?.headers as Record<string, string>)['X-CSRF-Token']).toBeUndefined();
     } finally {
       fetchSpy.mockRestore();
     }

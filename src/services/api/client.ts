@@ -2,15 +2,41 @@
  * LEDGORA backend API client.
  *
  * Authentication rides on an HttpOnly session cookie issued by the backend, so
- * every request sets `credentials: 'include'` and no token is ever read from or
- * written to localStorage. Because the session is a cookie, unsafe methods also
- * echo the double-submit CSRF token the server set alongside it.
+ * every request sets `credentials: 'include'`. No session token is ever read
+ * from or written to storage.
  *
- * `VITE_API_URL` is a public value (an origin), not a secret.
+ * CSRF: the server returns a double-submit token in the login/session response.
+ * The client keeps it in MEMORY only (never localStorage, never a cookie read)
+ * and echoes it in `X-CSRF-Token` on unsafe requests. It deliberately does NOT
+ * read the CSRF cookie with `document.cookie`: in a cross-site deployment that
+ * cookie belongs to the API host and is invisible to the frontend host, so any
+ * such read returns nothing and breaks every write.
+ *
+ * `VITE_API_URL` is a public value (an origin), not a secret. Point it at the
+ * frontend origin for a same-origin `/api` proxy, or at the API origin for a
+ * cross-site deployment.
  */
 
-export const CSRF_COOKIE = 'ledgora_csrf';
 export const CSRF_HEADER = 'X-CSRF-Token';
+
+/**
+ * The CSRF token, held only for the lifetime of the page. A reload drops it;
+ * `GET /api/auth/session` re-supplies it, so it is recovered before any unsafe
+ * request the app makes after start-up.
+ */
+let csrfToken = '';
+
+export function setCsrfToken(token: string | null | undefined): void {
+  csrfToken = typeof token === 'string' ? token : '';
+}
+
+export function getCsrfToken(): string {
+  return csrfToken;
+}
+
+export function clearCsrfToken(): void {
+  csrfToken = '';
+}
 
 export class ApiError extends Error {
   constructor(
@@ -44,12 +70,6 @@ export function isApiConfigured(): boolean {
   return apiBaseUrl().length > 0;
 }
 
-function readCsrfToken(): string {
-  if (typeof document === 'undefined') return '';
-  const match = document.cookie.split('; ').find((entry) => entry.startsWith(`${CSRF_COOKIE}=`));
-  return match ? decodeURIComponent(match.slice(CSRF_COOKIE.length + 1)) : '';
-}
-
 const UNSAFE = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 export interface ApiRequestOptions {
@@ -72,9 +92,8 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions = {
 
   const method = (options.method ?? 'GET').toUpperCase();
   const headers: Record<string, string> = {};
-  if (UNSAFE.has(method)) {
-    const token = readCsrfToken();
-    if (token) headers[CSRF_HEADER] = token;
+  if (UNSAFE.has(method) && csrfToken) {
+    headers[CSRF_HEADER] = csrfToken;
   }
 
   let payload: BodyInit | undefined;
@@ -101,6 +120,12 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions = {
       cause: String(cause),
     });
   }
+
+  // Refresh the in-memory CSRF token whenever the server supplies one. The
+  // response body is the primary channel (see authApi); this header capture is
+  // the belt-and-braces companion and needs `exposedHeaders` set in CORS.
+  const headerToken = response.headers.get(CSRF_HEADER);
+  if (headerToken) setCsrfToken(headerToken);
 
   if (response.status === 204) return undefined as T;
 

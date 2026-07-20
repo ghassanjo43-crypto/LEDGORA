@@ -4,7 +4,7 @@
  * `getSession()` is the ONLY source of truth for who the user is and which
  * platform role (if any) they hold. Nothing here trusts a browser-held value.
  */
-import { api, ApiError } from './client';
+import { api, ApiError, setCsrfToken, clearCsrfToken } from './client';
 
 /** Platform roles exactly as the backend spells them. */
 export type BackendPlatformRole = 'super_admin' | 'billing_admin' | 'support';
@@ -24,31 +24,51 @@ export interface BackendUser {
 export interface BackendSessionResponse {
   authenticated: boolean;
   user: BackendUser | null;
+  /** Double-submit CSRF token to hold in memory. Null when not authenticated. */
+  csrfToken?: string | null;
 }
 
 export const authApi = {
   /** Current server session. Never throws for "not signed in" — returns false. */
   async getSession(signal?: AbortSignal): Promise<BackendSessionResponse> {
     try {
-      return await api.get<BackendSessionResponse>('/api/auth/session', signal);
+      const result = await api.get<BackendSessionResponse>('/api/auth/session', signal);
+      // Recover the CSRF token into memory after a reload; drop it if the server
+      // reports no session, so a stale token cannot ride a later request.
+      if (result.authenticated) setCsrfToken(result.csrfToken);
+      else clearCsrfToken();
+      return result;
     } catch (error) {
       if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
-        return { authenticated: false, user: null };
+        clearCsrfToken();
+        return { authenticated: false, user: null, csrfToken: null };
       }
       throw error;
     }
   },
 
-  register(input: { email: string; password: string; fullName: string }) {
-    return api.post<{ user: BackendUser }>('/api/auth/register', input);
+  async register(input: { email: string; password: string; fullName: string }) {
+    const result = await api.post<{ user: BackendUser; csrfToken?: string }>('/api/auth/register', input);
+    setCsrfToken(result.csrfToken);
+    return result;
   },
 
-  signIn(input: { email: string; password: string }) {
-    return api.post<{ user: BackendUser; mustChangePassword: boolean }>('/api/auth/login', input);
+  async signIn(input: { email: string; password: string }) {
+    const result = await api.post<{ user: BackendUser; mustChangePassword: boolean; csrfToken?: string }>(
+      '/api/auth/login',
+      input,
+    );
+    setCsrfToken(result.csrfToken);
+    return result;
   },
 
-  signOut() {
-    return api.post<{ ok: boolean }>('/api/auth/logout');
+  async signOut() {
+    try {
+      return await api.post<{ ok: boolean }>('/api/auth/logout');
+    } finally {
+      // The CSRF token is meaningless once the session is gone.
+      clearCsrfToken();
+    }
   },
 
   signOutEverywhere() {

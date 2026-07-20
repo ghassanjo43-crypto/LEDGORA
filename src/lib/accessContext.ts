@@ -51,3 +51,15 @@ export function isSessionResolving(): boolean {
   const status = useBackendSessionStore.getState().status;
   return status === 'unknown' || status === 'loading';
 }
+
+/**
+ * The backend positively confirmed there is NO session (`authenticated:false`),
+ * as opposed to a visitor who simply never signed in. This is the "your session
+ * ended / the cookie did not travel" case: the mirror has been cleared and the
+ * user belongs on /login, not the public welcome page.
+ */
+export function isSessionVerifiedUnauthenticated(): boolean {
+  if (!isApiConfigured()) return false;
+  const { status, user } = useBackendSessionStore.getState();
+  return status === 'ready' && user === null;
+}

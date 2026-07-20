@@ -98,6 +98,9 @@ export async function buildApp({ config, db, fileStorage }: BuildAppOptions): Pr
     credentials: true,
     methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['content-type', 'x-csrf-token'],
+    // Let cross-origin JS read the CSRF token from the response header (the body
+    // field is the primary channel; this is the belt-and-braces companion).
+    exposedHeaders: ['x-csrf-token'],
     maxAge: 600,
   });
 

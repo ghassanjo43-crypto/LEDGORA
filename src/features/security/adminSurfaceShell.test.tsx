@@ -164,3 +164,37 @@ describe('unreachable backend', () => {
     await waitFor(() => expect(useRouterStore.getState().path).not.toBe(ROUTES.adminConsole));
   });
 });
+
+describe('session verification returns authenticated:false', () => {
+  it('clears the mirrored local user and returns to /login, never onboarding', async () => {
+    // The persisted mirror says this browser is signed in (the production
+    // symptom: login mirrored a user, but the follow-up session check fails).
+    signInLocally();
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(sessionResponse(null));
+
+    goto(ROUTES.adminConsole);
+    render(<AppShell />);
+
+    await waitFor(() => expect(useBackendSessionStore.getState().status).toBe('ready'));
+    // The mirror is erased — a disowned user is not trusted.
+    await waitFor(() => expect(useAuthStore.getState().currentUserId).toBeNull());
+    // …and they land on /login, not the onboarding funnel.
+    await waitFor(() => expect(useRouterStore.getState().path).toBe(ROUTES.login));
+    expect(useRouterStore.getState().path).not.toBe(ROUTES.onboardingOrganization);
+    expect(useRouterStore.getState().path).not.toBe(ROUTES.onboardingSubscription);
+  });
+
+  it('a missing cookie cannot create a customer onboarding session', async () => {
+    // No local sign-in and the server reports no session: the browser must not
+    // manufacture a half-authenticated customer that drifts into onboarding.
+    useAuthStore.setState({ users: [], currentUserId: null });
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(sessionResponse(null));
+
+    goto(ROUTES.onboardingOrganization);
+    render(<AppShell />);
+
+    await waitFor(() => expect(useBackendSessionStore.getState().status).toBe('ready'));
+    await waitFor(() => expect(useRouterStore.getState().path).toBe(ROUTES.login));
+    expect(useAuthStore.getState().currentUserId).toBeNull();
+  });
+});

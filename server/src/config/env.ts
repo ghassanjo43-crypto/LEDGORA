@@ -23,6 +23,28 @@ const schema = z.object({
   /** Exact origin(s) allowed to send credentialed requests. Comma-separated. */
   FRONTEND_URL: z.string().default('http://localhost:5173'),
 
+  /**
+   * Cross-site behaviour of the session/CSRF cookies.
+   *
+   *  · `lax`  — the browser sends the cookie on same-origin (and top-level GET)
+   *    requests. Correct when the API is reached through the frontend origin
+   *    (a `/api` reverse proxy). This is the DEFAULT and the recommended
+   *    deployment.
+   *  · `none` — the cookie travels on genuinely cross-site requests. Required
+   *    when the browser talks to a *different* API hostname. The browser only
+   *    honours `SameSite=None` on a `Secure` cookie, so this is production-only.
+   *
+   * `strict` is offered for completeness but breaks the cross-origin login flow.
+   */
+  COOKIE_SAMESITE: z.enum(['lax', 'none', 'strict']).default('lax'),
+  /**
+   * Emit the `Partitioned` attribute (CHIPS) alongside `SameSite=None`. Where
+   * the browser supports it the cookie is double-keyed to the top-level site,
+   * which keeps a cross-site session working as third-party cookies are phased
+   * out. Ignored by browsers that do not implement it.
+   */
+  COOKIE_PARTITIONED: booleanish.default(false),
+
   /** Used to derive the CSRF token binding. Must be long and random. */
   SESSION_SECRET: z.string().min(16, 'SESSION_SECRET must be at least 16 characters').default('dev-only-insecure-session-secret'),
   SESSION_TTL_HOURS: z.coerce.number().int().min(1).max(24 * 30).default(24),
@@ -51,6 +73,13 @@ export type AppConfig = z.infer<typeof schema> & {
   isProduction: boolean;
   isTest: boolean;
   allowedOrigins: string[];
+  /** Resolved cookie attributes, so the session plugin has one source of truth. */
+  cookie: {
+    sameSite: 'lax' | 'none' | 'strict';
+    /** `SameSite=None` is only honoured on a Secure cookie. */
+    secure: boolean;
+    partitioned: boolean;
+  };
 };
 
 let cached: AppConfig | null = null;
@@ -69,7 +98,17 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
     if (value.SESSION_SECRET === 'dev-only-insecure-session-secret') {
       throw new Error('SESSION_SECRET must be set to a strong random value in production.');
     }
+    if (value.COOKIE_SAMESITE === 'none' && !value.TRUST_PROXY) {
+      // Cross-site cookies must be Secure, and only reach the app as Secure when
+      // TLS termination (Render's proxy) is trusted. Refusing here turns a
+      // silent "the cookie never arrives" into a clear boot-time error.
+      throw new Error('COOKIE_SAMESITE=none requires TRUST_PROXY=true so Secure cookies are honoured behind the proxy.');
+    }
   }
+
+  // `SameSite=None` is meaningless without `Secure`; force it on so a
+  // cross-site session cannot silently degrade to a cookie the browser drops.
+  const cookieSecure = isProduction || value.COOKIE_SAMESITE === 'none';
 
   return {
     ...value,
@@ -78,6 +117,11 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
     allowedOrigins: value.FRONTEND_URL.split(',')
       .map((o) => o.trim().replace(/\/$/, ''))
       .filter(Boolean),
+    cookie: {
+      sameSite: value.COOKIE_SAMESITE,
+      secure: cookieSecure,
+      partitioned: value.COOKIE_PARTITIONED && value.COOKIE_SAMESITE === 'none',
+    },
   };
 }
 
@@ -97,6 +141,9 @@ export function describeConfig(config: AppConfig): Record<string, unknown> {
     sessionSecretConfigured: config.SESSION_SECRET !== 'dev-only-insecure-session-secret',
     sessionTtlHours: config.SESSION_TTL_HOURS,
     trustProxy: config.TRUST_PROXY,
+    cookieSameSite: config.cookie.sameSite,
+    cookieSecure: config.cookie.secure,
+    cookiePartitioned: config.cookie.partitioned,
     bootstrapAdminEnabled: config.BOOTSTRAP_ADMIN_ENABLED,
   };
 }

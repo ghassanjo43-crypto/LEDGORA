@@ -1,10 +1,19 @@
 /**
  * Session cookie plumbing + CSRF.
  *
- * The session cookie is HttpOnly (unreadable by script), Secure in production,
- * SameSite=Lax, and Path=/. Because authentication rides on a cookie, every
- * unsafe method additionally requires a double-submit CSRF token: a non-HttpOnly
- * cookie the frontend echoes in `X-CSRF-Token`. SameSite alone is not relied on.
+ * The session cookie is HttpOnly (unreadable by script), Secure in production
+ * (and always when SameSite=None), Path=/, with a SameSite chosen by
+ * configuration:
+ *   · same-origin deployment (API reached through the frontend's `/api` proxy)
+ *     → SameSite=Lax, the default;
+ *   · cross-site deployment (separate API hostname) → SameSite=None, optionally
+ *     Partitioned.
+ *
+ * Because authentication rides on a cookie, every unsafe method additionally
+ * requires a double-submit CSRF token. The token is ALSO returned in the
+ * login/session response body (see routes/auth) so the browser keeps it in
+ * memory and echoes it in `X-CSRF-Token` — it never has to read a cookie with
+ * `document.cookie`, which is impossible across origins anyway.
  */
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
@@ -46,29 +55,35 @@ async function sessionPlugin(app: FastifyInstance, options: { config: AppConfig 
 
   app.decorateRequest('principal', null);
 
+  // One attribute set for issuing AND clearing, so a cleared cookie carries the
+  // exact SameSite/Secure/Partitioned a browser needs to match and evict it.
+  const cookieAttrs = {
+    path: '/' as const,
+    secure: config.cookie.secure,
+    sameSite: config.cookie.sameSite,
+    ...(config.cookie.partitioned ? { partitioned: true } : {}),
+  };
+
   app.decorateReply('setSessionCookie', function setSessionCookie(this: FastifyReply, token: string, expiresAt: Date) {
     this.setCookie(SESSION_COOKIE, token, {
+      ...cookieAttrs,
       httpOnly: true,
-      secure: config.isProduction,
-      sameSite: 'lax',
-      path: '/',
       expires: expiresAt,
       signed: false,
     });
-    // Readable by the frontend so it can echo the value back in a header.
+    // A double-submit companion cookie. The frontend does NOT read it (it uses
+    // the token returned in the response body); it exists so the server can
+    // verify the header against a value the browser round-trips.
     this.setCookie(CSRF_COOKIE, deriveCsrfToken(token, config.SESSION_SECRET), {
+      ...cookieAttrs,
       httpOnly: false,
-      secure: config.isProduction,
-      sameSite: 'lax',
-      path: '/',
       expires: expiresAt,
     });
   });
 
   app.decorateReply('clearSessionCookie', function clearSessionCookie(this: FastifyReply) {
-    const base = { path: '/', secure: config.isProduction, sameSite: 'lax' as const };
-    this.clearCookie(SESSION_COOKIE, { ...base, httpOnly: true });
-    this.clearCookie(CSRF_COOKIE, { ...base, httpOnly: false });
+    this.clearCookie(SESSION_COOKIE, { ...cookieAttrs, httpOnly: true });
+    this.clearCookie(CSRF_COOKIE, { ...cookieAttrs, httpOnly: false });
   });
 
   // Attach the principal (if any) before routes run.

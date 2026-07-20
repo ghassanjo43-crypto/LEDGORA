@@ -6,7 +6,7 @@
  * `GET /api/auth/session` is the single source of truth the React app uses to
  * decide who the user is and what platform role (if any) they hold.
  */
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { authenticate, changePassword, registerUser } from '../services/authService.js';
 import { createSession, revokeAllUserSessions, revokeSession } from '../services/sessionService.js';
@@ -15,6 +15,7 @@ import { writeAuditLog } from '../lib/audit.js';
 import { errors } from '../lib/errors.js';
 import { requireAuthenticatedUser } from '../guards/platform.js';
 import { MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH } from '../lib/password.js';
+import { deriveCsrfToken, CSRF_HEADER, SESSION_COOKIE } from '../plugins/session.js';
 
 const emailSchema = z.string().trim().min(3).max(320).email('Enter a valid email address.');
 const passwordSchema = z.string().min(1).max(MAX_PASSWORD_LENGTH);
@@ -53,6 +54,19 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     userAgent: typeof request.headers['user-agent'] === 'string' ? request.headers['user-agent'] : null,
   });
 
+  /**
+   * Hand the double-submit CSRF token back to the client in the response body
+   * AND a header. The client keeps it in memory — it must never have to read a
+   * cookie with `document.cookie`, which cannot see an API-host cookie across
+   * origins. Returning the exact value the CSRF hook will expect keeps the two
+   * in lockstep with no shared client-side storage.
+   */
+  const attachCsrf = (reply: FastifyReply, sessionToken: string): string => {
+    const csrfToken = deriveCsrfToken(sessionToken, config.SESSION_SECRET);
+    reply.header(CSRF_HEADER, csrfToken);
+    return csrfToken;
+  };
+
   /* ── Register ─────────────────────────────────────────────────────────── */
   app.post('/api/auth/register', async (request, reply) => {
     const input = parse(registerSchema, request.body);
@@ -60,10 +74,11 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
 
     const session = await createSession(app.db, user.id, config.SESSION_TTL_HOURS, requestContext(request));
     reply.setSessionCookie(session.token, session.expiresAt);
+    const csrfToken = attachCsrf(reply, session.token);
 
     // A new customer holds no platform role — that is only ever granted in the
     // database by an existing super_admin.
-    return reply.code(201).send({ user: toPublicUser(user, []) });
+    return reply.code(201).send({ user: toPublicUser(user, []), csrfToken });
   });
 
   /* ── Login ────────────────────────────────────────────────────────────── */
@@ -88,10 +103,12 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
 
       const session = await createSession(app.db, user.id, config.SESSION_TTL_HOURS, requestContext(request));
       reply.setSessionCookie(session.token, session.expiresAt);
+      const csrfToken = attachCsrf(reply, session.token);
 
       return reply.send({
         user: toPublicUser(user, platformRoles as never),
         mustChangePassword: user.must_change_password,
+        csrfToken,
       });
     },
   );
@@ -100,9 +117,15 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   app.get('/api/auth/session', async (request, reply) => {
     if (!request.principal) return reply.send({ authenticated: false, user: null });
     const { user, platformRoles } = request.principal;
+    // Re-supply the CSRF token so a page that reloaded (and lost its in-memory
+    // copy) can make an unsafe request again without a fresh login. The raw
+    // token lives only in the HttpOnly cookie; derive the companion from it.
+    const sessionToken = request.cookies?.[SESSION_COOKIE] ?? '';
+    const csrfToken = sessionToken ? attachCsrf(reply, sessionToken) : null;
     return reply.send({
       authenticated: true,
       user: toPublicUser(user, platformRoles),
+      csrfToken,
     });
   });
 

@@ -21,17 +21,21 @@
  *     `backendSessionStore`, re-confirmed by the server on every page load.
  */
 import type { AuthResult, AuthService, AuthSession, RegistrationInput, SignInInput } from './types';
-import type { BackendUser } from './api/authApi';
 import { authApi, subscriptionApi } from './api/authApi';
 import { ApiError } from './api/client';
+import {
+  mirrorVerifiedUser,
+  mirrorOrganization,
+  fetchBackendOrganization,
+  clearLocalSession,
+} from './sessionMirror';
 import { useAuthStore } from '@/store/authStore';
 import { useOrganizationStore } from '@/store/organizationStore';
 import { useAccountSessionStore } from '@/store/accountSessionStore';
 import { useBackendSessionStore } from '@/store/backendSessionStore';
 import { toAuthenticatedUser } from '@/lib/sessionModel';
-import { clearWorkspaceForSignOut, restoreWorkspaceForSignIn } from '@/lib/freeDemoSession';
+import { restoreWorkspaceForSignIn } from '@/lib/freeDemoSession';
 import { passwordProblem } from '@/lib/onboardingData';
-import type { RegisteredUser } from '@/types/onboarding';
 
 /** Turn any thrown value into the `AuthResult` shape the forms render. */
 function toFailure(error: unknown, fallback: string): AuthResult {
@@ -46,68 +50,7 @@ function toFailure(error: unknown, fallback: string): AuthResult {
   return { ok: false, error: fallback };
 }
 
-/**
- * Mirror a server-verified user into the local read model.
- *
- * Fields the backend does not model (mobile, country) are preserved from an
- * existing local record so a returning user does not lose them.
- */
-function mirrorUser(user: BackendUser, extra: { country?: string; mobile?: string } = {}): RegisteredUser {
-  const existing = useAuthStore.getState().users.find((u) => u.id === user.id);
-  const mirrored: RegisteredUser = {
-    ...existing,
-    id: user.id,
-    fullName: user.fullName,
-    email: user.email.toLowerCase(),
-    mobile: extra.mobile ?? existing?.mobile ?? '',
-    country: extra.country ?? existing?.country ?? '',
-    // Never a credential: the server holds the only password hash there is.
-    passwordHash: '',
-    emailVerified: user.emailVerified,
-    role: existing?.role ?? 'owner',
-    status: existing?.status ?? 'active',
-    createdAt: existing?.createdAt ?? user.createdAt,
-    ...(user.lastLoginAt ? { lastLoginAt: user.lastLoginAt } : {}),
-  };
-  useAuthStore.getState().adoptVerifiedSession(mirrored);
-  return mirrored;
-}
-
-/** Read the organization the backend has for this user, if any. */
-async function backendOrganization(): Promise<Record<string, unknown> | null> {
-  try {
-    const { organization } = await subscriptionApi.currentOrganization();
-    return organization;
-  } catch {
-    // The funnel must still work when the organization endpoint is unreachable;
-    // the user is simply routed to the organization step.
-    return null;
-  }
-}
-
 const asText = (value: unknown, fallback = ''): string => (typeof value === 'string' ? value : fallback);
-
-/**
- * Ensure the local organization shell matches the backend. Only creates one
- * when the server says an organization exists and the browser has none.
- */
-function mirrorOrganization(organization: Record<string, unknown> | null): void {
-  if (!organization) return;
-  const store = useOrganizationStore.getState();
-  if (store.organization) return;
-  const year = new Date().getFullYear();
-  store.createOrganization({
-    legalName: asText(organization.legalName, 'Your organization'),
-    tradingName: asText(organization.tradingName),
-    country: asText(organization.country),
-    registrationNumber: asText(organization.registrationNumber),
-    taxNumber: asText(organization.taxNumber),
-    industry: asText(organization.industry, 'general'),
-    baseCurrency: asText(organization.baseCurrency, 'USD'),
-    fiscalYearStart: asText(organization.fiscalYearStart, '01-01'),
-    booksStartDate: asText(organization.booksStartDate, `${year}-01-01`),
-  });
-}
 
 /** Validation belonging to the registration *form*, mirroring the backend rules. */
 function validateRegistration(input: RegistrationInput): Record<string, string> {
@@ -139,7 +82,7 @@ export const apiAuthService: AuthService = {
         password: input.password,
         fullName: input.fullName,
       });
-      mirrorUser(user, { country: input.country, mobile: input.mobile });
+      mirrorVerifiedUser(user, { country: input.country, mobile: input.mobile });
 
       // Registration issues a session cookie, so the organization can be created
       // straight away. A failure here is not fatal: the user is signed in and the
@@ -150,7 +93,7 @@ export const apiAuthService: AuthService = {
           country: input.country,
           tradingName: input.companyName?.trim() || undefined,
         });
-        mirrorOrganization(await backendOrganization());
+        mirrorOrganization(await fetchBackendOrganization());
       } catch {
         /* handled by the onboarding organization step */
       }
@@ -165,8 +108,8 @@ export const apiAuthService: AuthService = {
   async signIn(input) {
     try {
       const { user } = await authApi.signIn({ email: input.email, password: input.password });
-      mirrorUser(user);
-      mirrorOrganization(await backendOrganization());
+      mirrorVerifiedUser(user);
+      mirrorOrganization(await fetchBackendOrganization());
 
       // "Remember me" is a session *preference*; no credential is stored.
       useAccountSessionStore.getState().setRememberMe(!!input.rememberMe);
@@ -188,9 +131,8 @@ export const apiAuthService: AuthService = {
       // The local session is dropped regardless: a user who asked to sign out
       // must never stay signed in because the network failed.
     }
+    // Drops the mirrored user, the workspace and the in-memory CSRF token.
     useBackendSessionStore.getState().clear();
-    clearWorkspaceForSignOut();
-    useAuthStore.getState().logout();
   },
 
   async getSession(): Promise<AuthSession | null> {
@@ -202,12 +144,12 @@ export const apiAuthService: AuthService = {
       return null;
     }
     if (!session.authenticated || !session.user) {
-      useAuthStore.getState().logout();
+      clearLocalSession();
       return null;
     }
 
-    mirrorUser(session.user);
-    const organization = await backendOrganization();
+    mirrorVerifiedUser(session.user);
+    const organization = await fetchBackendOrganization();
     mirrorOrganization(organization);
 
     const user = authenticatedUser();

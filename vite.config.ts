@@ -31,6 +31,19 @@ export default defineConfig({
   server: {
     port: 5173,
     open: true,
+    /**
+     * Mirror the production same-origin proxy locally: the app calls `/api/...`
+     * on the dev origin and Vite forwards it to the API on :3000. Running dev
+     * this way means the browser sees a genuine same-origin cookie, exactly as
+     * it will in the deployed `/api` reverse-proxy setup — set
+     * `VITE_API_URL=http://localhost:5173` in `.env.local` to exercise it.
+     */
+    proxy: {
+      '/api': {
+        target: process.env.LEDGORA_API_PROXY_TARGET ?? 'http://localhost:3000',
+        changeOrigin: true,
+      },
+    },
     watch: {
       /**
        * Don't watch root-level docs/spec markdown. They aren't imported by the

@@ -13,7 +13,8 @@
 import { create } from 'zustand';
 import type { BackendPlatformRole, BackendUser } from '@/services/api/authApi';
 import { authApi } from '@/services/api/authApi';
-import { isApiConfigured } from '@/services/api/client';
+import { isApiConfigured, clearCsrfToken } from '@/services/api/client';
+import { mirrorVerifiedUser, mirrorOrganizationFromBackend, clearLocalSession } from '@/services/sessionMirror';
 
 export type BackendSessionStatus = 'unknown' | 'loading' | 'ready' | 'unavailable';
 
@@ -44,14 +45,27 @@ export const useBackendSessionStore = create<BackendSessionState>()((set) => ({
     set({ status: 'loading', error: null });
     try {
       const result = await authApi.getSession();
-      set({
-        status: 'ready',
-        user: result.user,
-        platformRoles: result.user?.platformRoles ?? [],
-        error: null,
-      });
+
+      if (result.authenticated && result.user) {
+        // The server confirmed this identity. Reconcile the local mirror so a
+        // cold reload (persisted stores, no in-memory state) still has a current
+        // user and organization to route on.
+        mirrorVerifiedUser(result.user);
+        await mirrorOrganizationFromBackend();
+        set({ status: 'ready', user: result.user, platformRoles: result.user.platformRoles ?? [], error: null });
+        return;
+      }
+
+      // authenticated:false — the cookie did not travel or the session is gone.
+      // NEVER keep trusting the persisted mirror: erase it, so the app cannot
+      // route a disowned user into the application or the onboarding funnel.
+      clearLocalSession();
+      set({ status: 'ready', user: null, platformRoles: [], error: null });
     } catch (error) {
-      // Fail CLOSED: an unreachable backend grants no platform role.
+      // Fail CLOSED: an unreachable backend grants no platform role. The mirror
+      // is left intact (a transient blip must not force a logout), but with no
+      // verified role the shell keeps every protected surface shut.
+      clearCsrfToken();
       set({
         status: 'unavailable',
         user: null,
@@ -61,7 +75,10 @@ export const useBackendSessionStore = create<BackendSessionState>()((set) => ({
     }
   },
 
-  clear: () => set({ status: 'ready', user: null, platformRoles: [], error: null }),
+  clear: () => {
+    clearLocalSession();
+    set({ status: 'ready', user: null, platformRoles: [], error: null });
+  },
 }));
 
 /** Imperative read for non-component call sites (guards, services). */

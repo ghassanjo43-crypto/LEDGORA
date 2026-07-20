@@ -1,0 +1,65 @@
+# LEDGORA — Render Blueprint.
+#
+# Two services. The browser only ever talks to the FRONTEND origin: the static
+# site reverse-proxies `/api/*` to the API service, so the session cookie is a
+# genuine same-origin cookie (SameSite=Lax, HttpOnly, Secure) and there is no
+# cross-site cookie problem and no CORS on the browser's critical path.
+#
+# If you instead keep the browser talking directly to the API hostname, delete
+# the `/api` rewrite below and switch the cross-site knobs — see the notes on
+# each service and docs/DEPLOYMENT.md.
+
+services:
+  # ── Frontend: static site + reverse proxy ──────────────────────────────────
+  - type: web
+    runtime: static
+    name: ledgora-frontend
+    buildCommand: npm ci && npm run build
+    staticPublishPath: ./dist
+    envVars:
+      # Same-origin: the browser calls the frontend origin, the rewrite forwards
+      # to the API. Point this at THIS site's own public URL.
+      - key: VITE_API_URL
+        value: https://ledgora-frontend.onrender.com
+      - key: VITE_LEDGORA_DEV_TOOLS
+        value: "false"
+    routes:
+      # Reverse-proxy the API. MUST precede the SPA fallback. Replace the
+      # destination host with your API service's public hostname.
+      - type: rewrite
+        source: /api/*
+        destination: https://ledgora-api.onrender.com/api/*
+      # SPA fallback for client-side routing.
+      - type: rewrite
+        source: /*
+        destination: /index.html
+
+  # ── Backend: API ────────────────────────────────────────────────────────────
+  - type: web
+    runtime: node
+    name: ledgora-api
+    rootDir: server
+    buildCommand: npm ci && npm run build
+    startCommand: npm run start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: TRUST_PROXY
+        value: "true"
+      # The frontend origin(s) allowed to send credentialed requests. With the
+      # same-origin proxy the browser's Origin is the frontend host.
+      - key: FRONTEND_URL
+        value: https://ledgora-frontend.onrender.com
+      # Same-origin proxy → Lax is correct. For a cross-site deployment set this
+      # to `none` (and see COOKIE_PARTITIONED).
+      - key: COOKIE_SAMESITE
+        value: lax
+      - key: COOKIE_PARTITIONED
+        value: "false"
+      # Provision a PostgreSQL instance and paste its internal connection string.
+      - key: DATABASE_URL
+        sync: false
+      # Generate once: node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
+      - key: SESSION_SECRET
+        sync: false

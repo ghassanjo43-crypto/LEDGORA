@@ -82,8 +82,12 @@ export function AppShell() {
   const demoActive = useAccountSessionStore((s) => s.demoActive);
   // Re-run the gate when the server session resolves or demands a new password.
   const backendStatus = useBackendSessionStore((s) => s.status);
-  const mustChangePassword = useBackendSessionStore((s) => s.user?.mustChangePassword ?? false);
-  const sessionResolving = isApiConfigured() && (backendStatus === 'unknown' || backendStatus === 'loading');
+  const backendUser = useBackendSessionStore((s) => s.user);
+  const mustChangePassword = backendUser?.mustChangePassword ?? false;
+  const apiMode = isApiConfigured();
+  const sessionResolving = apiMode && (backendStatus === 'unknown' || backendStatus === 'loading');
+  // The server positively reported "no session" — route to /login, not welcome.
+  const sessionVerifiedUnauthenticated = apiMode && backendStatus === 'ready' && backendUser === null;
 
   useEffect(() => initRouter(), []);
 
@@ -116,9 +120,13 @@ export function AppShell() {
     }
 
     // Not signed in → only public paths are reachable (a Free Demo is allowed
-    // into the application without an account).
+    // into the application without an account). If the backend positively
+    // reported no session (the cookie did not travel, or it expired), send the
+    // user to /login rather than the welcome page — and never into onboarding.
     if (!ctx.user && !ctx.demoActive) {
-      if (!PUBLIC_PATHS.includes(path)) navigate(ROUTES.welcome, { replace: true });
+      if (!PUBLIC_PATHS.includes(path)) {
+        navigate(sessionVerifiedUnauthenticated ? ROUTES.login : ROUTES.welcome, { replace: true });
+      }
       return;
     }
 
@@ -149,7 +157,7 @@ export function AppShell() {
       navigate(resolvePostLoginRoute(ctx), { replace: true });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [path, currentUserId, usersLen, orgId, subStatus, platformRole, demoActive, sessionResolving, mustChangePassword]);
+  }, [path, currentUserId, usersLen, orgId, subStatus, platformRole, demoActive, sessionResolving, mustChangePassword, sessionVerifiedUnauthenticated]);
 
   // Paint nothing until the session verdict is in, so no surface flashes.
   if (sessionResolving) return <Blank />;
