@@ -22,7 +22,11 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
-# Backend runtime artefacts
-server/dist
-server/storage
-storage/
+# Backend runtime artefacts.
+# These patterns are ANCHORED with a leading slash on purpose. An unanchored
+# `storage/` matches a directory of that name at any depth, which silently
+# excluded the `server/src/storage/` SOURCE directory from commits and broke the
+# deploy build. Only the runtime upload directories belong here.
+/server/dist/
+/server/storage/
+/storage/
