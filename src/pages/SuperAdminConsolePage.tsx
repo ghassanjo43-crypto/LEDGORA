@@ -9,7 +9,7 @@
  */
 import { useMemo, useState } from 'react';
 import { useSessionStore } from '@/store/sessionStore';
-import { hasPlatformCapability } from '@/lib/platformAccess';
+import { useIsPlatformAdmin, usePlatformAccess } from '@/hooks/usePlatformRole';
 import { usePendingVerificationCount } from '@/store/billingHooks';
 import { Tabs, type TabItem } from '@/components/ui/Tabs';
 import { Alert } from '@/components/ui/Alert';
@@ -29,7 +29,10 @@ type ConsoleTab = 'subscribers' | 'payments' | 'packages' | 'metering' | 'entitl
 export function SuperAdminConsolePage() {
   // Effective capability. In a production build this is always false, so the
   // console refuses to render regardless of what the browser has stored.
-  const isAdmin = useSessionStore((s) => hasPlatformCapability(s.platformRole, 'manage-any-organization'));
+  // The console renders only when a role actually applies: confirmed by the
+  // backend session in production, or simulated on a local dev server.
+  const { verifiedByBackend, resolving } = usePlatformAccess();
+  const isAdmin = useIsPlatformAdmin();
   const setRole = useSessionStore((s) => s.setPlatformRole);
   const pending = usePendingVerificationCount();
   const [tab, setTab] = useState<ConsoleTab>('subscribers');
@@ -42,6 +45,9 @@ export function SuperAdminConsolePage() {
     { id: 'entitlements', label: 'Entitlements', icon: ShieldCheck },
   ], [pending]);
 
+  // Never paint the console while the server check is still in flight.
+  if (resolving) return null;
+
   if (!isAdmin) {
     return (
       <Alert variant="error" title="Platform super-administrator only">
@@ -52,6 +58,14 @@ export function SuperAdminConsolePage() {
 
   return (
     <div className="space-y-5">
+      {/* Be explicit about WHERE this authority came from. A simulated role is
+          a local development convenience and grants nothing on a real server. */}
+      {!verifiedByBackend && (
+        <Alert variant="warning" title="Simulated administrator role (local development)">
+          This role is not verified by the LEDGORA account service. Actions here affect only this browser —
+          they are not real platform administration.
+        </Alert>
+      )}
       <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-indigo-200 bg-indigo-50/60 px-4 py-2.5 dark:border-indigo-500/30 dark:bg-indigo-500/10">
         <span className="flex items-center gap-2 text-sm font-medium text-indigo-800 dark:text-indigo-200">
           <ShieldAlert className="h-4 w-4" /> You are acting as the Ledgora platform super-administrator.

@@ -32,7 +32,8 @@ import { Dropdown, MenuItem, MenuLabel, MenuSeparator } from '@/components/ui/Dr
 import { AddCompanyDialog } from '@/components/company/AddCompanyDialog';
 import { EditionBadge } from '@/components/entitlements/EditionBadge';
 import { DevelopmentEditionSwitcher } from '@/components/entitlements/DevelopmentEditionSwitcher';
-import { hasPlatformCapability, platformAdminToolsAllowed } from '@/lib/platformAccess';
+import { platformAdminToolsAllowed } from '@/lib/platformAccess';
+import { useIsPlatformAdmin } from '@/hooks/usePlatformRole';
 import { authService } from '@/services';
 import { cn } from '@/lib/utils';
 import { CreditCard } from 'lucide-react';
@@ -82,9 +83,7 @@ export function Topbar({
   const userSubtitle = currentUser?.email ?? USER.role;
   // Effective capability: always false in a production build, whatever is
   // stored in the browser.
-  const isPlatformAdmin = useSessionStore((s) =>
-    hasPlatformCapability(s.platformRole, 'manage-any-organization'),
-  );
+  const isPlatformAdmin = useIsPlatformAdmin();
   const setPlatformRole = useSessionStore((s) => s.setPlatformRole);
   const signOut = (): void => {
     // Clears the authenticated session AND every temporary demo record, then

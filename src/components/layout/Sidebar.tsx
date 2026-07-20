@@ -1,7 +1,6 @@
 import { useMemo } from 'react';
 import { useStore } from '@/store/useStore';
-import { useSessionStore } from '@/store/sessionStore';
-import { hasPlatformCapability } from '@/lib/platformAccess';
+import { useIsPlatformAdmin } from '@/hooks/usePlatformRole';
 import { cn } from '@/lib/utils';
 import { filterNavigationByEntitlements, type NavItem } from '@/config/navigation';
 import { useEffectiveModules } from '@/store/entitlementHooks';
@@ -12,9 +11,8 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const activeView = useStore((s) => s.activeView);
   const setActiveView = useStore((s) => s.setActiveView);
   const moduleIds = useEffectiveModules();
-  const isPlatformAdmin = useSessionStore((s) =>
-    hasPlatformCapability(s.platformRole, 'manage-any-organization'),
-  );
+  // Backend-verified in production; locally simulated only in development.
+  const isPlatformAdmin = useIsPlatformAdmin();
   const isDemo = useIsFreeDemo();
   const groups = useMemo(() => {
     const entitled = filterNavigationByEntitlements(moduleIds);

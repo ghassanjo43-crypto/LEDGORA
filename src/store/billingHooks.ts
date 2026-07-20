@@ -7,8 +7,7 @@ import { useMemo } from 'react';
 import type { RenewalReminder, SubscriptionInvoice, SubscriptionPlan } from '@/types/billing';
 import { useEntitlementStore } from './entitlementStore';
 import { useBillingStore, getActivePlan } from './billingStore';
-import { useSessionStore } from './sessionStore';
-import { hasPlatformCapability } from '@/lib/platformAccess';
+import { usePlatformCapability } from '@/hooks/usePlatformRole';
 import { computeRenewalReminder } from '@/lib/billingCalculations';
 
 function todayIso(): string {
@@ -56,8 +55,8 @@ export function useActivePlan(): SubscriptionPlan | undefined {
 }
 
 export function useIsAdmin(): boolean {
-  // Effective, production-locked: always false in a deployed build.
-  return useSessionStore((s) => hasPlatformCapability(s.platformRole, 'verify-payments'));
+  // Backend-verified in production; locally simulated only in development.
+  return usePlatformCapability('verify-payments');
 }
 
 export { getActivePlan };

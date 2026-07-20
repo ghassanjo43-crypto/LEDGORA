@@ -7,6 +7,13 @@ export default defineConfig({
   plugins: [react()],
   test: {
     /**
+     * Frontend suite only. The backend has its own Vitest project
+     * (`server/vitest.config.ts`) with a node environment and its own aliases —
+     * run it with `npm run server:test`.
+     */
+    include: ['src/**/*.{test,spec}.{ts,tsx}'],
+    exclude: ['**/node_modules/**', 'dist/**', 'server/**'],
+    /**
      * The unit suite runs as an approved LOCAL DEVELOPMENT machine: DEV is true
      * under Vitest and this supplies the same explicit opt-in a developer puts
      * in their uncommitted `.env.local`. Tests that assert production behaviour

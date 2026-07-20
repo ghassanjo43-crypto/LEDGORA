@@ -4,12 +4,23 @@
   "version": "1.0.0",
   "type": "module",
   "description": "IFRS-aligned Chart of Accounts builder (React + TypeScript)",
+  "workspaces": [
+    "server"
+  ],
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "dev:all": "node scripts/dev-all.mjs",
+    "server:dev": "npm run dev --workspace @ledgora/server",
+    "server:start": "npm run start --workspace @ledgora/server",
+    "server:build": "npm run build --workspace @ledgora/server",
+    "server:typecheck": "npm run typecheck --workspace @ledgora/server",
+    "server:test": "npm run test --workspace @ledgora/server",
+    "db:migrate": "npm run db:migrate --workspace @ledgora/server",
+    "create-platform-admin": "npm run create-platform-admin --workspace @ledgora/server --"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.1",

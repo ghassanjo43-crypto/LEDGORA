@@ -15,8 +15,7 @@ import type {
 import { useMeteringConfigStore } from './meteringConfigStore';
 import { useUsageStore } from './usageStore';
 import { useCompanyStore } from './companyStore';
-import { useSessionStore } from './sessionStore';
-import { hasPlatformCapability } from '@/lib/platformAccess';
+import { usePlatformCapability } from '@/hooks/usePlatformRole';
 import {
   buildAllowanceLines,
   computeCostRecovery,
@@ -110,8 +109,8 @@ export function useUsageAlertBand(): { band: string; line: AllowanceLine | null 
 }
 
 export function useIsMeteringAdmin(): boolean {
-  // Effective capability — always false in a production build.
-  return useSessionStore((s) => hasPlatformCapability(s.platformRole, 'manage-metering'));
+  // Backend-verified in production; locally simulated only in development.
+  return usePlatformCapability('manage-metering');
 }
 
 export { thresholdBand };

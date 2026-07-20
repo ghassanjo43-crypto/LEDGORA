@@ -13,7 +13,6 @@ import App from '@/App';
 import { useRouterStore, initRouter } from '@/store/routerStore';
 import { useAuthStore, getCurrentUser } from '@/store/authStore';
 import { useOrganizationStore } from '@/store/organizationStore';
-import { useSessionStore } from '@/store/sessionStore';
 import { useBillingStore } from '@/store/billingStore';
 import { useMeteringConfigStore } from '@/store/meteringConfigStore';
 import {
@@ -27,7 +26,8 @@ import {
 import { useAccountSessionStore } from '@/store/accountSessionStore';
 import { readSessionState } from '@/store/sessionSnapshot';
 import { syncWorkspaceStorageMode } from '@/lib/freeDemoSession';
-import { effectivePlatformRole, platformAdminToolsAllowed } from '@/lib/platformAccess';
+import { platformAdminToolsAllowed } from '@/lib/platformAccess';
+import { useBackendSessionBootstrap, useEffectivePlatformRole } from '@/hooks/usePlatformRole';
 import { platformRoleHasCapability, type PlatformRole } from '@/types/roles';
 import { WelcomePage } from '@/pages/onboarding/WelcomePage';
 import { SubscriptionOnboardingPage } from '@/pages/onboarding/SubscriptionOnboardingPage';
@@ -77,11 +77,14 @@ export function AppShell() {
   const usersLen = useAuthStore((s) => s.users.length);
   const orgId = useOrganizationStore((s) => s.organization?.id ?? null);
   const subStatus = useOrganizationStore((s) => s.subscription?.status ?? null);
-  // Resolved through the platform policy — 'none' in any production build.
-  const platformRole = useSessionStore((s) => effectivePlatformRole(s.platformRole));
+  // Backend-verified where a backend exists; locally simulated otherwise.
+  const platformRole = useEffectivePlatformRole();
   const demoActive = useAccountSessionStore((s) => s.demoActive);
 
   useEffect(() => initRouter(), []);
+
+  // Confirm the server session once, before any administration surface renders.
+  useBackendSessionBootstrap();
 
   // Keep business-data storage aligned with the account status: an anonymous
   // visitor or a Free Demo never writes to durable storage.

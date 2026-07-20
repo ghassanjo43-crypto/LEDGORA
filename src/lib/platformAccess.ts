@@ -59,18 +59,63 @@ export function platformAdminToolsAllowed(): boolean {
   }
 }
 
+/** Backend role names → the frontend vocabulary. */
+const BACKEND_ROLE_MAP: Record<string, PlatformRole> = {
+  super_admin: 'super-admin',
+  billing_admin: 'billing-admin',
+  support: 'support',
+};
+
+/** Rank so the strongest verified role wins when several are held. */
+const ROLE_RANK: Record<PlatformRole, number> = {
+  none: 0,
+  support: 1,
+  'billing-admin': 2,
+  'super-admin': 3,
+};
+
 /**
- * The platform role that actually applies. A stored role is honoured only while
- * `platformAdminToolsAllowed()` holds; otherwise every user is `'none'`,
- * regardless of what is persisted in the browser.
+ * Translate the roles a *verified backend session* returned. This is the
+ * production authorization path: the server decided it, the browser only
+ * displays it.
  */
-export function effectivePlatformRole(storedRole: PlatformRole): PlatformRole {
+export function platformRoleFromBackend(backendRoles: readonly string[]): PlatformRole {
+  let best: PlatformRole = 'none';
+  for (const raw of backendRoles) {
+    const mapped = BACKEND_ROLE_MAP[raw];
+    if (mapped && ROLE_RANK[mapped] > ROLE_RANK[best]) best = mapped;
+  }
+  return best;
+}
+
+/**
+ * The platform role that actually applies.
+ *
+ * Two independent paths, in priority order:
+ *  1. A role confirmed by the backend session — the production path. It is
+ *     authoritative because the server verified the session cookie against the
+ *     database.
+ *  2. Otherwise a locally *simulated* role, honoured only while
+ *     `platformAdminToolsAllowed()` holds (local dev server + explicit opt-in).
+ *
+ * With neither, every user is `'none'` regardless of browser storage.
+ */
+export function effectivePlatformRole(
+  storedRole: PlatformRole,
+  backendRoles: readonly string[] = [],
+): PlatformRole {
+  const verified = platformRoleFromBackend(backendRoles);
+  if (verified !== 'none') return verified;
   return platformAdminToolsAllowed() ? storedRole : 'none';
 }
 
-/** Capability check against the effective (production-locked) role. */
-export function hasPlatformCapability(storedRole: PlatformRole, capability: PlatformCapability): boolean {
-  return platformRoleHasCapability(effectivePlatformRole(storedRole), capability);
+/** Capability check against the effective (backend-verified or dev) role. */
+export function hasPlatformCapability(
+  storedRole: PlatformRole,
+  capability: PlatformCapability,
+  backendRoles: readonly string[] = [],
+): boolean {
+  return platformRoleHasCapability(effectivePlatformRole(storedRole, backendRoles), capability);
 }
 
 /** Fail-closed assertion used by every sensitive store action. */

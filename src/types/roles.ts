@@ -50,5 +50,8 @@ const CAPABILITIES: Record<PlatformCapability, PlatformRole[]> = {
  * go through `lib/platformAccess`, which resolves the *effective* role first.
  */
 export function platformRoleHasCapability(role: PlatformRole, capability: PlatformCapability): boolean {
-  return CAPABILITIES[capability].includes(role);
+  // Fail closed on an unrecognised capability rather than throwing: a typo or a
+  // capability added on the backend first must never become an access grant,
+  // and must never crash the surface that is checking it.
+  return CAPABILITIES[capability]?.includes(role) ?? false;
 }
