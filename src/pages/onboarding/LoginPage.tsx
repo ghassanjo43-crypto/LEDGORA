@@ -7,12 +7,13 @@
  */
 import { useState } from 'react';
 import { Eye, EyeOff, Loader2 } from 'lucide-react';
-import { useAuthStore } from '@/store/authStore';
-import { useOrganizationStore } from '@/store/organizationStore';
 import { useAccountSessionStore } from '@/store/accountSessionStore';
 import { useRouterStore } from '@/store/routerStore';
 import { CenteredCard } from '@/components/onboarding/OnboardingChrome';
 import { resolvePostLoginRoute, ROUTES } from '@/lib/accessControl';
+import { readAccessContext } from '@/lib/accessContext';
+import { useBackendSessionStore } from '@/store/backendSessionStore';
+import { isApiConfigured } from '@/services/api/client';
 import { Field, Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { Alert } from '@/components/ui/Alert';
@@ -38,22 +39,26 @@ export function LoginPage() {
     setBusy(true);
 
     const res = await authService.signIn({ email, password, rememberMe });
-    setBusy(false);
     if (!res.ok) {
+      setBusy(false);
       setError(res.error ?? 'Sign-in failed.');
       return;
     }
 
-    const auth = useAuthStore.getState();
-    const user = auth.users.find((u) => u.id === auth.currentUserId) ?? null;
-    const org = useOrganizationStore.getState();
-    navigate(
-      resolvePostLoginRoute({
-        user: user ? { emailVerified: user.emailVerified } : null,
-        hasOrganization: !!org.organization,
-        subscriptionStatus: org.subscription?.status ?? null,
-      }),
-    );
+    // Wait for the SERVER's answer about who this is before deciding where they
+    // go. A platform operator has no organization and no subscription, so
+    // routing on customer state alone would send them to package selection —
+    // the defect this await exists to prevent. `apiAuthService.signIn` already
+    // refreshes, but a stale/unknown status here must never be treated as
+    // "no role".
+    if (isApiConfigured() && useBackendSessionStore.getState().status !== 'ready') {
+      await useBackendSessionStore.getState().refresh();
+    }
+
+    setBusy(false);
+    // The role comes from the shared context reader, which sources it from the
+    // verified backend session — never from authStore or browser storage.
+    navigate(resolvePostLoginRoute(readAccessContext()));
   };
 
   const forgotPassword = async (): Promise<void> => {

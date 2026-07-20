@@ -11,23 +11,26 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import App from '@/App';
 import { useRouterStore, initRouter } from '@/store/routerStore';
-import { useAuthStore, getCurrentUser } from '@/store/authStore';
+import { useAuthStore } from '@/store/authStore';
 import { useOrganizationStore } from '@/store/organizationStore';
 import { useBillingStore } from '@/store/billingStore';
 import { useMeteringConfigStore } from '@/store/meteringConfigStore';
 import {
   isPathAllowed,
+  requiredAdminCapability,
   resolvePostLoginRoute,
   surfaceOf,
   PUBLIC_PATHS,
   ROUTES,
-  type AccessContext,
 } from '@/lib/accessControl';
+import { readAccessContext } from '@/lib/accessContext';
 import { useAccountSessionStore } from '@/store/accountSessionStore';
 import { readSessionState } from '@/store/sessionSnapshot';
 import { syncWorkspaceStorageMode } from '@/lib/freeDemoSession';
 import { platformAdminToolsAllowed } from '@/lib/platformAccess';
 import { useBackendSessionBootstrap, useEffectivePlatformRole } from '@/hooks/usePlatformRole';
+import { useBackendSessionStore } from '@/store/backendSessionStore';
+import { isApiConfigured } from '@/services/api/client';
 import { platformRoleHasCapability, type PlatformRole } from '@/types/roles';
 import { WelcomePage } from '@/pages/onboarding/WelcomePage';
 import { SubscriptionOnboardingPage } from '@/pages/onboarding/SubscriptionOnboardingPage';
@@ -38,6 +41,8 @@ import { VerifyEmailPage } from '@/pages/onboarding/VerifyEmailPage';
 import { OnboardingOrganizationPage } from '@/pages/onboarding/OnboardingOrganizationPage';
 import { BillingPaymentPage } from '@/pages/onboarding/BillingPaymentPage';
 import { AdminPaymentReviewPage } from '@/pages/onboarding/AdminPaymentReviewPage';
+import { PlatformConsolePage } from '@/pages/admin/PlatformConsolePage';
+import { ChangePasswordPage } from '@/pages/account/ChangePasswordPage';
 import {
   SubscriptionStatusPage,
   SubscriptionSuspendedPage,
@@ -46,17 +51,12 @@ import {
   SupportPage,
 } from '@/pages/onboarding/StatusPages';
 
-/** Snapshot the live access context from the stores. */
-function readContext(): AccessContext {
-  const user = getCurrentUser();
-  const org = useOrganizationStore.getState();
-  return {
-    user: user ? { emailVerified: user.emailVerified } : null,
-    hasOrganization: !!org.organization,
-    subscriptionStatus: org.subscription?.status ?? null,
-    demoActive: useAccountSessionStore.getState().demoActive,
-  };
-}
+/**
+ * Snapshot the live access context. Shared with the login and password-change
+ * pages via `lib/accessContext`, so every surface reaches the same verdict —
+ * including the verified platform role, which this shell previously ignored.
+ */
+const readContext = readAccessContext;
 
 export function AppShell() {
   // Seed public configuration (packages/metering) once, before any effect reads
@@ -80,6 +80,10 @@ export function AppShell() {
   // Backend-verified where a backend exists; locally simulated otherwise.
   const platformRole = useEffectivePlatformRole();
   const demoActive = useAccountSessionStore((s) => s.demoActive);
+  // Re-run the gate when the server session resolves or demands a new password.
+  const backendStatus = useBackendSessionStore((s) => s.status);
+  const mustChangePassword = useBackendSessionStore((s) => s.user?.mustChangePassword ?? false);
+  const sessionResolving = isApiConfigured() && (backendStatus === 'unknown' || backendStatus === 'loading');
 
   useEffect(() => initRouter(), []);
 
@@ -94,6 +98,12 @@ export function AppShell() {
 
   // Access enforcement.
   useEffect(() => {
+    // Decide NOTHING until the server has answered. An administrator whose role
+    // has not arrived yet is indistinguishable from a customer with no
+    // subscription, and redirecting now would bounce them into onboarding —
+    // including on a direct refresh of /admin/console.
+    if (sessionResolving) return;
+
     const { navigate } = useRouterStore.getState();
     const ctx = readContext();
     const surface = surfaceOf(path);
@@ -112,9 +122,16 @@ export function AppShell() {
       return;
     }
 
-    // Admin surface requires the platform super-admin role.
+    // A forced password change outranks everything else, including the console.
+    if (ctx.mustChangePassword && path !== ROUTES.changePassword) {
+      navigate(ROUTES.changePassword, { replace: true });
+      return;
+    }
+
+    // Admin surface: gated purely by the verified capability for that path, with
+    // no reference to organization or subscription state.
     if (surface === 'admin') {
-      if (!platformRoleHasCapability(platformRole as PlatformRole, 'verify-payments')) {
+      if (!platformRoleHasCapability(platformRole as PlatformRole, requiredAdminCapability(path))) {
         navigate(resolvePostLoginRoute(ctx), { replace: true });
       }
       return;
@@ -132,7 +149,10 @@ export function AppShell() {
       navigate(resolvePostLoginRoute(ctx), { replace: true });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [path, currentUserId, usersLen, orgId, subStatus, platformRole, demoActive]);
+  }, [path, currentUserId, usersLen, orgId, subStatus, platformRole, demoActive, sessionResolving, mustChangePassword]);
+
+  // Paint nothing until the session verdict is in, so no surface flashes.
+  if (sessionResolving) return <Blank />;
 
   return <Surface path={path} platformRole={platformRole} />;
 }
@@ -149,11 +169,18 @@ function Surface({ path, platformRole }: { path: string; platformRole: string })
     return <App />;
   }
   if (surface === 'admin') {
-    // Administration is never available to a demo visitor or a normal customer.
-    if (ctx.demoActive || !platformRoleHasCapability(platformRole as PlatformRole, 'verify-payments')) {
+    // Administration is never available to a demo visitor or a normal customer,
+    // and each admin path demands its own capability.
+    if (ctx.demoActive || !platformRoleHasCapability(platformRole as PlatformRole, requiredAdminCapability(path))) {
       return <Blank />;
     }
-    return <AdminPaymentReviewPage />;
+    // A temporary credential must be exchanged before the console opens.
+    if (ctx.mustChangePassword) return <Blank />;
+    return path.startsWith(ROUTES.adminPayments) ? <AdminPaymentReviewPage /> : <PlatformConsolePage />;
+  }
+  if (surface === 'account') {
+    if (!ctx.user) return <Blank />;
+    return <ChangePasswordPage />;
   }
   if (!ctx.user && !ctx.demoActive && !PUBLIC_PATHS.includes(path)) return <Blank />;
 

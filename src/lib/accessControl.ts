@@ -15,6 +15,8 @@
  */
 import type { OnboardingSubscriptionStatus } from '@/types/onboarding';
 import type { LedgoraEdition, LedgoraModule } from '@/types/entitlements';
+import type { PlatformCapability, PlatformRole } from '@/types/roles';
+import { platformRoleHasCapability } from '@/types/roles';
 import { EDITION_MODULES, sortModules } from '@/config/editions';
 
 /* ── Route constants (the literal paths from the specification) ────────────── */
@@ -36,6 +38,10 @@ export const ROUTES = {
   support: '/support',
   appDashboard: '/app/dashboard',
   adminPayments: '/admin/payments',
+  /** Platform-operator landing surface. NOT part of the tenant application. */
+  adminConsole: '/admin/console',
+  /** Forced password change (bootstrap administrators, reset credentials). */
+  changePassword: '/account/change-password',
 } as const;
 
 /** Coarse surface a path belongs to (drives access decisions). */
@@ -47,7 +53,9 @@ export type Surface =
   | 'profile'
   | 'support'
   | 'app'
-  | 'admin';
+  | 'admin'
+  /** Forced credential change — reachable by any authenticated user. */
+  | 'account';
 
 /** Paths visitors may open with no authenticated session. */
 export const PUBLIC_PATHS: string[] = [
@@ -71,6 +79,7 @@ const INACTIVE_ALLOWED_SURFACES: Surface[] = [
 export function surfaceOf(path: string): Surface {
   if (path.startsWith('/app')) return 'app';
   if (path.startsWith('/admin')) return 'admin';
+  if (path.startsWith('/account')) return 'account';
   if (path.startsWith('/onboarding')) return 'onboarding';
   if (path === ROUTES.subscriptionStatus || path === ROUTES.subscriptionSuspended)
     return 'subscription-status';
@@ -93,6 +102,50 @@ export interface AccessContext {
    * `config/freeDemo`) render inside it.
    */
   demoActive?: boolean;
+  /**
+   * The EFFECTIVE platform role, as resolved by `lib/platformAccess` — i.e.
+   * confirmed by the backend session, or simulated on an approved local dev
+   * machine. Never read this from browser storage, a query parameter or a
+   * frontend user record: a tenant could set any of those.
+   */
+  platformRole?: PlatformRole;
+  /**
+   * The backend requires a new password before anything else (a bootstrap
+   * administrator provisioned from an environment variable, for instance).
+   */
+  mustChangePassword?: boolean;
+}
+
+/**
+ * A LEDGORA operator is not a tenant subscriber.
+ *
+ * Platform roles are granted in the database by an existing super_admin and
+ * have nothing to do with buying a package. Sending an operator through the
+ * customer funnel — organization creation, package selection, payment proof —
+ * is a defect: they have no tenant to create and nothing to buy.
+ */
+export function isPlatformOperator(role: PlatformRole | undefined): boolean {
+  return role !== undefined && role !== 'none';
+}
+
+/** Where a verified operator belongs, by role. */
+export function operatorLandingRoute(role: PlatformRole): string {
+  // Super-admins own the whole console; a billing admin only reviews payments.
+  if (platformRoleHasCapability(role, 'manage-any-organization')) return ROUTES.adminConsole;
+  if (platformRoleHasCapability(role, 'verify-payments')) return ROUTES.adminPayments;
+  // 'support' and anything else privileged enough to be non-'none' but without
+  // a dedicated surface still must not enter the customer funnel.
+  return ROUTES.adminConsole;
+}
+
+/**
+ * The capability an administration path demands. Unknown `/admin/*` paths
+ * default to the strongest requirement so a new route cannot be reachable by
+ * accident before it is classified here.
+ */
+export function requiredAdminCapability(path: string): PlatformCapability {
+  if (path.startsWith(ROUTES.adminPayments)) return 'verify-payments';
+  return 'manage-any-organization';
 }
 
 /**
@@ -104,9 +157,22 @@ export interface AccessContext {
  *   rejected → /billing/payment.
  */
 export function resolvePostLoginRoute(ctx: AccessContext): string {
+  // ── Platform operators are resolved BEFORE any customer state ────────────
+  // An operator has no tenant organization and no subscription, so evaluating
+  // the customer funnel first would send them to package selection — the
+  // production defect this ordering exists to prevent.
+  if (isPlatformOperator(ctx.platformRole)) {
+    // A temporary credential is exchanged before the console opens, so a
+    // bootstrap password that was typed into a deploy dashboard cannot remain
+    // in use once it has granted access.
+    if (ctx.mustChangePassword) return ROUTES.changePassword;
+    return operatorLandingRoute(ctx.platformRole!);
+  }
+
   // A running Free Demo owns the application surface until it is exited.
   if (ctx.demoActive) return ROUTES.appDashboard;
   if (!ctx.user) return ROUTES.welcome;
+  if (ctx.mustChangePassword) return ROUTES.changePassword;
   if (!ctx.user.emailVerified) return ROUTES.verifyEmail;
   if (!ctx.hasOrganization) return ROUTES.onboardingOrganization;
 
@@ -139,10 +205,28 @@ export function resolvePostLoginRoute(ctx: AccessContext): string {
  */
 export function isPathAllowed(ctx: AccessContext, path: string): boolean {
   const surface = surfaceOf(path);
-  if (surface === 'admin') return true; // gated by platform role in the shell
+
+  // Administration is decided ONLY by the verified platform capability, never
+  // by organization or subscription state — an operator has neither. A demo
+  // visitor is never an operator.
+  if (surface === 'admin') {
+    if (ctx.demoActive) return false;
+    return platformRoleHasCapability(ctx.platformRole ?? 'none', requiredAdminCapability(path));
+  }
+
+  // A forced password change must stay reachable, or the user is trapped: every
+  // other surface redirects back to it.
+  if (surface === 'account') return !!ctx.user;
+
+  // Nothing else opens until a required password change is done.
+  if (ctx.mustChangePassword) return false;
+
+  // An operator has no subscription, so the customer surfaces below would all
+  // deny them. Keep them on administration instead.
+  if (isPlatformOperator(ctx.platformRole)) return false;
+
   // A Free Demo may open the application (view-level limits are applied by the
-  // AccessGate). The admin surface returned above is separately gated by the
-  // platform role in the shell, which a demo visitor never has.
+  // AccessGate).
   if (ctx.demoActive) return true;
   if (ctx.subscriptionStatus === 'active') return true;
   return INACTIVE_ALLOWED_SURFACES.includes(surface);

@@ -48,7 +48,6 @@ import {
   Container,
   Cpu,
   Workflow,
-  ShieldCheck,
 } from 'lucide-react';
 import type { ViewKey } from '@/types';
 import type { LedgoraModule } from '@/types/entitlements';
@@ -216,7 +215,6 @@ export const NAV_GROUPS: NavGroup[] = [
       { key: 'import-export', label: 'Import / Export', icon: ArrowLeftRight, description: 'Accounts CSV & JSON', requiredModule: 'core_accounting' },
       { key: 'members', label: 'Members', icon: Users, description: 'Organization users, roles & invitations' },
       { key: 'subscription', label: 'Subscription', icon: CreditCard, description: 'Edition, modules & subscription status' },
-      { key: 'super-admin', label: 'Super Admin', icon: ShieldCheck, description: 'Platform: subscribers, payments, packages & metering', platformAdminOnly: true },
       { key: 'settings', label: 'Settings', icon: Settings2, description: 'Company & presentation' },
     ],
   },

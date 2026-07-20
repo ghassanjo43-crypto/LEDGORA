@@ -19,10 +19,13 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe('super-admin nav gating', () => {
-  it('marks the Super Admin nav item platform-admin only', () => {
+  it('keeps the platform console out of the tenant application shell entirely', () => {
+    // The console now lives on its own /admin/console surface, which does not
+    // require a customer subscription. Leaving an entry in the subscriber
+    // sidebar would put platform tooling behind the subscription-gated /app
+    // surface — the production defect.
     const item = NAV_GROUPS.flatMap((g) => g.items).find((i) => i.key === 'super-admin');
-    expect(item).toBeDefined();
-    expect(item!.platformAdminOnly).toBe(true);
+    expect(item).toBeUndefined();
   });
 });
 

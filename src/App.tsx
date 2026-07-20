@@ -86,7 +86,6 @@ const SubscriptionPage = lazy(() =>
   import('@/pages/SubscriptionPage').then((m) => ({ default: m.SubscriptionPage })),
 );
 const MembersPage = lazy(() => import('@/pages/MembersPage').then((m) => ({ default: m.MembersPage })));
-const SuperAdminConsolePage = lazy(() => import('@/pages/SuperAdminConsolePage').then((m) => ({ default: m.SuperAdminConsolePage })));
 const InventoryDashboardPage = lazy(() => import('@/pages/inventory/InventoryDashboardPage').then((m) => ({ default: m.InventoryDashboardPage })));
 const ItemsPage = lazy(() => import('@/pages/inventory/ItemsPage').then((m) => ({ default: m.ItemsPage })));
 const ItemCategoriesPage = lazy(() => import('@/pages/inventory/ItemCategoriesPage').then((m) => ({ default: m.ItemCategoriesPage })));
@@ -203,8 +202,6 @@ export default function App() {
         return <SubscriptionPage />;
       case 'members':
         return <MembersPage />;
-      case 'super-admin':
-        return <SuperAdminConsolePage />;
       case 'inventory-dashboard':
         return <InventoryDashboardPage />;
       case 'inventory-items':
