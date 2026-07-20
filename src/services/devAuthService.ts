@@ -1,8 +1,11 @@
 /**
  * DEVELOPMENT authentication adapter — NOT production authentication.
  *
- * Ledgora has no authentication backend yet. This adapter keeps the funnel
- * working in the static build by delegating to the browser-only `authStore`:
+ * This is the FALLBACK. When `VITE_API_URL` names a backend origin,
+ * `services/index.ts` selects `apiAuthService` instead and real, server-side
+ * authentication applies. This adapter only runs in the static demo build,
+ * where there is no backend to talk to, and it keeps the funnel working by
+ * delegating to the browser-only `authStore`:
  *
  *   ⚠ Everything here runs in the visitor's browser. It provides NO real
  *     security: there is no server-side credential check, no HTTP-only session
@@ -15,15 +18,11 @@
  *     sessionStorage, a URL or a log line.
  *   • No secret/API key lives in this bundle.
  *
- * ── BACKEND SEAM ──────────────────────────────────────────────────────────────
- * Replace this file with `apiAuthService.ts` implementing the same `AuthService`
- * contract. Each method below marks the exact call to make:
- *   register()              → POST /api/auth/register
- *   signIn()                → POST /api/auth/login       (sets an HTTP-only cookie)
- *   signOut()               → POST /api/auth/logout
- *   getSession()            → GET  /api/auth/session
- *   requestPasswordReset()  → POST /api/auth/password-reset
- * Then swap the export in `services/index.ts`; no page needs to change.
+ * ── BACKEND SEAM (now implemented) ────────────────────────────────────────────
+ * `apiAuthService.ts` implements the same `AuthService` contract against the
+ * real endpoints, and `services/index.ts` picks it whenever a backend origin is
+ * configured. The `BACKEND SEAM` markers below name the call each method maps
+ * to; keep them in step if this adapter changes.
  */
 import type { AuthResult, AuthService, AuthSession, RegistrationInput, SignInInput } from './types';
 import { useAuthStore, getCurrentUser } from '@/store/authStore';

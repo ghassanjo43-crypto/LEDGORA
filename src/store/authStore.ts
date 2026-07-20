@@ -58,6 +58,15 @@ interface AuthState {
   attachOrganization: (organizationId: string, role?: OrgUserRole) => void;
   /** Internal/seed use: insert a fully-formed user. */
   upsertUser: (user: RegisteredUser) => void;
+  /**
+   * Adopt an identity the BACKEND already verified, making it the current user.
+   *
+   * The credential check happened on the server; this only mirrors the result
+   * into the local read model so the existing pages and access gate keep
+   * working. It performs no password check of its own and must therefore never
+   * be called from a path that has not just been authenticated by the server.
+   */
+  adoptVerifiedSession: (user: RegisteredUser) => void;
 
   /* ── Organization member management (owner/admin) ─────────────────────── */
   inviteMember: (input: { fullName: string; email: string; mobile?: string; role: OrgUserRole }) => AuthResult;
@@ -185,6 +194,14 @@ export const useAuthStore = create<AuthState>()(
           users: s.users.some((u) => u.id === user.id)
             ? s.users.map((u) => (u.id === user.id ? user : u))
             : [...s.users, user],
+        })),
+
+      adoptVerifiedSession: (user) =>
+        set((s) => ({
+          users: s.users.some((u) => u.id === user.id)
+            ? s.users.map((u) => (u.id === user.id ? user : u))
+            : [...s.users, user],
+          currentUserId: user.id,
         })),
 
       /* ── Member management ─────────────────────────────────────────────── */
