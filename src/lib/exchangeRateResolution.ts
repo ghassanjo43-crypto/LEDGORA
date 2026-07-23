@@ -34,7 +34,8 @@ export interface ResolveRateParams {
 
 function candidates(rates: ExchangeRate[], entityId: string, from: string, to: string, date: string, rateType?: ExchangeRateType): ExchangeRate[] {
   return rates
-    .filter((r) => r.entityId === entityId && r.status !== 'inactive')
+    // Draft rates await approval and never resolve; inactive rates are retired.
+    .filter((r) => r.entityId === entityId && r.status !== 'inactive' && r.status !== 'draft')
     .filter((r) => r.fromCurrencyCode === from && r.toCurrencyCode === to)
     .filter((r) => r.effectiveDate <= date)
     .filter((r) => (rateType ? r.rateType === rateType : true))

@@ -8,7 +8,10 @@
  * subscribers never see this view or its sidebar entry.
  */
 import { useMemo, useState } from 'react';
-import { useSessionStore } from '@/store/sessionStore';
+import { useOrganizationStore } from '@/store/organizationStore';
+import { useOperatorViewStore } from '@/store/operatorViewStore';
+import { useRouterStore } from '@/store/routerStore';
+import { ROUTES } from '@/lib/accessControl';
 import { useIsPlatformAdmin, usePlatformAccess } from '@/hooks/usePlatformRole';
 import { usePendingVerificationCount } from '@/store/billingHooks';
 import { Tabs, type TabItem } from '@/components/ui/Tabs';
@@ -33,9 +36,24 @@ export function SuperAdminConsolePage() {
   // backend session in production, or simulated on a local dev server.
   const { verifiedByBackend, resolving } = usePlatformAccess();
   const isAdmin = useIsPlatformAdmin();
-  const setRole = useSessionStore((s) => s.setPlatformRole);
+  const enterSubscriberView = useOperatorViewStore((s) => s.enter);
+  const navigate = useRouterStore((s) => s.navigate);
   const pending = usePendingVerificationCount();
   const [tab, setTab] = useState<ConsoleTab>('subscribers');
+
+  // Leave the administration layout for the normal subscriber application,
+  // WITHOUT touching the platform role. The operator stays a super-admin; only
+  // an explicit, session-scoped viewing mode is set. An organization context is
+  // attached when one is loaded so the dashboard has something to show.
+  const exitToSubscriberView = (): void => {
+    const org = useOrganizationStore.getState().organization;
+    enterSubscriberView(
+      org
+        ? { organizationId: org.id, ownerUserId: org.ownerUserId, orgName: org.legalName }
+        : undefined,
+    );
+    navigate(ROUTES.appDashboard);
+  };
 
   const tabs: TabItem<ConsoleTab>[] = useMemo(() => [
     { id: 'subscribers', label: 'Subscribers', icon: Building2 },
@@ -70,7 +88,7 @@ export function SuperAdminConsolePage() {
         <span className="flex items-center gap-2 text-sm font-medium text-indigo-800 dark:text-indigo-200">
           <ShieldAlert className="h-4 w-4" /> You are acting as the Ledgora platform super-administrator.
         </span>
-        <button className="text-xs font-medium text-indigo-700 underline hover:no-underline dark:text-indigo-300" onClick={() => setRole('none')}>
+        <button type="button" className="focus-ring rounded text-xs font-medium text-indigo-700 underline hover:no-underline dark:text-indigo-300" onClick={exitToSubscriberView}>
           Exit to subscriber view
         </button>
       </div>

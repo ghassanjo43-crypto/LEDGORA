@@ -668,7 +668,11 @@ export const useManufacturingStore = create<MfgState>()(
   ),
 );
 
-/** Whether the active organization is entitled to manufacturing. */
+/**
+ * Whether the active organization is entitled to manufacturing. Deliberately
+ * the REAL entitlement — never the operator full-access override — so viewing
+ * a subscriber cannot write manufacturing data their package doesn't include.
+ */
 export function manufacturingEnabled(): boolean {
   return useEntitlementStore.getState().effectiveModuleIds.includes('manufacturing_core');
 }

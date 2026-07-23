@@ -30,6 +30,8 @@ import { generateId, nowIso } from '@/lib/utils';
 import { useStore } from './useStore';
 import { useEntityStore } from './useEntityStore';
 import { useJournalStore } from './journalStore';
+// Call-time-only import (cycle-safe with currencyStore's lazy usage guards).
+import { useCurrencyStore } from './currencyStore';
 import { useCostCenterStore } from './costCenterStore';
 import { useProjectStore } from './projectStore';
 import { useInvoiceTemplateStore, INVOICE_ENTITY_ID } from './invoiceTemplateStore';
@@ -74,11 +76,12 @@ export function billPostingConfig(supplierId: string): BillPostingConfig {
 
 function audit(action: string, detail?: string): BillAuditEvent { return { id: generateId('baud'), at: nowIso(), action, detail }; }
 
-/** Recompute derived totals + balance from the current lines. */
+/** Recompute derived totals + balance at the DOCUMENT currency's configured precision. */
 function withTotals(bill: Bill): Bill {
-  const lines = bill.lines.map(recalcBillLine);
-  const t = calculateBillTotals(lines, bill.additionalChargesTotal);
-  const balanceDue = calculateBillBalance({ grandTotal: t.grandTotal, withholdingTaxTotal: t.withholdingTaxTotal, supplierCreditsApplied: bill.supplierCreditsApplied, amountPaid: bill.amountPaid });
+  const dp = useCurrencyStore.getState().getCurrency(bill.currency)?.decimalPlaces ?? 2;
+  const lines = bill.lines.map((l) => recalcBillLine(l, dp));
+  const t = calculateBillTotals(lines, bill.additionalChargesTotal, dp);
+  const balanceDue = calculateBillBalance({ grandTotal: t.grandTotal, withholdingTaxTotal: t.withholdingTaxTotal, supplierCreditsApplied: bill.supplierCreditsApplied, amountPaid: bill.amountPaid }, dp);
   return { ...bill, lines, subtotal: t.subtotal, discountTotal: t.discountTotal, taxTotal: t.taxTotal, withholdingTaxTotal: t.withholdingTaxTotal, grandTotal: t.grandTotal, balanceDue, updatedAt: nowIso() };
 }
 

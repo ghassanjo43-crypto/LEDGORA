@@ -12,13 +12,14 @@
  * development machine. Nothing here reads a role from `authStore`, localStorage,
  * sessionStorage or a query parameter — a tenant controls all of those.
  */
-import type { AccessContext } from './accessControl';
+import { type AccessContext, isPlatformOperator } from './accessControl';
 import { effectivePlatformRole } from './platformAccess';
 import { getCurrentUser } from '@/store/authStore';
 import { useOrganizationStore } from '@/store/organizationStore';
 import { useAccountSessionStore } from '@/store/accountSessionStore';
 import { useSessionStore } from '@/store/sessionStore';
 import { useBackendSessionStore } from '@/store/backendSessionStore';
+import { useOperatorViewStore } from '@/store/operatorViewStore';
 import { isApiConfigured } from '@/services/api/client';
 
 export function readAccessContext(): AccessContext {
@@ -26,14 +27,19 @@ export function readAccessContext(): AccessContext {
   const org = useOrganizationStore.getState();
   const backend = useBackendSessionStore.getState();
 
+  const platformRole = effectivePlatformRole(useSessionStore.getState().platformRole, backend.platformRoles);
+
   return {
     user: user ? { emailVerified: user.emailVerified } : null,
     hasOrganization: !!org.organization,
     subscriptionStatus: org.subscription?.status ?? null,
     demoActive: useAccountSessionStore.getState().demoActive,
-    platformRole: effectivePlatformRole(useSessionStore.getState().platformRole, backend.platformRoles),
+    platformRole,
     // Only the server may assert this.
     mustChangePassword: backend.user?.mustChangePassword ?? false,
+    // Honoured ONLY for a genuine effective operator: a tenant setting the flag
+    // in storage still resolves to `platformRole: 'none'`, so this stays false.
+    operatorViewing: isPlatformOperator(platformRole) && useOperatorViewStore.getState().active,
   };
 }
 

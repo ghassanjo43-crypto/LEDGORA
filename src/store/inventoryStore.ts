@@ -628,7 +628,12 @@ function reversalEventFor(kind: InventoryDocumentKind): InventoryAuditEvent {
   }
 }
 
-/** Whether the active organization is entitled to inventory (gates document hooks). */
+/**
+ * Whether the active organization is entitled to inventory (gates document
+ * hooks). Deliberately the REAL entitlement — never the operator full-access
+ * override — so viewing a subscriber cannot create inventory data their
+ * package doesn't include.
+ */
 export function inventoryEnabled(): boolean {
   return useEntitlementStore.getState().effectiveModuleIds.includes('inventory_basic');
 }

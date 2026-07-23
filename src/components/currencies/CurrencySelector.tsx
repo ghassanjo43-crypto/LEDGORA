@@ -19,6 +19,6 @@ export function CurrencySelector({ value, onChange, currencies, allowed, include
     .filter((c) => (includeInactive ? true : c.status === 'active'))
     .filter((c) => (allowed ? allowed.includes(c.code) : true))
     .sort((a, b) => a.code.localeCompare(b.code))
-    .map((c) => ({ value: c.code, label: `${c.code} · ${c.symbol}` }));
+    .map((c) => ({ value: c.code, label: `${c.code} · ${c.symbol} · ${c.name}` }));
   return <Select className={className} options={options} value={value} onChange={(e) => onChange(e.target.value)} disabled={disabled} aria-label={rest['aria-label']} />;
 }

@@ -35,9 +35,9 @@ export function validateExchangeRate(rate: ExchangeRate, ctx: ExchangeRateValida
 
   const duplicate = ctx.existingRates.some(
     (r) => r.id !== rate.id && r.entityId === rate.entityId && r.fromCurrencyCode === rate.fromCurrencyCode && r.toCurrencyCode === rate.toCurrencyCode &&
-      r.effectiveDate === rate.effectiveDate && (r.effectiveTime ?? '') === (rate.effectiveTime ?? '') && r.status === 'active',
+      r.rateType === rate.rateType && r.effectiveDate === rate.effectiveDate && (r.effectiveTime ?? '') === (rate.effectiveTime ?? '') && r.status === 'active' && rate.status === 'active',
   );
-  if (duplicate) err('duplicate', 'An active rate already exists for this pair at that effective timestamp.');
+  if (duplicate) err('duplicate', 'An active rate already exists for this pair and rate type at that effective timestamp.');
 
   return issues;
 }

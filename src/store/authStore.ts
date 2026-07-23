@@ -13,6 +13,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { MemberStatus, OrgUserRole, RegisteredUser } from '@/types/onboarding';
 import { useEntitlementStore } from './entitlementStore';
+import { isPlatformAdminFullAccess } from './platformFullAccess';
 import { getPlatformRole } from './sessionStore';
 import { hasPlatformCapability } from '@/lib/platformAccess';
 import {
@@ -222,10 +223,13 @@ export const useAuthStore = create<AuthState>()(
         if (get().users.some((u) => u.email === email)) fieldErrors.email = 'A user with this email already exists.';
         if (Object.keys(fieldErrors).length > 0) return { ok: false, error: 'Please fix the highlighted fields.', fieldErrors };
 
-        // Enforce the subscription seat limit (active + invited members).
+        // Enforce the subscription seat limit (active + invited members). A
+        // platform administrator in full-access operator mode is not blocked by
+        // the subscriber's limit (diagnostics/support), but the limit itself is
+        // untouched — the workspace keeps showing its real over-limit warnings.
         const limit = useEntitlementStore.getState().subscription.userLimit;
         const seatsUsed = get().users.filter((u) => u.organizationId === orgId && u.status !== 'suspended').length;
-        if (seatsUsed >= limit) {
+        if (seatsUsed >= limit && !isPlatformAdminFullAccess()) {
           return { ok: false, error: `Your plan allows ${limit} users. Upgrade or free a seat to add another.` };
         }
 

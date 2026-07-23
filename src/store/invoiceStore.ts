@@ -12,6 +12,10 @@ import type {
 } from '@/types/invoice';
 import type { CostCenter } from '@/types/costCenter';
 import { calculateInvoiceTotals, recalcInvoiceLine, calculateInvoiceLine } from '@/lib/invoiceCalculations';
+import { roundTo } from '@/lib/currencyConversion';
+// Call-time-only import (cycle-safe: currencyStore also reads this store lazily
+// for its usage guards — neither touches the other during module evaluation).
+import { useCurrencyStore } from './currencyStore';
 import { buildInvoiceJournalEntry, buildInvoicePaymentJournalEntry } from '@/lib/invoicePosting';
 import { validateInvoiceForIssue } from '@/lib/invoiceValidation';
 import { validateDocumentCostCenters } from '@/lib/costCenterDocumentValidation';
@@ -82,12 +86,18 @@ function audit(action: string, detail?: string): InvoiceAuditEvent {
   return { id: generateId('iaud'), at: nowIso(), action, detail };
 }
 
-/** Recompute derived totals from the current lines. */
+/** The document currency's configured monetary precision (Currency Master). */
+function documentDecimals(currencyCode: string): number {
+  return useCurrencyStore.getState().getCurrency(currencyCode)?.decimalPlaces ?? 2;
+}
+
+/** Recompute derived totals from the current lines at the DOCUMENT currency's precision. */
 function withTotals(inv: Invoice): Invoice {
-  const lines = inv.lines.map(recalcInvoiceLine);
-  const t = calculateInvoiceTotals(lines, inv.additionalChargesTotal, inv.amountPaid);
-  const creditsApplied = Math.round((inv.creditsApplied ?? 0) * 100) / 100;
-  const balanceDue = Math.round((t.grandTotal - t.amountPaid - creditsApplied) * 100) / 100;
+  const dp = documentDecimals(inv.currency);
+  const lines = inv.lines.map((l) => recalcInvoiceLine(l, dp));
+  const t = calculateInvoiceTotals(lines, inv.additionalChargesTotal, inv.amountPaid, dp);
+  const creditsApplied = roundTo(inv.creditsApplied ?? 0, dp);
+  const balanceDue = roundTo(t.grandTotal - t.amountPaid - creditsApplied, dp);
   return { ...inv, lines, subtotal: t.subtotal, discountTotal: t.discountTotal, taxTotal: t.taxTotal, grandTotal: t.grandTotal, creditsApplied, balanceDue, updatedAt: nowIso() };
 }
 

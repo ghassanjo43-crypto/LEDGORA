@@ -7,11 +7,14 @@ interface JournalViewState {
   rowsPerPage: number;
   /** Transient: an entry the General Ledger asked the Journal to focus/open. */
   focusEntryId: string | null;
+  /** Transient: a voucher the Journal asked the Journal Voucher page to open. */
+  focusVoucherNumber: string | null;
 
   toggleColumn: (id: JournalColumnId) => void;
   resetColumns: () => void;
   setRowsPerPage: (n: number) => void;
   requestFocusEntry: (id: string | null) => void;
+  requestFocusVoucher: (number: string | null) => void;
 }
 
 /** Persisted table view preferences (column visibility + page size). */
@@ -21,12 +24,14 @@ export const useJournalView = create<JournalViewState>()(
       columns: defaultColumnVisibility(),
       rowsPerPage: 20,
       focusEntryId: null,
+      focusVoucherNumber: null,
 
       toggleColumn: (id) =>
         set((s) => ({ columns: { ...s.columns, [id]: !s.columns[id] } })),
       resetColumns: () => set({ columns: defaultColumnVisibility() }),
       setRowsPerPage: (rowsPerPage) => set({ rowsPerPage }),
       requestFocusEntry: (focusEntryId) => set({ focusEntryId }),
+      requestFocusVoucher: (focusVoucherNumber) => set({ focusVoucherNumber }),
     }),
     {
       name: 'ledgerly-journal-view',

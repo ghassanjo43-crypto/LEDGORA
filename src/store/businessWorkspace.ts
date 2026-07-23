@@ -42,6 +42,8 @@ import { useCompanyStore } from './companyStore';
 import { useInvoiceTemplateStore } from './invoiceTemplateStore';
 import { useStatementStore } from './statementStore';
 import { useUsageStore } from './usageStore';
+import { useFixedAssetStore } from './fixedAssetStore';
+import { useJournalVoucherStore } from './journalVoucherStore';
 
 /** Minimal shape we need from a persisted zustand store. */
 interface PersistedStore {
@@ -51,41 +53,50 @@ interface PersistedStore {
 interface WorkspaceStoreEntry {
   /** Human-readable name (used in diagnostics/tests). */
   key: string;
-  store: PersistedStore;
+  /**
+   * Lazy accessor, NOT a captured value: several business stores sit on import
+   * cycles (e.g. journalStore → entitlementHooks → platform session stores →
+   * sessionMirror → freeDemoSession → this module), so snapshotting the import
+   * at module evaluation could freeze an as-yet-undefined binding. Resolving at
+   * call time always sees the fully-initialised store.
+   */
+  store: () => PersistedStore;
   reset: () => void;
 }
 
 export const BUSINESS_WORKSPACE_STORES: WorkspaceStoreEntry[] = [
-  { key: 'chart-of-accounts', store: useStore, reset: () => useStore.getState().resetToDefault() },
-  { key: 'entities', store: useEntityStore, reset: () => useEntityStore.getState().resetToDefault() },
-  { key: 'journal', store: useJournalStore, reset: () => useJournalStore.getState().resetToDefault() },
-  { key: 'invoices', store: useInvoiceStore, reset: () => useInvoiceStore.getState().resetToDefault() },
-  { key: 'credit-notes', store: useCreditNoteStore, reset: () => useCreditNoteStore.getState().resetToDefault() },
-  { key: 'receipts', store: useReceiptStore, reset: () => useReceiptStore.getState().resetToDefault() },
-  { key: 'bills', store: useBillStore, reset: () => useBillStore.getState().resetToDefault() },
-  { key: 'payments', store: usePaymentStore, reset: () => usePaymentStore.getState().resetToDefault() },
-  { key: 'inventory', store: useInventoryStore, reset: () => useInventoryStore.getState().resetToDefault() },
-  { key: 'manufacturing', store: useManufacturingStore, reset: () => useManufacturingStore.getState().resetToDefault() },
-  { key: 'projects', store: useProjectStore, reset: () => useProjectStore.getState().resetToDefault() },
-  { key: 'project-budgets', store: useProjectBudgetStore, reset: () => useProjectBudgetStore.getState().resetToDefault() },
-  { key: 'project-delivery', store: useProjectDeliveryStore, reset: () => useProjectDeliveryStore.getState().resetToDefault() },
-  { key: 'project-recognition', store: useProjectRecognitionStore, reset: () => useProjectRecognitionStore.getState().resetToDefault() },
-  { key: 'cost-centers', store: useCostCenterStore, reset: () => useCostCenterStore.getState().resetToDefault() },
-  { key: 'cost-center-budgets', store: useCostCenterBudgetStore, reset: () => useCostCenterBudgetStore.getState().resetToDefault() },
-  { key: 'cost-center-allocations', store: useCostCenterAllocationStore, reset: () => useCostCenterAllocationStore.getState().resetToDefault() },
-  { key: 'currencies', store: useCurrencyStore, reset: () => useCurrencyStore.getState().resetToDefault() },
-  { key: 'exchange-rates', store: useExchangeRateStore, reset: () => useExchangeRateStore.getState().resetToDefault() },
-  { key: 'currency-revaluations', store: useCurrencyRevaluationStore, reset: () => useCurrencyRevaluationStore.getState().resetToDefault() },
-  { key: 'tax-codes', store: useTaxCodeStore, reset: () => useTaxCodeStore.getState().resetToDefault() },
-  { key: 'tax-periods', store: useTaxPeriodStore, reset: () => useTaxPeriodStore.getState().resetToDefault() },
-  { key: 'invoice-templates', store: useInvoiceTemplateStore, reset: () => useInvoiceTemplateStore.getState().resetToDefault() },
-  { key: 'usage', store: useUsageStore, reset: () => useUsageStore.getState().resetToDefault() },
+  { key: 'chart-of-accounts', store: () => useStore, reset: () => useStore.getState().resetToDefault() },
+  { key: 'entities', store: () => useEntityStore, reset: () => useEntityStore.getState().resetToDefault() },
+  { key: 'journal', store: () => useJournalStore, reset: () => useJournalStore.getState().resetToDefault() },
+  { key: 'invoices', store: () => useInvoiceStore, reset: () => useInvoiceStore.getState().resetToDefault() },
+  { key: 'credit-notes', store: () => useCreditNoteStore, reset: () => useCreditNoteStore.getState().resetToDefault() },
+  { key: 'receipts', store: () => useReceiptStore, reset: () => useReceiptStore.getState().resetToDefault() },
+  { key: 'bills', store: () => useBillStore, reset: () => useBillStore.getState().resetToDefault() },
+  { key: 'payments', store: () => usePaymentStore, reset: () => usePaymentStore.getState().resetToDefault() },
+  { key: 'inventory', store: () => useInventoryStore, reset: () => useInventoryStore.getState().resetToDefault() },
+  { key: 'manufacturing', store: () => useManufacturingStore, reset: () => useManufacturingStore.getState().resetToDefault() },
+  { key: 'projects', store: () => useProjectStore, reset: () => useProjectStore.getState().resetToDefault() },
+  { key: 'project-budgets', store: () => useProjectBudgetStore, reset: () => useProjectBudgetStore.getState().resetToDefault() },
+  { key: 'project-delivery', store: () => useProjectDeliveryStore, reset: () => useProjectDeliveryStore.getState().resetToDefault() },
+  { key: 'project-recognition', store: () => useProjectRecognitionStore, reset: () => useProjectRecognitionStore.getState().resetToDefault() },
+  { key: 'cost-centers', store: () => useCostCenterStore, reset: () => useCostCenterStore.getState().resetToDefault() },
+  { key: 'cost-center-budgets', store: () => useCostCenterBudgetStore, reset: () => useCostCenterBudgetStore.getState().resetToDefault() },
+  { key: 'cost-center-allocations', store: () => useCostCenterAllocationStore, reset: () => useCostCenterAllocationStore.getState().resetToDefault() },
+  { key: 'currencies', store: () => useCurrencyStore, reset: () => useCurrencyStore.getState().resetToDefault() },
+  { key: 'exchange-rates', store: () => useExchangeRateStore, reset: () => useExchangeRateStore.getState().resetToDefault() },
+  { key: 'currency-revaluations', store: () => useCurrencyRevaluationStore, reset: () => useCurrencyRevaluationStore.getState().resetToDefault() },
+  { key: 'tax-codes', store: () => useTaxCodeStore, reset: () => useTaxCodeStore.getState().resetToDefault() },
+  { key: 'tax-periods', store: () => useTaxPeriodStore, reset: () => useTaxPeriodStore.getState().resetToDefault() },
+  { key: 'invoice-templates', store: () => useInvoiceTemplateStore, reset: () => useInvoiceTemplateStore.getState().resetToDefault() },
+  { key: 'usage', store: () => useUsageStore, reset: () => useUsageStore.getState().resetToDefault() },
+  { key: 'fixed-assets', store: () => useFixedAssetStore, reset: () => useFixedAssetStore.getState().resetToDefault() },
+  { key: 'journal-vouchers', store: () => useJournalVoucherStore, reset: () => useJournalVoucherStore.getState().resetToDefault() },
   // Company registry re-initialises itself from the working stores on next read.
-  { key: 'companies', store: useCompanyStore, reset: () => useCompanyStore.setState({ companies: [], activeCompanyId: '' }) },
+  { key: 'companies', store: () => useCompanyStore, reset: () => useCompanyStore.setState({ companies: [], activeCompanyId: '' }) },
   // Statement view preferences (customer selection) belong to the workspace too.
   {
     key: 'statement-view',
-    store: useStatementStore,
+    store: () => useStatementStore,
     reset: () => {
       useStatementStore.getState().selectCustomer('');
       useStatementStore.getState().resetOptions();
@@ -100,5 +111,5 @@ export function resetBusinessWorkspace(): void {
 
 /** Re-read every business store from the current workspace storage. */
 export function rehydrateBusinessWorkspace(): void {
-  for (const entry of BUSINESS_WORKSPACE_STORES) void entry.store.persist.rehydrate();
+  for (const entry of BUSINESS_WORKSPACE_STORES) void entry.store().persist.rehydrate();
 }

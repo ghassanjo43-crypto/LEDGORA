@@ -48,6 +48,7 @@ import {
   Container,
   Cpu,
   Workflow,
+  FileSignature,
 } from 'lucide-react';
 import type { ViewKey } from '@/types';
 import type { LedgoraModule } from '@/types/entitlements';
@@ -90,6 +91,8 @@ export const NAV_GROUPS: NavGroup[] = [
       { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, description: 'Overview & KPIs' },
       { key: 'tree', label: 'Chart of Accounts', icon: ListTree, description: 'Account hierarchy & editing', requiredModule: 'core_accounting' },
       { key: 'journal', label: 'General Journal', icon: BookOpenText, description: 'Double-entry transactions', requiredModule: 'core_accounting' },
+      { key: 'journal-vouchers', label: 'Journal Vouchers', icon: FileSignature, description: 'Universal voucher workflow — drafts, approval, posting, templates', requiredModule: 'core_accounting' },
+      { key: 'journal-voucher-reports', label: 'Voucher Reports', icon: FileBarChart2, description: 'Voucher registers, analysis & GL reconciliation', requiredModule: 'core_accounting' },
       { key: 'general-ledger', label: 'General Ledger', icon: Library, description: 'Account-level postings', requiredModule: 'core_accounting' },
       { key: 'trial-balance', label: 'Trial Balance', icon: Scale, description: 'Debits vs credits by account', requiredModule: 'core_accounting' },
       { key: 'income-statement', label: 'Income Statement', icon: TrendingUp, description: 'Statement of profit or loss', requiredModule: 'core_accounting' },
@@ -147,6 +150,17 @@ export const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
+    id: 'fixed-assets',
+    label: 'Fixed Assets',
+    requiredAnyModules: ['fixed_assets'],
+    items: [
+      { key: 'fixed-assets', label: 'Asset Register', icon: Landmark, description: 'Fixed asset register & transactions', requiredModule: 'fixed_assets' },
+      { key: 'fixed-asset-categories', label: 'Asset Categories', icon: Layers, description: 'Categories & accounting mappings', requiredModule: 'fixed_assets' },
+      { key: 'fixed-assets-depreciation', label: 'Depreciation Runs', icon: CalendarClock, description: 'Preview, approve, post & reverse depreciation', requiredModule: 'fixed_assets' },
+      { key: 'fixed-assets-reports', label: 'Asset Reports', icon: BarChart3, description: 'Register, schedules, movements & GL reconciliation', requiredModule: 'fixed_assets' },
+    ],
+  },
+  {
     id: 'inventory',
     label: 'Inventory',
     requiredAnyModules: ['inventory_basic'],
@@ -187,9 +201,9 @@ export const NAV_GROUPS: NavGroup[] = [
   },
   {
     id: 'currency',
-    label: 'Currencies',
+    label: 'Financial Settings',
     items: [
-      { key: 'currencies', label: 'Currencies', icon: Coins, description: 'Currency master & entity settings', requiredModule: 'currency_basic' },
+      { key: 'currencies', label: 'Currencies', icon: Coins, description: 'Currency Master — standard & custom currencies, precision, base currency', requiredModule: 'currency_basic' },
       { key: 'exchange-rates', label: 'Exchange Rates', icon: ArrowLeftRight, description: 'Effective-dated rates & converter', requiredModule: 'currency_basic' },
       { key: 'currency-revaluation', label: 'Currency Revaluation', icon: RefreshCw, description: 'Period-end FX revaluation', requiredModule: 'currency_advanced' },
       { key: 'fx-gain-loss', label: 'FX Gain / Loss', icon: TrendingUp, description: 'Realized & unrealized FX, exposure', requiredModule: 'currency_advanced' },
@@ -299,6 +313,12 @@ const SUBTITLES: Partial<Record<ViewKey, string>> = {
   projects: 'Temporary initiatives, contracts and jobs — revenue, cost and margin by project',
   'project-reports': 'Profitability, cash flow, budget-vs-actual and revenue recognition by project',
   'project-delivery': 'Capture time and expenses, track commitments and milestones, and bill projects',
+  'journal-vouchers': 'One flexible voucher for every balanced non-document transaction — posted through the General Journal',
+  'journal-voucher-reports': 'Voucher registers by type, account, user and dimension, plus reconciliation to the General Ledger',
+  'fixed-assets': 'Asset register — every posted asset transaction creates a linked General Journal Voucher',
+  'fixed-asset-categories': 'Asset categories mapped to your chart of accounts — cost, depreciation, impairment and disposal accounts',
+  'fixed-assets-depreciation': 'Depreciation runs — preview, validate, approve, post and reverse with a full audit history',
+  'fixed-assets-reports': 'Registers, schedules, movement analysis and reconciliation of the asset register to the General Ledger',
   'import-export': 'Move your chart of accounts in and out as CSV or JSON',
   subscription: 'Your Ledgora edition, enabled modules, limits and subscription status',
   members: 'Invite teammates, assign roles and manage seats within your plan limit',

@@ -33,6 +33,7 @@ import { useAuthStore } from '@/store/authStore';
 import { useOrganizationStore } from '@/store/organizationStore';
 import { useAccountSessionStore } from '@/store/accountSessionStore';
 import { useBackendSessionStore } from '@/store/backendSessionStore';
+import { useOperatorViewStore } from '@/store/operatorViewStore';
 import { toAuthenticatedUser } from '@/lib/sessionModel';
 import { restoreWorkspaceForSignIn } from '@/lib/freeDemoSession';
 import { passwordProblem } from '@/lib/onboardingData';
@@ -133,6 +134,8 @@ export const apiAuthService: AuthService = {
     }
     // Drops the mirrored user, the workspace and the in-memory CSRF token.
     useBackendSessionStore.getState().clear();
+    // Any operator subscriber-view mode ends with the session.
+    useOperatorViewStore.getState().exit();
   },
 
   async getSession(): Promise<AuthSession | null> {

@@ -9,6 +9,7 @@ import { ModuleUnavailablePage } from '@/components/entitlements/ModuleUnavailab
 import { AccessGate } from '@/components/access/AccessGate';
 import { FreeDemoBanner } from '@/components/onboarding/FreeDemoBanner';
 import { FreeDemoNotices } from '@/components/onboarding/FreeDemoNotices';
+import { OperatorViewBanner } from '@/components/shell/OperatorViewBanner';
 
 /**
  * Route-level code splitting: each page ships in its own chunk that is only
@@ -86,6 +87,12 @@ const SubscriptionPage = lazy(() =>
   import('@/pages/SubscriptionPage').then((m) => ({ default: m.SubscriptionPage })),
 );
 const MembersPage = lazy(() => import('@/pages/MembersPage').then((m) => ({ default: m.MembersPage })));
+const JournalVouchersPage = lazy(() => import('@/pages/journalVouchers/JournalVouchersPage').then((m) => ({ default: m.JournalVouchersPage })));
+const JournalVoucherReportsPage = lazy(() => import('@/pages/journalVouchers/JournalVoucherReportsPage').then((m) => ({ default: m.JournalVoucherReportsPage })));
+const FixedAssetRegisterPage = lazy(() => import('@/pages/fixedAssets/FixedAssetRegisterPage').then((m) => ({ default: m.FixedAssetRegisterPage })));
+const FixedAssetCategoriesPage = lazy(() => import('@/pages/fixedAssets/FixedAssetCategoriesPage').then((m) => ({ default: m.FixedAssetCategoriesPage })));
+const FixedAssetsDepreciationPage = lazy(() => import('@/pages/fixedAssets/FixedAssetsDepreciationPage').then((m) => ({ default: m.FixedAssetsDepreciationPage })));
+const FixedAssetsReportsPage = lazy(() => import('@/pages/fixedAssets/FixedAssetsReportsPage').then((m) => ({ default: m.FixedAssetsReportsPage })));
 const InventoryDashboardPage = lazy(() => import('@/pages/inventory/InventoryDashboardPage').then((m) => ({ default: m.InventoryDashboardPage })));
 const ItemsPage = lazy(() => import('@/pages/inventory/ItemsPage').then((m) => ({ default: m.ItemsPage })));
 const ItemCategoriesPage = lazy(() => import('@/pages/inventory/ItemCategoriesPage').then((m) => ({ default: m.ItemCategoriesPage })));
@@ -202,6 +209,18 @@ export default function App() {
         return <SubscriptionPage />;
       case 'members':
         return <MembersPage />;
+      case 'journal-vouchers':
+        return <JournalVouchersPage />;
+      case 'journal-voucher-reports':
+        return <JournalVoucherReportsPage />;
+      case 'fixed-assets':
+        return <FixedAssetRegisterPage />;
+      case 'fixed-asset-categories':
+        return <FixedAssetCategoriesPage />;
+      case 'fixed-assets-depreciation':
+        return <FixedAssetsDepreciationPage />;
+      case 'fixed-assets-reports':
+        return <FixedAssetsReportsPage />;
       case 'inventory-dashboard':
         return <InventoryDashboardPage />;
       case 'inventory-items':
@@ -281,6 +300,7 @@ export default function App() {
 
   return (
     <ToastProvider>
+      <OperatorViewBanner />
       <FreeDemoNotices />
       <FreeDemoBanner />
       <AppLayout>

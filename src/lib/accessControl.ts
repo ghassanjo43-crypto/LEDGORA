@@ -114,6 +114,14 @@ export interface AccessContext {
    * administrator provisioned from an environment variable, for instance).
    */
   mustChangePassword?: boolean;
+  /**
+   * The operator has explicitly entered "subscriber view" mode (see
+   * `store/operatorViewStore`). It is only ever true here for a genuine
+   * effective operator — `readAccessContext` re-validates it against the
+   * verified role — so it relaxes routing onto the application surface without
+   * granting any tenant a way in.
+   */
+  operatorViewing?: boolean;
 }
 
 /**
@@ -166,6 +174,10 @@ export function resolvePostLoginRoute(ctx: AccessContext): string {
     // bootstrap password that was typed into a deploy dashboard cannot remain
     // in use once it has granted access.
     if (ctx.mustChangePassword) return ROUTES.changePassword;
+    // An operator who has explicitly entered subscriber-view mode belongs on the
+    // application surface, NOT the console — this is what stops the shell from
+    // bouncing "Exit to subscriber view" straight back to /admin/console.
+    if (ctx.operatorViewing) return ROUTES.appDashboard;
     return operatorLandingRoute(ctx.platformRole!);
   }
 
@@ -222,8 +234,12 @@ export function isPathAllowed(ctx: AccessContext, path: string): boolean {
   if (ctx.mustChangePassword) return false;
 
   // An operator has no subscription, so the customer surfaces below would all
-  // deny them. Keep them on administration instead.
-  if (isPlatformOperator(ctx.platformRole)) return false;
+  // deny them. In explicit subscriber-view mode they may use the application
+  // surface for the organization they are viewing; otherwise they belong on
+  // administration and nothing else opens.
+  if (isPlatformOperator(ctx.platformRole)) {
+    return !!ctx.operatorViewing && surface === 'app';
+  }
 
   // A Free Demo may open the application (view-level limits are applied by the
   // AccessGate).
@@ -269,6 +285,15 @@ export interface ApiGuardInput {
   resource: ProtectedResource;
   /** Whether the organization's entitlements include the module for `resource`. */
   hasEntitlement: boolean;
+  /**
+   * Server-resolved operator override (see `lib/platformEntitlementOverride`).
+   * `'full_access'` — a VERIFIED super-admin in operator viewing mode — skips
+   * only the product-package refusals below. It is resolved by the backend from
+   * the authenticated session, never from a client-supplied value, and it does
+   * not bypass authentication, organization scoping or ownership checks: those
+   * run before this guard is ever consulted.
+   */
+  platformOverride?: 'full_access' | 'none';
 }
 
 /**
@@ -277,6 +302,9 @@ export interface ApiGuardInput {
  * subscription is refused before any per-module entitlement check.
  */
 export function apiGuard(input: ApiGuardInput): ApiGuardResult {
+  // Platform administrator with full feature access: package restrictions do
+  // not apply (the subscriber's subscription record itself is untouched).
+  if (input.platformOverride === 'full_access') return { ok: true, status: 200 };
   if (input.subscriptionStatus !== 'active') {
     return {
       ok: false,

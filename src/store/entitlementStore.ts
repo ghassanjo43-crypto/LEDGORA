@@ -29,6 +29,7 @@ import {
   migrateExistingOrganization,
 } from '@/lib/entitlementMigration';
 import { sortModules } from '@/config/editions';
+import { operatorAuditContext, resolveAuditActor } from './platformFullAccess';
 
 const ACTOR = 'Finance Manager';
 
@@ -44,7 +45,17 @@ function audit(
   event: SubscriptionAuditEvent,
   detail: string,
 ): SubscriptionAuditEntry {
-  return { id: auditId(), event, at: nowIso(), actor: ACTOR, detail };
+  // A platform operator acting inside a subscriber workspace is identified as
+  // the administrator — audit never impersonates the subscriber.
+  const operator = operatorAuditContext();
+  return {
+    id: auditId(),
+    event,
+    at: nowIso(),
+    actor: resolveAuditActor(ACTOR),
+    detail,
+    ...(operator ? { operator } : {}),
+  };
 }
 
 export interface EntitlementState {

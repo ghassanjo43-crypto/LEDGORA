@@ -17,8 +17,8 @@ import { useToast } from '@/components/ui/Toast';
 import { CurrencySelector } from '@/components/currencies/CurrencySelector';
 import { CurrencyConversionPreview } from '@/components/currencies/CurrencyConversionPreview';
 
-const STATUS_TONE: Record<ExchangeRate['status'], BadgeTone> = { active: 'green', superseded: 'amber', inactive: 'slate' };
-const RATE_TYPES: ExchangeRateType[] = ['mid', 'buy', 'sell', 'custom'];
+const STATUS_TONE: Record<ExchangeRate['status'], BadgeTone> = { draft: 'blue', active: 'green', superseded: 'amber', inactive: 'slate' };
+const RATE_TYPES: ExchangeRateType[] = ['mid', 'buy', 'sell', 'daily', 'monthly', 'period-end', 'average', 'transaction', 'custom'];
 const SOURCES: ExchangeRateSource[] = ['manual', 'bank', 'central-bank', 'market-provider', 'import', 'custom'];
 
 export function ExchangeRatesPage() {

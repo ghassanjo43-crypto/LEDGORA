@@ -96,6 +96,15 @@ export const MODULE_DEFINITIONS: ModuleDefinition[] = [
     defaultForEditions: [...CORE_TIER],
     isVisibleInAdmin: true,
   },
+  {
+    id: 'fixed_assets',
+    name: 'Fixed Assets',
+    description: 'Asset register, depreciation, transfers, impairment, revaluation and disposals with automatic journal vouchers.',
+    category: 'core',
+    dependencies: ['core_accounting'],
+    defaultForEditions: [...CORE_TIER],
+    isVisibleInAdmin: true,
+  },
 
   /* ── Advanced core (Enterprise) ───────────────────────────────────────── */
   {

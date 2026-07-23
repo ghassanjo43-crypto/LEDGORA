@@ -26,6 +26,7 @@ export type LedgoraModule =
   | 'tax_advanced'
   | 'currency_basic'
   | 'currency_advanced'
+  | 'fixed_assets'
   | 'cost_centers'
   | 'cost_center_budgets'
   | 'cost_allocations'

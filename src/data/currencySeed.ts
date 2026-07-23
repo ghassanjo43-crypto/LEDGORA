@@ -1,10 +1,16 @@
 import type { Currency, EntityCurrencyConfig } from '@/types/currency';
 import type { ExchangeRate } from '@/types/exchangeRate';
+import { STANDARD_CURRENCY_CATALOG, catalogEntryToCurrency } from '@/data/currencyCatalog';
 
 /**
- * Default currency configuration DATA (not business logic). Rates are sample data
- * kept out of calculation code. FX account references use the deterministic seed
- * CoA id `seed_7300` (Foreign exchange gains and losses).
+ * Default currency configuration DATA (not business logic). The seeded master
+ * comes from the shared standard catalog — ISO fiat currencies active with their
+ * proper decimals (JPY 0, USD 2, JOD/KWD/BHD/OMR/IQD 3), digital/commodity
+ * reference entries present but INACTIVE until an organization enables them.
+ * Users are never limited to this list — custom currencies extend it.
+ *
+ * Rates are sample data kept out of calculation code. FX account references use
+ * the deterministic seed CoA id `seed_7300` (Foreign exchange gains and losses).
  */
 
 const TS = new Date('2026-01-01T00:00:00.000Z').toISOString();
@@ -12,38 +18,28 @@ const FX = 'seed_7300';
 export const PRIMARY_ENTITY_ID = 'primary';
 export const DEFAULT_BASE_CURRENCY = 'USD';
 
-interface CurrencySpec {
-  code: string; name: string; symbol: string; decimals: number;
-  symbolPosition?: 'before' | 'after'; countryCodes?: string[]; status?: Currency['status'];
-}
-
-function makeCurrency(s: CurrencySpec): Currency {
-  return {
-    id: `cur_${s.code}`, code: s.code, name: s.name, symbol: s.symbol, decimalPlaces: s.decimals,
-    symbolPosition: s.symbolPosition ?? 'before', decimalSeparator: '.', thousandSeparator: ',', negativeFormat: '-1,234.56',
-    status: s.status ?? 'active', countryCodes: s.countryCodes,
-    auditTrail: [{ id: `caud_${s.code}`, at: TS, action: 'currency-created', detail: 'seed' }],
-    createdAt: TS, updatedAt: TS,
-  };
-}
-
-export const SEED_CURRENCIES: Currency[] = [
-  makeCurrency({ code: 'USD', name: 'United States Dollar', symbol: '$', decimals: 2, countryCodes: ['US'] }),
-  makeCurrency({ code: 'EUR', name: 'Euro', symbol: '€', decimals: 2, countryCodes: ['DE', 'FR', 'ES'] }),
-  makeCurrency({ code: 'GBP', name: 'Pound Sterling', symbol: '£', decimals: 2, countryCodes: ['GB'] }),
-  makeCurrency({ code: 'JOD', name: 'Jordanian Dinar', symbol: 'JD', decimals: 3, countryCodes: ['JO'] }),
-  makeCurrency({ code: 'AED', name: 'UAE Dirham', symbol: 'AED', decimals: 2, symbolPosition: 'after', countryCodes: ['AE'] }),
-  makeCurrency({ code: 'JPY', name: 'Japanese Yen', symbol: '¥', decimals: 0, countryCodes: ['JP'] }),
-];
+export const SEED_CURRENCIES: Currency[] = STANDARD_CURRENCY_CATALOG.map((entry) =>
+  catalogEntryToCurrency(entry, {
+    now: TS,
+    // Fiat is active by default; crypto/token/commodity entries wait for an
+    // explicit organization opt-in ("where enabled").
+    status: entry.type === 'fiat' ? 'active' : 'inactive',
+  }),
+).map((c) => ({
+  ...c,
+  auditTrail: [{ id: `caud_${c.code}`, at: TS, action: 'currency-created', detail: 'seed' }],
+}));
 
 export const SEED_ENTITY_CURRENCY_CONFIG: EntityCurrencyConfig = {
   entityId: PRIMARY_ENTITY_ID,
   baseCurrencyCode: DEFAULT_BASE_CURRENCY,
   allowedCurrencyCodes: ['USD', 'EUR', 'GBP', 'JOD', 'AED', 'JPY'],
+  reportingCurrencies: [],
   realizedFxGainAccountId: FX,
   realizedFxLossAccountId: FX,
   unrealizedFxGainAccountId: FX,
   unrealizedFxLossAccountId: FX,
+  currencyRoundingAccountId: FX,
   rateType: 'mid',
   allowManualRateOverride: true,
   requireOverrideReason: true,

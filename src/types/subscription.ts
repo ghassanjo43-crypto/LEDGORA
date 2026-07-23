@@ -66,4 +66,11 @@ export interface SubscriptionAuditEntry {
   at: string;
   actor: string;
   detail: string;
+  /**
+   * Present when the action was performed by a platform operator inside a
+   * subscriber workspace: identifies the authenticated administrator, the
+   * organization acted on and the operator-view mode. Never set for actions by
+   * the subscriber's own users.
+   */
+  operator?: import('@/lib/platformEntitlementOverride').OperatorAuditMetadata;
 }

@@ -13,6 +13,7 @@ import { useMeteringConfigStore } from '@/store/meteringConfigStore';
 import { useEntitlementStore } from '@/store/entitlementStore';
 import { useInventoryStore } from '@/store/inventoryStore';
 import { useManufacturingStore } from '@/store/manufacturingStore';
+import { useFixedAssetStore } from '@/store/fixedAssetStore';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Badge } from '@/components/ui/Badge';
 
@@ -31,6 +32,9 @@ export function AppLayout({ children }: { children: ReactNode }) {
     useBillingStore.getState().ensureSeeded();
     useMeteringConfigStore.getState().ensureSeeded();
     // Seed inventory master data only for organizations entitled to it.
+    // Deliberately the REAL owned modules (not the operator full-access
+    // override): viewing a subscriber must never seed module data they
+    // don't pay for into their workspace.
     const modules = useEntitlementStore.getState().effectiveModuleIds;
     if (modules.includes('inventory_basic')) {
       useInventoryStore.getState().ensureSeeded();
@@ -38,6 +42,10 @@ export function AppLayout({ children }: { children: ReactNode }) {
     // Seed manufacturing only for Manufacturing organizations.
     if (modules.includes('manufacturing_core')) {
       useManufacturingStore.getState().ensureSeeded();
+    }
+    // Seed fixed-asset categories only for entitled organizations.
+    if (modules.includes('fixed_assets')) {
+      useFixedAssetStore.getState().ensureSeeded();
     }
   }, []);
 

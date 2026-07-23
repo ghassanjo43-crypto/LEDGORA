@@ -188,6 +188,14 @@ export type ViewKey =
   | 'project-reports'
   | 'project-delivery'
   | 'projects'
+  // Journal Vouchers (source-document interface over the General Journal)
+  | 'journal-vouchers'
+  | 'journal-voucher-reports'
+  // Fixed Assets
+  | 'fixed-assets'
+  | 'fixed-asset-categories'
+  | 'fixed-assets-depreciation'
+  | 'fixed-assets-reports'
   // Inventory (shared module — Phase 1)
   | 'inventory-dashboard'
   | 'inventory-items'

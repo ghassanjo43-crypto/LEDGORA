@@ -25,6 +25,7 @@ import {
 } from '@/lib/accessControl';
 import { readAccessContext } from '@/lib/accessContext';
 import { useAccountSessionStore } from '@/store/accountSessionStore';
+import { useOperatorViewStore } from '@/store/operatorViewStore';
 import { readSessionState } from '@/store/sessionSnapshot';
 import { syncWorkspaceStorageMode } from '@/lib/freeDemoSession';
 import { platformAdminToolsAllowed } from '@/lib/platformAccess';
@@ -80,6 +81,8 @@ export function AppShell() {
   // Backend-verified where a backend exists; locally simulated otherwise.
   const platformRole = useEffectivePlatformRole();
   const demoActive = useAccountSessionStore((s) => s.demoActive);
+  // Re-run the gate when the operator enters/leaves subscriber-view mode.
+  const operatorViewing = useOperatorViewStore((s) => s.active);
   // Re-run the gate when the server session resolves or demands a new password.
   const backendStatus = useBackendSessionStore((s) => s.status);
   const backendUser = useBackendSessionStore((s) => s.user);
@@ -157,7 +160,7 @@ export function AppShell() {
       navigate(resolvePostLoginRoute(ctx), { replace: true });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [path, currentUserId, usersLen, orgId, subStatus, platformRole, demoActive, sessionResolving, mustChangePassword, sessionVerifiedUnauthenticated]);
+  }, [path, currentUserId, usersLen, orgId, subStatus, platformRole, demoActive, operatorViewing, sessionResolving, mustChangePassword, sessionVerifiedUnauthenticated]);
 
   // Paint nothing until the session verdict is in, so no surface flashes.
   if (sessionResolving) return <Blank />;
@@ -173,7 +176,9 @@ function Surface({ path, platformRole }: { path: string; platformRole: string })
   // The application is never rendered from a view key or a stored value — only
   // an active subscription or a running Free Demo reaches it.
   if (surface === 'app') {
-    if (!ctx.demoActive && ctx.subscriptionStatus !== 'active') return <Blank />;
+    // A verified operator in explicit subscriber-view mode may open the
+    // application even though they hold no subscription of their own.
+    if (!ctx.demoActive && ctx.subscriptionStatus !== 'active' && !ctx.operatorViewing) return <Blank />;
     return <App />;
   }
   if (surface === 'admin') {

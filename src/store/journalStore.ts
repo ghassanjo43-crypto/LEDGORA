@@ -12,14 +12,20 @@ import { createProjectSnapshot } from '@/lib/projectSnapshots';
 import { SEED_JOURNAL_ENTRIES } from '@/data/journalSeed';
 import { assertSubscriptionAllowsPosting } from '@/lib/subscriptionPostingGuard';
 import { getSubscriptionStatus } from './entitlementHooks';
+import { resolveAuditActor } from './platformFullAccess';
 import { useStore } from './useStore';
 import { useEntityStore } from './useEntityStore';
 import { useCostCenterStore } from './costCenterStore';
 import { useProjectStore } from './projectStore';
 import { generateId, nowIso } from '@/lib/utils';
 
-/** Placeholder for the signed-in user until real auth exists (matches Topbar). */
-const ACTOR = 'Finance Manager';
+/**
+ * Attribution for journal records. Normally the signed-in finance user
+ * (placeholder until real auth, matches Topbar); when a platform administrator
+ * acts inside a subscriber workspace in operator mode, records name the
+ * administrator — audit never impersonates the subscriber owner.
+ */
+const auditActor = (): string => resolveAuditActor('Finance Manager');
 
 export interface JournalActionResult {
   ok: boolean;
@@ -228,7 +234,7 @@ export const useJournalStore = create<JournalState>()(
           entryNumber,
           status: 'draft',
           createdAt: nowIso(),
-          updatedBy: ACTOR,
+          updatedBy: auditActor(),
           postedAt: '',
           postedBy: '',
           approvedBy: '',
@@ -258,7 +264,7 @@ export const useJournalStore = create<JournalState>()(
           entryNumber: existing.entryNumber,
           status: 'draft',
           createdAt: existing.createdAt,
-          updatedBy: ACTOR,
+          updatedBy: auditActor(),
           postedAt: '',
           postedBy: '',
           approvedBy: existing.approvedBy,
@@ -306,9 +312,9 @@ export const useJournalStore = create<JournalState>()(
           originalEntryId: '',
           reversalEntryId: '',
           createdAt: now,
-          createdBy: source.createdBy || ACTOR,
+          createdBy: source.createdBy || auditActor(),
           updatedAt: now,
-          updatedBy: ACTOR,
+          updatedBy: auditActor(),
           lines: source.lines.map((line, idx) => ({
             ...line,
             id: generateId('jl'),
@@ -358,9 +364,9 @@ export const useJournalStore = create<JournalState>()(
           reversalReference: source.entryNumber,
           lines,
           createdAt: now,
-          createdBy: ACTOR,
+          createdBy: auditActor(),
           updatedAt: now,
-          updatedBy: ACTOR,
+          updatedBy: auditActor(),
           postedAt: '',
           postedBy: '',
           approvedBy: '',
@@ -405,10 +411,10 @@ export const useJournalStore = create<JournalState>()(
                   difference: totals.difference,
                   status: 'posted',
                   postedAt: now,
-                  postedBy: ACTOR,
-                  approvedBy: e.approvedBy || ACTOR,
+                  postedBy: auditActor(),
+                  approvedBy: e.approvedBy || auditActor(),
                   updatedAt: now,
-                  updatedBy: ACTOR,
+                  updatedBy: auditActor(),
                 }
               : e,
           ),
@@ -432,9 +438,9 @@ export const useJournalStore = create<JournalState>()(
                   status: 'void',
                   reversalReference: `REV-${e.entryNumber}`,
                   voidedAt: now,
-                  voidedBy: ACTOR,
+                  voidedBy: auditActor(),
                   updatedAt: now,
-                  updatedBy: ACTOR,
+                  updatedBy: auditActor(),
                 }
               : e,
           ),
@@ -522,12 +528,12 @@ export const useJournalStore = create<JournalState>()(
           reversalReference: '',
           lines,
           createdAt: now,
-          createdBy: ACTOR,
+          createdBy: auditActor(),
           updatedAt: now,
-          updatedBy: ACTOR,
+          updatedBy: auditActor(),
           postedAt: now,
-          postedBy: ACTOR,
-          approvedBy: ACTOR,
+          postedBy: auditActor(),
+          approvedBy: auditActor(),
           voidedAt: '',
           voidedBy: '',
           originalEntryId: '',

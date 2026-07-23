@@ -1,8 +1,16 @@
 import type { Account } from '@/types';
 import type { Currency, EntityCurrencyConfig } from '@/types/currency';
+import { MAX_MONETARY_DECIMALS, MAX_RATE_DECIMALS } from '@/types/currency';
 import type { ExchangeRate } from '@/types/exchangeRate';
 import { isPostingAccount } from '@/lib/journalValidation';
 import { resolveExchangeRate } from '@/lib/exchangeRateResolution';
+import {
+  isDuplicateCurrencyCode,
+  isIncrementCompatible,
+  isValidMonetaryPrecision,
+  isValidRatePrecision,
+  validateCurrencyCodeFormat,
+} from '@/lib/currencyMaster';
 
 export interface CurrencyIssue {
   severity: 'error' | 'warning';
@@ -10,17 +18,36 @@ export interface CurrencyIssue {
   message: string;
 }
 
-/** Currency master validation (§54): unique code, valid decimals & symbol. */
+/**
+ * Currency master validation (§54): unique case-insensitive code (3-letter ISO
+ * for standard currencies, up to 12 chars for custom codes like USDT or
+ * INTERNAL-UNIT), monetary precision 0–18, exchange-rate precision 0–18, and a
+ * rounding increment compatible with the monetary precision.
+ */
 export function validateCurrency(currency: Currency, existing: Currency[]): CurrencyIssue[] {
   const issues: CurrencyIssue[] = [];
   const err = (rule: string, message: string) => issues.push({ severity: 'error', rule, message });
-  if (!/^[A-Za-z]{3}$/.test(currency.code.trim())) err('code', 'Currency code should be a 3-letter ISO code.');
-  else if (existing.some((c) => c.id !== currency.id && c.code.trim().toUpperCase() === currency.code.trim().toUpperCase())) err('code-unique', `Currency ${currency.code} already exists.`);
+  const codeError = validateCurrencyCodeFormat(currency.code, { isIso: currency.isIso });
+  if (codeError) err('code', codeError);
+  else if (isDuplicateCurrencyCode(currency.code, existing, currency.id)) err('code-unique', `Currency ${currency.code.trim().toUpperCase()} already exists.`);
   if (!currency.name.trim()) err('name', 'A currency name is required.');
   if (!currency.symbol.trim()) err('symbol', 'A currency symbol is required.');
-  if (currency.decimalPlaces < 0 || currency.decimalPlaces > 6 || !Number.isInteger(currency.decimalPlaces)) err('decimals', 'Decimal places must be an integer between 0 and 6.');
+  if (!isValidMonetaryPrecision(currency.decimalPlaces)) err('decimals', `Monetary decimal places must be an integer between 0 and ${MAX_MONETARY_DECIMALS}.`);
+  if (currency.exchangeRateDecimalPlaces !== undefined && !isValidRatePrecision(currency.exchangeRateDecimalPlaces)) err('rate-decimals', `Exchange-rate decimal places must be an integer between 0 and ${MAX_RATE_DECIMALS}.`);
   if (currency.roundingIncrement !== undefined && currency.roundingIncrement < 0) err('increment', 'Rounding increment cannot be negative.');
+  else if (isValidMonetaryPrecision(currency.decimalPlaces) && !isIncrementCompatible(currency.roundingIncrement, currency.decimalPlaces)) {
+    err('increment-precision', `Rounding increment ${currency.roundingIncrement} is not representable at ${currency.decimalPlaces} decimal places.`);
+  }
+  if (currency.effectiveFrom && currency.effectiveTo && currency.effectiveTo < currency.effectiveFrom) err('effective-window', 'Effective-to must not precede effective-from.');
   return issues;
+}
+
+/** Base-currency rules: exactly one, selected from active master records. */
+export function validateBaseCurrencySelection(code: string, currencies: Currency[]): CurrencyIssue[] {
+  const cur = currencies.find((c) => c.code.toUpperCase() === code.toUpperCase());
+  if (!cur) return [{ severity: 'error', rule: 'base-missing', message: `Base currency ${code} is not defined in the Currency Master.` }];
+  if (cur.status !== 'active') return [{ severity: 'error', rule: 'base-inactive', message: `Base currency ${code} is ${cur.status}; the base currency must be active.` }];
+  return [];
 }
 
 /** A currency is usable by an entity when enabled and active. */

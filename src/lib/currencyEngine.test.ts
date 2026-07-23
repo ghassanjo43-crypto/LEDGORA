@@ -177,7 +177,9 @@ describe('currency revaluation', () => {
 
   it('scenario 5 — revalues a USD receivable up by JOD 110 and posts a balanced gain', () => {
     // Reconfigure base to JOD so revaluation runs in JOD (3dp).
-    useCurrencyStore.getState().updateEntityConfig('primary', { baseCurrencyCode: 'JOD' });
+    // Base changes are guarded once postings exist — clear the seeded journal first.
+    useJournalStore.getState().replaceAll([]);
+    useCurrencyStore.getState().setBaseCurrency('primary', 'JOD');
     useExchangeRateStore.getState().createRate({ entityId: 'primary', fromCurrencyCode: 'USD', toCurrencyCode: 'JOD', rate: 0.720, effectiveDate: '2026-12-31' });
     postForeignReceivable(10000, 0.709); // carrying JOD 7090
 
@@ -199,7 +201,9 @@ describe('currency revaluation', () => {
   });
 
   it('excludes non-monetary accounts and blocks a duplicate posted run', () => {
-    useCurrencyStore.getState().updateEntityConfig('primary', { baseCurrencyCode: 'JOD' });
+    // Base changes are guarded once postings exist — clear the seeded journal first.
+    useJournalStore.getState().replaceAll([]);
+    useCurrencyStore.getState().setBaseCurrency('primary', 'JOD');
     useExchangeRateStore.getState().createRate({ entityId: 'primary', fromCurrencyCode: 'USD', toCurrencyCode: 'JOD', rate: 0.720, effectiveDate: '2026-12-31' });
     postForeignReceivable(10000, 0.709);
     const store = useCurrencyRevaluationStore.getState();
@@ -210,7 +214,9 @@ describe('currency revaluation', () => {
   });
 
   it('reversal is exact (swaps the revaluation journal)', () => {
-    useCurrencyStore.getState().updateEntityConfig('primary', { baseCurrencyCode: 'JOD' });
+    // Base changes are guarded once postings exist — clear the seeded journal first.
+    useJournalStore.getState().replaceAll([]);
+    useCurrencyStore.getState().setBaseCurrency('primary', 'JOD');
     useExchangeRateStore.getState().createRate({ entityId: 'primary', fromCurrencyCode: 'USD', toCurrencyCode: 'JOD', rate: 0.720, effectiveDate: '2026-12-31' });
     postForeignReceivable(10000, 0.709);
     const store = useCurrencyRevaluationStore.getState();

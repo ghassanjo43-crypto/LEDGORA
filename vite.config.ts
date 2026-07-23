@@ -21,6 +21,13 @@ export default defineConfig({
      */
     env: {
       VITE_LEDGORA_DEV_TOOLS: 'true',
+      /**
+       * Keep the suite hermetic: the browser-only adapters are the default under
+       * test, independent of any developer's uncommitted `.env.local` (which
+       * Vitest would otherwise load and use to flip on the backend adapter).
+       * Tests exercising the API path set this explicitly with `vi.stubEnv`.
+       */
+      VITE_API_URL: '',
     },
   },
   resolve: {

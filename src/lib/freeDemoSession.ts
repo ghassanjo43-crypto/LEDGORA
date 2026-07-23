@@ -15,6 +15,7 @@ import {
 } from './workspaceStorage';
 import { resetBusinessWorkspace, rehydrateBusinessWorkspace } from '@/store/businessWorkspace';
 import { useAccountSessionStore } from '@/store/accountSessionStore';
+import { useOperatorViewStore } from '@/store/operatorViewStore';
 
 /**
  * The storage mode a given account status runs in.
@@ -68,6 +69,9 @@ export function endFreeDemoWorkspace(): void {
 export function clearWorkspaceForSignOut(): void {
   setWorkspaceStorageMode('memory');
   useAccountSessionStore.getState().resetToDefault();
+  // Leaving the account also leaves any operator subscriber-view mode, so a
+  // later session never resumes viewing a tenant.
+  useOperatorViewStore.getState().exit();
   resetBusinessWorkspace();
   clearMemoryWorkspace();
 }

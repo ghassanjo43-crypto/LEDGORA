@@ -9,6 +9,8 @@ import { Button } from '@/components/ui/Button';
 import { Textarea } from '@/components/ui/Input';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { DisplayStatusBadge } from './JournalBadges';
+import { useJournalView } from '@/store/journalViewStore';
+import { useStore } from '@/store/useStore';
 import { JournalWorkflow } from './JournalWorkflow';
 import { JournalAttachmentList } from './JournalAttachmentList';
 import { JournalAuditTrail } from './JournalAuditTrail';
@@ -99,6 +101,7 @@ export function JournalDetailsPanel({
               <Row label="Date" value={formatDate(entry.entryDate)} />
               <Row label="Entity" value={entry.lines.find((l) => l.entityName)?.entityName || '—'} />
               <Row label="Reference" value={entry.reference || '—'} />
+              {entry.reference.startsWith('JV:') && <SourceVoucherLink reference={entry.reference} />}
               <Row label="Currency" value={`${entry.currency} @ ${entry.exchangeRate}`} />
               <Row label="Description" value={entry.description} wrap />
             </Section>
@@ -171,6 +174,25 @@ function Section({ title, children }: { title: string; children: React.ReactNode
       <h3 className="mb-2 flex items-center justify-between text-xs font-semibold uppercase tracking-wide text-slate-400">{title}</h3>
       <div className="space-y-1.5">{children}</div>
     </section>
+  );
+}
+
+/** Back-link from a generated entry to its originating Journal Voucher. */
+function SourceVoucherLink({ reference }: { reference: string }) {
+  const requestFocusVoucher = useJournalView((s) => s.requestFocusVoucher);
+  const setActiveView = useStore((s) => s.setActiveView);
+  const voucherNumber = reference.replace(/^JV:(REV:)?/u, '');
+  return (
+    <div className="flex items-center justify-between gap-3 text-sm">
+      <span className="shrink-0 text-slate-400">Source voucher</span>
+      <button
+        type="button"
+        className="focus-ring truncate rounded text-right font-medium text-indigo-600 underline-offset-2 hover:underline dark:text-indigo-400"
+        onClick={() => { requestFocusVoucher(voucherNumber); setActiveView('journal-vouchers'); }}
+      >
+        {voucherNumber}
+      </button>
+    </div>
   );
 }
 
