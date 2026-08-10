@@ -15,6 +15,7 @@ import { assignPlatformRole, createUser } from '../../src/services/userService.j
 import type { PlatformRole } from '../../src/db/schema.js';
 import { CSRF_HEADER, SESSION_COOKIE, CSRF_COOKIE } from '../../src/plugins/session.js';
 import { MemoryFileStorage } from '../../src/storage/fileStorage.js';
+import { UnavailableMailer, type Mailer } from '../../src/mail/mailer.js';
 
 export interface TestContext {
   app: FastifyInstance;
@@ -27,7 +28,17 @@ export interface TestContext {
 
 export const TEST_PASSWORD = 'Correct-Horse-9-Battery';
 
-export async function createTestContext(overrides: Partial<NodeJS.ProcessEnv> = {}): Promise<TestContext> {
+export interface TestContextOptions {
+  /** Register extra routes (e.g. a durable business endpoint) on the real app. */
+  extraRoutes?: (app: FastifyInstance) => Promise<void> | void;
+  /** Override the mail transport. Defaults to one that reports `unavailable`. */
+  mailer?: Mailer;
+}
+
+export async function createTestContext(
+  overrides: Partial<NodeJS.ProcessEnv> = {},
+  options: TestContextOptions = {},
+): Promise<TestContext> {
   const config = loadConfig({
     NODE_ENV: 'test',
     SESSION_SECRET: 'test-session-secret-value-32-chars',
@@ -35,6 +46,16 @@ export async function createTestContext(overrides: Partial<NodeJS.ProcessEnv> = 
     ACCOUNT_LOCK_THRESHOLD: '4',
     ACCOUNT_LOCK_MINUTES: '15',
     LOGIN_RATE_LIMIT_MAX: '50',
+    /*
+     * Tests are a development context, and the invitation flow cannot be
+     * exercised end to end without the link — the token is stored only as a
+     * digest.
+     *
+     * Deliberately NOT applied when a test builds a production config: that flag
+     * is refused at boot in production, which is the behaviour those tests exist
+     * to exercise. Forcing it on here would make them fail for the wrong reason.
+     */
+    ...(overrides.NODE_ENV === 'production' ? {} : { EXPOSE_INVITATION_TOKENS: 'true' }),
     ...overrides,
   } as NodeJS.ProcessEnv);
 
@@ -42,7 +63,15 @@ export async function createTestContext(overrides: Partial<NodeJS.ProcessEnv> = 
   assertMigrationsSucceeded(await migrateToLatest(db));
 
   const storage = new MemoryFileStorage();
-  const app = await buildApp({ config, db, fileStorage: storage });
+  const app = await buildApp({
+    config,
+    db,
+    fileStorage: storage,
+    // No transport by default: a test that does not care about mail must never
+    // depend on a network call, and `unavailable` is the honest default.
+    mailer: options.mailer ?? new UnavailableMailer(),
+    extraRoutes: options.extraRoutes,
+  });
   await app.ready();
 
   return {

@@ -14,9 +14,46 @@ type Timestamp = ColumnType<Date, Date | string | undefined, Date | string>;
 
 export type UserStatus = 'active' | 'disabled' | 'locked' | 'pending_verification';
 export type PlatformRole = 'super_admin' | 'billing_admin' | 'support';
-export type OrganizationRole = 'owner' | 'accountant' | 'member' | 'viewer';
+/**
+ * The authority ladder inside one subscriber organization, strongest first.
+ *
+ * `admin` and `manager` were added by migration 006. `admin` is the
+ * "Organization Admin" authority level — it may administer people inside its own
+ * tenant, which `owner` also may; the distinction is that ownership is a single
+ * transferable position tied to the organization's existence, while `admin` is a
+ * role any number of members may hold.
+ */
+export type OrganizationRole = 'owner' | 'admin' | 'manager' | 'accountant' | 'member' | 'viewer';
 export type MembershipStatus = 'active' | 'invited' | 'suspended';
-export type OrganizationStatus = 'active' | 'suspended' | 'closed';
+/**
+ * `archived` is the normal end state for a subscriber: out of circulation, every
+ * record retained, restorable by an administrator. `closed` predates it and is
+ * kept so existing rows keep their meaning.
+ */
+export type OrganizationStatus =
+  | 'active'
+  | 'suspended'
+  | 'archived'
+  /**
+   * Deletion has been requested and a purge date recorded. Distinct from
+   * `archived`: both are out of circulation with everything retained, but only
+   * this one is scheduled to be destroyed, and only this one can be cancelled.
+   */
+  | 'pending_deletion'
+  | 'closed';
+
+/**
+ * Is this real customer data?
+ *
+ * A THIRD axis, independent of lifecycle and subscription status. An archived
+ * tenant is still production; a trial subscription is not demo data. Only `test`
+ * and `demo` records may ever be permanently deleted, and `production` is the
+ * default so a forgotten field fails closed.
+ */
+export type DataClassification = 'production' | 'test' | 'demo';
+
+/** Lifecycle of a generated subscriber data export. */
+export type DataExportStatus = 'pending' | 'ready' | 'downloaded' | 'failed' | 'revoked';
 export type SubscriptionStatus =
   | 'draft'
   | 'pending_payment'
@@ -31,6 +68,32 @@ export type InvoiceStatus = 'issued' | 'proof_submitted' | 'paid' | 'rejected' |
 export type PaymentProofStatus = 'submitted' | 'approved' | 'rejected' | 'more_information_required';
 export type BillingCycle = 'monthly' | 'annual';
 
+/**
+ * A user-scoped permission override. `deny` is evaluated BEFORE `grant`, so an
+ * explicit refusal always wins — see `services/permissionService`.
+ */
+export type PermissionEffect = 'grant' | 'deny';
+
+/** What a single-use password token was issued for. */
+export type TokenPurpose = 'invitation' | 'reset';
+
+/**
+ * Where an applicant stands in the onboarding funnel.
+ *
+ * `dormant_applicant` is deliberately NOT here: dormancy is derived at read time
+ * from `last_activity_at`, so an inactive prospect is *shown* as dormant without
+ * losing the stage they actually reached — and comes back automatically the
+ * moment they sign in again.
+ */
+export type ApplicationStatus =
+  | 'registered_no_package'
+  | 'package_selected'
+  | 'awaiting_payment'
+  | 'pending_verification'
+  | 'active_subscriber'
+  | 'suspended'
+  | 'archived';
+
 export interface UsersTable {
   id: Generated<string>;
   email: string;
@@ -44,6 +107,25 @@ export interface UsersTable {
   failed_login_count: Generated<number>;
   locked_until: Timestamp | null;
   last_login_at: Timestamp | null;
+  /**
+   * When the CURRENT password stops being accepted. Set only for an
+   * administrator-issued temporary password; null means "does not expire".
+   */
+  password_expires_at: Timestamp | null;
+  disabled_at: Timestamp | null;
+  /** Soft deletion, for an account that must stay referenceable. */
+  deleted_at: Timestamp | null;
+  /**
+   * Set when personal fields have been replaced. The row and its id survive, so
+   * every historical foreign key — audit actor, proof uploader — keeps resolving.
+   */
+  anonymized_at: Timestamp | null;
+  /**
+   * Per-IDENTITY classification, deliberately NOT inherited from an
+   * organization. Somebody invited into a demo tenant may be a real user with a
+   * membership elsewhere; deleting that tenant must not make them disposable.
+   */
+  data_classification: Generated<DataClassification>;
   created_at: Timestamp;
   updated_at: Timestamp;
 }
@@ -68,6 +150,35 @@ export interface OrganizationsTable {
   fiscal_year_start: string;
   books_start_date: string | null;
   status: Generated<OrganizationStatus>;
+  /** Operator-only notes. Never returned on a customer-facing surface. */
+  internal_notes: string | null;
+  archived_at: Timestamp | null;
+  archived_by: string | null;
+  archive_reason: string | null;
+  /** A purge is requested first and carried out afterwards, never in one click. */
+  deletion_requested_at: Timestamp | null;
+  deletion_eligible_after: Timestamp | null;
+  /** The operator who requested the purge, for the audit trail. */
+  deletion_requested_by: string | null;
+  /** Why it was requested. Mandatory at request time. */
+  deletion_reason: string | null;
+  /**
+   * production | test | demo. Only the latter two may be permanently deleted.
+   * A database trigger refuses any move away from `production`.
+   */
+  data_classification: Generated<DataClassification>;
+  classified_production_at: Timestamp;
+  classified_by: string | null;
+  /**
+   * Set inside the deletion transaction, under this row's lock. A tenant write
+   * arriving mid-destruction is refused rather than creating a row that belongs
+   * to an organization which is about to stop existing.
+   */
+  deletion_in_progress: Generated<boolean>;
+  classification_reason: string | null;
+  /** A hard block no eligibility calculation may override. */
+  legal_hold: Generated<boolean>;
+  legal_hold_reason: string | null;
   created_at: Timestamp;
   updated_at: Timestamp;
 }
@@ -115,6 +226,10 @@ export interface SubscriptionsTable {
   grace_ends_at: Timestamp | null;
   user_limit: number | null;
   entity_limit: number | null;
+  /** Per-tenant storage override; null falls back to the plan's own limit. */
+  storage_limit: ColumnType<string | null, string | number | null | undefined, string | number | null>;
+  /** Optional modules bought ON TOP of the plan. jsonb array of module ids. */
+  extra_modules: ColumnType<string[], string | string[] | undefined, string | string[]>;
   payment_reference: string | null;
   created_at: Timestamp;
   updated_at: Timestamp;
@@ -199,6 +314,234 @@ export interface AuthSessionsTable {
   created_at: Timestamp;
 }
 
+/**
+ * One row per registered customer, created with the account itself. This is the
+ * record the administrator's applicant roster is built on — it exists long
+ * before an organization, a package or a subscription does.
+ */
+export interface SubscriptionApplicationsTable {
+  id: Generated<string>;
+  /** Unique — one application per account. */
+  user_id: string;
+  organization_id: string | null;
+  selected_plan_id: string | null;
+  subscription_id: string | null;
+  status: Generated<ApplicationStatus>;
+  registered_at: Timestamp;
+  package_selected_at: Timestamp | null;
+  payment_started_at: Timestamp | null;
+  proof_uploaded_at: Timestamp | null;
+  activated_at: Timestamp | null;
+  last_activity_at: Timestamp;
+  /** How the applicant arrived: `self_registration`, `backfill`, … */
+  source: Generated<string>;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+}
+
+/**
+ * A single-use password reset link.
+ *
+ * Only the SHA-256 hash is stored — the same rule `auth_sessions` follows. A
+ * reset link is a bearer credential, so the database must not hold anything that
+ * could be replayed if it leaked.
+ */
+export interface PasswordResetTokensTable {
+  id: Generated<string>;
+  user_id: string;
+  token_hash: string;
+  expires_at: Timestamp;
+  used_at: Timestamp | null;
+  /** The operator who issued it, when an administrator did. */
+  issued_by_user_id: string | null;
+  /**
+   * Which act this token serves. `invitation` is first-time password setup for
+   * an account that has never had a usable one; `reset` replaces an existing
+   * password. The redemption path is the same, but the audit trail is not.
+   */
+  purpose: Generated<TokenPurpose>;
+  /**
+   * Withdrawn by an administrator before it was used. Distinct from `used_at`:
+   * a revoked token was never redeemed, and conflating the two would record a
+   * cancellation as if the recipient had acted on it.
+   */
+  revoked_at: Timestamp | null;
+  created_at: Timestamp;
+}
+
+/**
+ * One administrator's decision about one person's access to one action, inside
+ * one organization.
+ *
+ * Rows here are the ONLY user-scoped permission state in the system. They are
+ * never consulted directly: `services/permissionService` resolves them against
+ * the role template and the organization's entitlement, in that order, and a row
+ * whose module the tenant no longer owns is refused rather than deleted.
+ */
+export interface UserPermissionOverridesTable {
+  id: Generated<string>;
+  user_id: string;
+  organization_id: string;
+  /** A subject id from `config/permissionCatalog`. */
+  subject: string;
+  /** An action id from `config/permissionCatalog`. */
+  action: string;
+  effect: PermissionEffect;
+  reason: string | null;
+  granted_by_user_id: string | null;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+}
+
+/**
+ * The RESOLVED entitlement for one organization.
+ *
+ * Derived state, recomputed by `recalculateEntitlements` from the tenant's
+ * subscription and plan — never edited directly and never a second source of
+ * truth. It exists so an entitlement read is one indexed row rather than a
+ * multi-join, and so a package change has something concrete to invalidate.
+ */
+export interface OrganizationEntitlementsTable {
+  id: Generated<string>;
+  organization_id: string;
+  subscription_id: string | null;
+  plan_id: string | null;
+  plan_code: string | null;
+  edition: string | null;
+  modules: ColumnType<string[], string | string[] | undefined, string | string[]>;
+  user_limit: number | null;
+  entity_limit: number | null;
+  storage_limit: ColumnType<string | null, string | number | null | undefined, string | number | null>;
+  status: Generated<string>;
+  active: Generated<boolean>;
+  starts_at: Timestamp | null;
+  expires_at: Timestamp | null;
+  computed_at: Timestamp;
+  updated_at: Timestamp;
+}
+
+/**
+ * Package history — append-only.
+ *
+ * The subscription row carries only the plan in force NOW, so "what did this
+ * tenant have before, and who changed it?" needs its own record. Kept for the
+ * life of the organization: a downgrade must stay reconstructable.
+ */
+export interface SubscriptionPackageChangesTable {
+  id: Generated<string>;
+  organization_id: string;
+  subscription_id: string | null;
+  previous_plan_id: string | null;
+  new_plan_id: string | null;
+  previous_plan_code: string | null;
+  new_plan_code: string | null;
+  previous_status: string | null;
+  new_status: string | null;
+  previous_modules: ColumnType<string[], string | string[] | undefined, string | string[]>;
+  new_modules: ColumnType<string[], string | string[] | undefined, string | string[]>;
+  previous_user_limit: number | null;
+  new_user_limit: number | null;
+  direction: Generated<string>;
+  effective_at: Timestamp;
+  reason: string;
+  changed_by_user_id: string | null;
+  created_at: Timestamp;
+}
+
+/**
+ * A generated subscriber data export.
+ *
+ * Only the SHA-256 hash of the download token is stored — a download link is a
+ * bearer credential, and the same rule that governs `auth_sessions` and
+ * `password_reset_tokens` applies here.
+ */
+export interface SubscriberDataExportsTable {
+  id: Generated<string>;
+  organization_id: string;
+  requested_by: string | null;
+  status: Generated<DataExportStatus>;
+  token_hash: string;
+  expires_at: Timestamp;
+  /** The generated JSON. Built by an allow-list projection, never `SELECT *`. */
+  payload: ColumnType<Record<string, unknown> | null, string | null | undefined, string | null>;
+  byte_size: number | null;
+  section_counts: ColumnType<Record<string, number>, string | undefined, string>;
+  error_message: string | null;
+  first_downloaded_at: Timestamp | null;
+  download_count: Generated<number>;
+  revoked_at: Timestamp | null;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+}
+
+/**
+ * What survives a tenant's destruction.
+ *
+ * No foreign key to `organizations` — the row it would point at is the thing
+ * being deleted. Counts and identifiers only: never accounting content, document
+ * bodies, credentials, hashes or invitation secrets. The question this answers
+ * is "was this destroyed, by whom, and how much of it", not "what did it say".
+ */
+export interface SubscriberDeletionTombstonesTable {
+  id: Generated<string>;
+  operation_id: string;
+  request_id: string | null;
+  organization_id: string;
+  deleted_by_user_id: string | null;
+  legal_name: string;
+  deleted_by_email: string | null;
+  classification_at_deletion: string;
+  reason: string;
+  previewed_at: Timestamp;
+  executed_at: Generated<Timestamp>;
+  removed_counts: ColumnType<Record<string, number>, string | undefined, string>;
+  identities_deleted: Generated<string[]>;
+  identities_retained: Generated<string[]>;
+  /** Rows in this database. `completed | failed`. */
+  database_deletion_status: Generated<string>;
+  /**
+   * The tenant's accounting books. Always `no_server_workspace` in this
+   * deployment — they live in browser storage, so the server has none to delete.
+   */
+  workspace_deletion_status: Generated<string>;
+  /** Objects in file storage. `none | pending | completed | failed`. */
+  external_cleanup_status: Generated<string>;
+  /** The aggregate of the three above. */
+  outcome: string;
+  failure_summary: string | null;
+  created_at: Generated<Timestamp>;
+}
+
+/** Durable intent to delete an external object. Written before the row naming it. */
+export interface FileCleanupQueueTable {
+  id: Generated<string>;
+  operation_id: string;
+  organization_id: string;
+  storage_key: string;
+  source_table: string;
+  source_id: string | null;
+  status: Generated<'pending' | 'completed' | 'failed'>;
+  attempts: Generated<number>;
+  last_error: string | null;
+  last_attempted_at: Timestamp | null;
+  completed_at: Timestamp | null;
+  created_at: Generated<Timestamp>;
+}
+
+/** One confirmed cleanup run. Makes a replayed confirmation idempotent. */
+export interface CleanupOperationsTable {
+  operation_id: string;
+  requested_by_user_id: string | null;
+  preview_digest: string;
+  organization_ids: string[];
+  reason: string;
+  previewed_at: Timestamp;
+  status: Generated<'pending' | 'completed' | 'failed'>;
+  result: ColumnType<Record<string, unknown> | null, string | null | undefined, string | null>;
+  created_at: Generated<Timestamp>;
+  completed_at: Timestamp | null;
+}
+
 export interface AuditLogsTable {
   id: Generated<string>;
   actor_user_id: string | null;
@@ -225,7 +568,16 @@ export interface Database {
   billing_settings: BillingSettingsTable;
   bank_details: BankDetailsTable;
   auth_sessions: AuthSessionsTable;
+  subscription_applications: SubscriptionApplicationsTable;
+  password_reset_tokens: PasswordResetTokensTable;
+  organization_entitlements: OrganizationEntitlementsTable;
+  subscription_package_changes: SubscriptionPackageChangesTable;
+  user_permission_overrides: UserPermissionOverridesTable;
+  subscriber_data_exports: SubscriberDataExportsTable;
   audit_logs: AuditLogsTable;
+  subscriber_deletion_tombstones: SubscriberDeletionTombstonesTable;
+  file_cleanup_queue: FileCleanupQueueTable;
+  cleanup_operations: CleanupOperationsTable;
 }
 
 export type User = Selectable<UsersTable>;

@@ -15,8 +15,12 @@ import type { Database, User } from '../db/schema.js';
 import { checkPasswordPolicy, hashPassword, verifyPassword } from '../lib/password.js';
 import { writeAuditLog, type AuditContext } from '../lib/audit.js';
 import { errors } from '../lib/errors.js';
-import { createUser, findUserByEmail, getPlatformRoles, normaliseEmail } from './userService.js';
+import { findUserByEmail, getPlatformRoles, insertUser, normaliseEmail } from './userService.js';
+import { ensureApplication, touchApplicationActivity } from './applicantService.js';
 import { revokeAllUserSessions } from './sessionService.js';
+// THE activation rule, defined once. Both credential paths reach it — see
+// `memberService.activateInvitedMemberships`.
+import { activateInvitedMemberships } from './memberService.js';
 
 /**
  * A real Argon2id hash of a random value. Verifying against it when the account
@@ -36,32 +40,49 @@ export interface LoginResult {
   platformRoles: string[];
 }
 
+/**
+ * Register a customer.
+ *
+ * The account and its applicant record are written in ONE transaction. If the
+ * applicant record cannot be created the registration is rolled back and the
+ * customer is told to try again — an account that no administrator can see is
+ * worse than no account, because the prospect is then invisible to the business
+ * while believing they have signed up.
+ */
 export async function registerUser(
   db: Kysely<Database>,
-  input: { email: string; password: string; fullName: string },
+  input: { email: string; password: string; fullName: string; source?: string },
   context: AuditContext = {},
 ): Promise<User> {
   const policy = checkPasswordPolicy(input.password, { email: input.email, fullName: input.fullName });
   if (!policy.ok) throw errors.passwordPolicy(policy.problems);
 
-  const user = await createUser(db, {
-    email: input.email,
-    password: input.password,
-    fullName: input.fullName,
-    // Self-registered customers are active; email verification is a separate
-    // seam (see routes/auth verify-email) and does not block sign-in today.
-    status: 'active',
-  });
+  // Hash outside the transaction — Argon2 must not hold a connection open.
+  const passwordHash = await hashPassword(input.password);
 
-  await writeAuditLog(db, {
-    ...context,
-    actorUserId: user.id,
-    action: 'auth.register',
-    targetType: 'user',
-    targetId: user.id,
-    metadata: { email: user.email },
+  return db.transaction().execute(async (trx) => {
+    const user = await insertUser(trx, {
+      email: input.email,
+      passwordHash,
+      fullName: input.fullName,
+      // Self-registered customers are active; email verification is a separate
+      // seam (see routes/auth verify-email) and does not block sign-in today.
+      status: 'active',
+    });
+
+    // Same transaction: the prospect is an applicant from the moment they exist.
+    await ensureApplication(trx, user.id, { source: input.source ?? 'self_registration' });
+
+    await writeAuditLog(trx, {
+      ...context,
+      actorUserId: user.id,
+      action: 'auth.register',
+      targetType: 'user',
+      targetId: user.id,
+      metadata: { email: user.email },
+    });
+    return user;
   });
-  return user;
 }
 
 export async function authenticate(
@@ -140,6 +161,28 @@ export async function authenticate(
     throw errors.invalidCredentials();
   }
 
+  /*
+   * The password is correct — but an administrator-issued temporary credential
+   * has a deadline, and honouring it is the difference between "expires after a
+   * configurable period" and a promise nobody keeps.
+   *
+   * Checked AFTER verification on purpose: telling an attacker "that account's
+   * temporary password expired" before they have proven they know it would leak
+   * account state. The failure counter is not incremented, because the credential
+   * was right; this is not a failed attempt.
+   */
+  if (user.password_expires_at && new Date(user.password_expires_at).getTime() <= Date.now()) {
+    await writeAuditLog(db, {
+      ...context,
+      actorUserId: user.id,
+      action: 'auth.login_failed',
+      targetType: 'user',
+      targetId: user.id,
+      metadata: { reason: 'temporary_password_expired' },
+    });
+    throw errors.passwordExpired();
+  }
+
   // Success: clear the failure counter and lift any expired lock.
   const refreshed = await db
     .updateTable('users')
@@ -153,6 +196,9 @@ export async function authenticate(
     .where('id', '=', user.id)
     .returningAll()
     .executeTakeFirstOrThrow();
+
+  // Signing in ends dormancy. A no-op for operators, who hold no application.
+  await touchApplicationActivity(db, user.id);
 
   const platformRoles = await getPlatformRoles(db, user.id);
   await writeAuditLog(db, {
@@ -186,25 +232,58 @@ export async function changePassword(
     throw errors.validation('The new password must be different from the current one.');
   }
 
-  await db
-    .updateTable('users')
-    .set({
-      password_hash: await hashPassword(input.newPassword),
-      must_change_password: false,
-      updated_at: new Date(),
-    })
-    .where('id', '=', user.id)
-    .execute();
+  /*
+   * Was this the exchange of an administrator-issued credential?
+   *
+   * `must_change_password` is set only by an administrator handing out a
+   * temporary password, so replacing it is the completion of an onboarding act
+   * somebody else started — the same milestone redeeming an invitation link
+   * reaches. A VOLUNTARY password change by someone who already has a working
+   * password is not onboarding and activates nothing.
+   */
+  const completingOnboarding = user.must_change_password;
 
-  // A password change invalidates every other session.
-  const revoked = await revokeAllUserSessions(db, user.id, { exceptSessionId: input.currentSessionId });
+  // Argon2 before the transaction — an expensive KDF must not hold a connection.
+  const passwordHash = await hashPassword(input.newPassword);
 
-  await writeAuditLog(db, {
-    ...context,
-    actorUserId: user.id,
-    action: 'auth.password_changed',
-    targetType: 'user',
-    targetId: user.id,
-    metadata: { revokedSessions: revoked },
+  await db.transaction().execute(async (trx) => {
+    await trx
+      .updateTable('users')
+      .set({
+        password_hash: passwordHash,
+        must_change_password: false,
+        // The customer has chosen their own password, so the temporary
+        // credential's deadline no longer applies to anything.
+        password_expires_at: null,
+        updated_at: new Date(),
+      })
+      .where('id', '=', user.id)
+      .execute();
+
+    /*
+     * Accepting the invitation. Runs in the same transaction as the password
+     * change, so an account can never end up with a chosen password and a
+     * membership still stuck at `invited` — or the reverse.
+     */
+    const activatedCount = completingOnboarding
+      ? await activateInvitedMemberships(trx, user.id, {
+          ...context,
+          trigger: 'temporary_password_replaced',
+        })
+      : 0;
+
+    // A password change invalidates every other session.
+    const revokedCount = await revokeAllUserSessions(trx, user.id, {
+      exceptSessionId: input.currentSessionId,
+    });
+
+    await writeAuditLog(trx, {
+      ...context,
+      actorUserId: user.id,
+      action: 'auth.password_changed',
+      targetType: 'user',
+      targetId: user.id,
+      metadata: { revokedSessions: revokedCount, activatedMemberships: activatedCount },
+    });
   });
 }

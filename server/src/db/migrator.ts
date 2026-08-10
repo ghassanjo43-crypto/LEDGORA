@@ -13,10 +13,24 @@ import { Migrator, type Migration, type MigrationProvider, type MigrationResultS
 type AnyKysely = import('kysely').Kysely<any>;
 import * as initialSchema from './migrations/001_initial_schema.js';
 import * as referenceData from './migrations/002_reference_data.js';
+import * as subscriptionApplications from './migrations/003_subscription_applications.js';
+import * as adminConsole from './migrations/004_admin_console.js';
+import * as retentionAndDeletion from './migrations/005_retention_and_deletion.js';
+import * as userPermissions from './migrations/006_user_permissions.js';
+import * as subscriberClosure from './migrations/007_subscriber_closure.js';
+import * as dataClassification from './migrations/008_data_classification.js';
+import * as disposableCleanup from './migrations/009_disposable_cleanup.js';
 
 const MIGRATIONS: Record<string, Migration> = {
   '001_initial_schema': initialSchema,
   '002_reference_data': referenceData,
+  '003_subscription_applications': subscriptionApplications,
+  '004_admin_console': adminConsole,
+  '005_retention_and_deletion': retentionAndDeletion,
+  '006_user_permissions': userPermissions,
+  '007_subscriber_closure': subscriberClosure,
+  '008_data_classification': dataClassification,
+  '009_disposable_cleanup': disposableCleanup,
 };
 
 class StaticMigrationProvider implements MigrationProvider {

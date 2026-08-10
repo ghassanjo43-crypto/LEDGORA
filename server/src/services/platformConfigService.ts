@@ -9,6 +9,7 @@ import type { Kysely } from 'kysely';
 import type { Database, SubscriptionStatus } from '../db/schema.js';
 import { writeAuditLog, type AuditContext } from '../lib/audit.js';
 import { errors } from '../lib/errors.js';
+import { advanceApplicationForOrganization } from './applicantService.js';
 
 export interface AdminContext extends AuditContext {
   actorUserId: string;
@@ -391,6 +392,22 @@ export async function changeSubscriptionLifecycle(
     }
 
     await trx.updateTable('subscriptions').set(patch as never).where('id', '=', subscriptionId).execute();
+
+    // Keep the applicant record in step with a manual lifecycle change, so the
+    // roster and the subscription can never tell the operator different stories.
+    if (action === 'activate' || action === 'renew') {
+      await advanceApplicationForOrganization(trx, subscription.organization_id, {
+        status: 'active_subscriber',
+        subscriptionId,
+        selectedPlanId: subscription.plan_id,
+        activatedAt: (patch.starts_at as Date | undefined) ?? now,
+      });
+    } else if (action === 'suspend') {
+      await advanceApplicationForOrganization(trx, subscription.organization_id, { status: 'suspended' });
+    } else {
+      // Cancelled: the tenant keeps their package but holds no live subscription.
+      await advanceApplicationForOrganization(trx, subscription.organization_id, { status: 'package_selected' });
+    }
 
     await writeAuditLog(trx, {
       ...context,

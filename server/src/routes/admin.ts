@@ -8,7 +8,7 @@
  */
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { requirePlatformCapability } from '../guards/platform.js';
+import { capabilitiesFor, requirePlatformCapability } from '../guards/platform.js';
 import { setUserStatus, toPublicUser } from '../services/userService.js';
 import { listAuditLogs } from '../lib/audit.js';
 import { errors } from '../lib/errors.js';
@@ -29,7 +29,15 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
   /* ── Who am I (administrator view) ────────────────────────────────────── */
   app.get('/api/admin/me', { preHandler: requirePlatformCapability('view-admin') }, async (request, reply) => {
     const { user, platformRoles } = request.principal!;
-    return reply.send({ user: toPublicUser(user, platformRoles) });
+    return reply.send({
+      user: toPublicUser(user, platformRoles),
+      /**
+       * The console uses this to hide controls the caller cannot use. It is a
+       * COURTESY, not authorization — every route re-checks its own capability,
+       * so a client that ignores or forges this list gains nothing.
+       */
+      capabilities: capabilitiesFor(platformRoles),
+    });
   });
 
   /* ── Users ────────────────────────────────────────────────────────────── */

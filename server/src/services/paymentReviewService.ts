@@ -18,6 +18,7 @@ import type { Kysely, Transaction } from 'kysely';
 import type { Database, SubscriptionStatus } from '../db/schema.js';
 import { writeAuditLog, type AuditContext } from '../lib/audit.js';
 import { errors } from '../lib/errors.js';
+import { advanceApplicationForOrganization } from './applicantService.js';
 
 export interface ReviewerContext extends AuditContext {
   reviewerUserId: string;
@@ -127,6 +128,15 @@ export async function approvePaymentProof(
       })
       .where('id', '=', subscription.id)
       .execute();
+
+    // Stage 5 — the applicant becomes a subscriber, in the same transaction
+    // that grants the entitlement.
+    await advanceApplicationForOrganization(trx, invoice.organization_id, {
+      status: 'active_subscriber',
+      selectedPlanId: subscription.plan_id,
+      subscriptionId: subscription.id,
+      activatedAt: startsAt,
+    });
 
     const appliedModules: string[] = plan
       ? typeof plan.module_entitlements === 'string'

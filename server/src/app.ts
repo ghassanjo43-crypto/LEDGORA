@@ -18,8 +18,20 @@ import { healthRoutes } from './routes/health.js';
 import { authRoutes } from './routes/auth.js';
 import { adminRoutes } from './routes/admin.js';
 import { subscriptionRoutes } from './routes/subscriptions.js';
+import { memberRoutes } from './routes/members.js';
 import { adminBillingRoutes } from './routes/adminBilling.js';
+import { adminApplicantRoutes } from './routes/adminApplicants.js';
+import { adminMemberRoutes } from './routes/adminMembers.js';
+import { adminSubscriberRoutes } from './routes/adminSubscribers.js';
+import { adminDeletionRoutes } from './routes/adminDeletion.js';
+import { adminUserRoutes } from './routes/adminUsers.js';
+import { adminClosureRoutes } from './routes/adminClosure.js';
+import { orgAdminUserRoutes } from './routes/orgAdminUsers.js';
+import { decoratePermissions } from './guards/permissions.js';
+import { enforcePersistenceEntitlement } from './guards/persistence.js';
+import { enforcePasswordChange } from './guards/passwordChange.js';
 import { LocalFileStorage, type FileStorage } from './storage/fileStorage.js';
+import { createMailer, type Mailer } from './mail/mailer.js';
 import { AppError, toErrorResponse } from './lib/errors.js';
 
 declare module 'fastify' {
@@ -28,6 +40,11 @@ declare module 'fastify' {
     config: AppConfig;
     /** Payment-proof bytes. Never PostgreSQL — see storage/fileStorage. */
     fileStorage: FileStorage;
+    /**
+     * Outbound mail. Defaults to a transport that reports itself unavailable, so
+     * nothing ever claims a message was sent when no provider is configured.
+     */
+    mailer: Mailer;
   }
 }
 
@@ -36,9 +53,25 @@ export interface BuildAppOptions {
   db: Db;
   /** Override the storage adapter (tests use the in-memory one). */
   fileStorage?: FileStorage;
+  /** Override the mail transport (tests use a recording one). */
+  mailer?: Mailer;
+  /**
+   * Extra routes registered after the real ones, under the same hooks and error
+   * handler. Ledgora's accounting data lives in the browser workspace today, so
+   * there is no durable business endpoint yet to prove the persistence guard
+   * against — this seam lets the tests register one and exercise the guard for
+   * real rather than only unit-testing its classifier.
+   */
+  extraRoutes?: (app: FastifyInstance) => Promise<void> | void;
 }
 
-export async function buildApp({ config, db, fileStorage }: BuildAppOptions): Promise<FastifyInstance> {
+export async function buildApp({
+  config,
+  db,
+  fileStorage,
+  mailer,
+  extraRoutes,
+}: BuildAppOptions): Promise<FastifyInstance> {
   const app = Fastify({
     // Render terminates TLS upstream; trust the proxy so `request.ip` is the
     // real client address (rate limiting and audit logs depend on it).
@@ -51,7 +84,18 @@ export async function buildApp({ config, db, fileStorage }: BuildAppOptions): Pr
           level: config.isProduction ? 'info' : 'debug',
           // Never let a credential reach the log, even via an echoed header.
           redact: {
-            paths: ['req.headers.cookie', 'req.headers.authorization', 'req.body.password', 'req.body.newPassword', 'req.body.currentPassword'],
+            // `req.body.token` covers the invitation/reset endpoints, which carry
+            // a single-use credential in the body precisely so it stays out of
+            // `req.url` — and therefore out of this log — see routes/auth.
+            paths: [
+              'req.headers.cookie',
+              'req.headers.authorization',
+              'req.body.password',
+              'req.body.newPassword',
+              'req.body.currentPassword',
+              'req.body.token',
+              'req.body.temporaryPassword',
+            ],
             censor: '[redacted]',
           },
         },
@@ -60,6 +104,7 @@ export async function buildApp({ config, db, fileStorage }: BuildAppOptions): Pr
   app.decorate('db', db);
   app.decorate('config', config);
   app.decorate('fileStorage', fileStorage ?? new LocalFileStorage(config.UPLOAD_DIRECTORY));
+  app.decorate('mailer', mailer ?? createMailer(config));
 
   /**
    * Tolerate an empty body on `application/json` requests. Browser clients
@@ -124,6 +169,32 @@ export async function buildApp({ config, db, fileStorage }: BuildAppOptions): Pr
 
   await app.register(sessionPlugin, { config });
 
+  /**
+   * `request.permissions` — where a permission guard leaves what it resolved, so
+   * a handler needing both "may they?" and "what may they?" pays for one
+   * resolution and cannot get two different answers. See guards/permissions.
+   */
+  decoratePermissions(app);
+
+  /**
+   * Durable-write authorization, applied to EVERY route.
+   *
+   * Registered as a global hook rather than per-route on purpose: a Free Preview
+   * customer must not be able to make a business record permanent through an
+   * endpoint whose author forgot to attach a guard. Runs after the session
+   * plugin, so `request.principal` is resolved. See guards/persistence.
+   */
+  /**
+   * Forced password change, applied to EVERY route.
+   *
+   * Registered before the persistence guard because it is the stricter gate: a
+   * session holding an unreplaced temporary credential should be told to change
+   * its password, not told its subscription is inactive. See guards/passwordChange.
+   */
+  app.addHook('preHandler', enforcePasswordChange);
+
+  app.addHook('preHandler', enforcePersistenceEntitlement);
+
   /* ── Central error handling ───────────────────────────────────────────── */
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof AppError) {
@@ -154,7 +225,16 @@ export async function buildApp({ config, db, fileStorage }: BuildAppOptions): Pr
   await app.register(authRoutes);
   await app.register(adminRoutes);
   await app.register(subscriptionRoutes);
+  await app.register(memberRoutes);
   await app.register(adminBillingRoutes);
+  await app.register(adminApplicantRoutes);
+  await app.register(adminMemberRoutes);
+  await app.register(adminSubscriberRoutes);
+  await app.register(adminDeletionRoutes);
+  await app.register(adminUserRoutes);
+  await app.register(adminClosureRoutes);
+  await app.register(orgAdminUserRoutes);
+  if (extraRoutes) await extraRoutes(app);
 
   return app;
 }

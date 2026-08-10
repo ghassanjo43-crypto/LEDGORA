@@ -14,6 +14,7 @@ import type { Database, SubscriptionStatus } from '../db/schema.js';
 import { generatePaymentReference } from '../lib/tokens.js';
 import { writeAuditLog, type AuditContext } from '../lib/audit.js';
 import { errors } from '../lib/errors.js';
+import { advanceApplicationForUser, ensureApplication } from './applicantService.js';
 
 /** How many times to retry when a generated identifier collides. */
 const UNIQUE_RETRY_LIMIT = 5;
@@ -133,6 +134,16 @@ export async function selectPlan(
       id = created.id;
     }
 
+    // Stage 2 — the applicant has chosen a package but not started paying.
+    await ensureApplication(trx, input.userId, { source: 'plan_selected' });
+    await advanceApplicationForUser(trx, input.userId, {
+      status: 'package_selected',
+      organizationId: input.organizationId,
+      selectedPlanId: plan.id,
+      subscriptionId: id,
+      packageSelectedAt: new Date(),
+    });
+
     await writeAuditLog(trx, {
       ...context,
       actorUserId: input.userId,
@@ -243,6 +254,16 @@ export async function confirmSubscription(
           })
           .where('id', '=', subscription.id)
           .execute();
+
+        // Stage 3 — the bank-transfer process has started.
+        await ensureApplication(trx, input.userId, { source: 'subscription_confirmed' });
+        await advanceApplicationForUser(trx, input.userId, {
+          status: 'awaiting_payment',
+          organizationId: input.organizationId,
+          selectedPlanId: plan.id,
+          subscriptionId: subscription.id,
+          paymentStartedAt: new Date(),
+        });
 
         await writeAuditLog(trx, {
           ...context,

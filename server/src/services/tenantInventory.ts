@@ -1,0 +1,321 @@
+/**
+ * The authoritative inventory of everything an organization owns.
+ *
+ * ── Why this is data and not a hand-written delete sequence ──────────────────
+ * A purge written as a list of statements is correct exactly once: the day it is
+ * written. The next migration adds a tenant-owned table, nobody remembers to
+ * extend the purge, and the failure is silent — rows belonging to a destroyed
+ * tenant survive, or a foreign key aborts a destruction halfway through.
+ *
+ * So the inventory is a value. The purge iterates it, the preview counts it, and
+ * `tenantInventory.test.ts` compares it against the live database catalogue and
+ * FAILS when a new table references `organizations(id)` without a decision being
+ * recorded here. Forgetting becomes a red test instead of a data leak.
+ *
+ * ── Why cascade is not trusted ───────────────────────────────────────────────
+ * Most of these tables are ON DELETE CASCADE, so `DELETE FROM organizations`
+ * would appear to work. It is still wrong to rely on it:
+ *   · a cascade reports nothing, so the operator cannot be told what was
+ *     destroyed and the tombstone has no counts;
+ *   · a cascade cannot distinguish "delete this" from "null this out" for rows
+ *     that are shared or are audit evidence;
+ *   · it silently extends itself to tables added later, which is the exact
+ *     behaviour this module exists to prevent.
+ * Explicit deletion in a reviewed order is slower and knows what it did.
+ */
+import { sql, type Kysely } from 'kysely';
+import type { Database } from '../db/schema.js';
+
+/** What kind of thing this is, which decides what may be done to it. */
+export type OwnershipKind =
+  /** Belongs to exactly one organization and has no meaning without it. */
+  | 'authoritative'
+  /** Recomputable from authoritative rows; safe to drop. */
+  | 'derived'
+  /** Referenced by other tenants or by the platform; must survive. */
+  | 'shared'
+  /** Evidence of what happened; must survive the subject. */
+  | 'immutable_audit';
+
+export type Disposition =
+  | 'delete'
+  /** Keep the row, drop the link (FK is ON DELETE SET NULL). */
+  | 'detach'
+  /** Never touched by a tenant deletion. */
+  | 'retain'
+  /** Not a database row: an object in external storage. */
+  | 'external_cleanup';
+
+export interface TenantDependency {
+  table: keyof Database | 'external:payment_proof_files';
+  /** The column tying a row to its organization. */
+  ownershipKey: string;
+  kind: OwnershipKind;
+  disposition: Disposition;
+  /** Ascending. Children strictly before parents. */
+  order: number;
+  /** The label shown in the preview. */
+  label: string;
+  /** True when a row here can be reached from another organization. */
+  crossTenantReachable: boolean;
+  /** Why this disposition, in one sentence. */
+  rationale: string;
+}
+
+/**
+ * Deletion order, children first.
+ *
+ * The ordering constraints that actually matter:
+ *   · `payment_proofs` references `subscription_invoices`, so proofs go first.
+ *   · every organization-scoped table goes before `organizations` itself.
+ *   · `organization_memberships` goes before `organizations` but AFTER
+ *     everything keyed on a member, because member cleanup reads it.
+ *   · identities are considered only after the organization row is gone, so
+ *     "does this person still belong anywhere?" has its final answer.
+ */
+export const TENANT_DEPENDENCIES: readonly TenantDependency[] = [
+  {
+    table: 'external:payment_proof_files',
+    ownershipKey: 'payment_proofs.storage_key',
+    kind: 'authoritative',
+    disposition: 'external_cleanup',
+    order: 5,
+    label: 'Stored payment-proof files',
+    crossTenantReachable: false,
+    rationale:
+      'Object storage is not transactional with the database, so keys are recorded in the cleanup ledger before the rows naming them are deleted.',
+  },
+  {
+    table: 'payment_proofs',
+    ownershipKey: 'invoice_id → subscription_invoices.organization_id',
+    kind: 'authoritative',
+    disposition: 'delete',
+    order: 10,
+    label: 'Payment proofs',
+    crossTenantReachable: false,
+    rationale: 'Owned through its invoice; a proof has no meaning once the invoice is gone.',
+  },
+  {
+    table: 'subscription_invoices',
+    ownershipKey: 'organization_id',
+    kind: 'authoritative',
+    disposition: 'delete',
+    order: 20,
+    label: 'Subscription invoices',
+    crossTenantReachable: false,
+    rationale: 'Billing records of this tenant only. Retained for production tenants by the classification gate, not here.',
+  },
+  {
+    table: 'subscriber_data_exports',
+    ownershipKey: 'organization_id',
+    kind: 'authoritative',
+    disposition: 'delete',
+    order: 25,
+    label: 'Data export archives',
+    crossTenantReachable: false,
+    rationale:
+      'Its `payload` column holds a full JSON copy of the tenant. Leaving it behind would preserve exactly the business content the deletion is meant to remove.',
+  },
+  {
+    table: 'user_permission_overrides',
+    ownershipKey: 'organization_id',
+    kind: 'authoritative',
+    disposition: 'delete',
+    order: 30,
+    label: 'Per-user permission overrides',
+    crossTenantReachable: false,
+    rationale:
+      'Scoped to one organization even though it names a global user; the grant is meaningless once that organization is gone.',
+  },
+  {
+    table: 'subscription_package_changes',
+    ownershipKey: 'organization_id',
+    kind: 'authoritative',
+    disposition: 'delete',
+    order: 40,
+    label: 'Package change history',
+    crossTenantReachable: false,
+    rationale: 'History of this tenant’s own plan changes.',
+  },
+  {
+    table: 'organization_entitlements',
+    ownershipKey: 'organization_id',
+    kind: 'derived',
+    disposition: 'delete',
+    order: 50,
+    label: 'Resolved entitlements',
+    crossTenantReachable: false,
+    rationale: 'A recomputable cache of the subscription; never a source of truth.',
+  },
+  {
+    table: 'subscription_applications',
+    ownershipKey: 'organization_id',
+    kind: 'authoritative',
+    disposition: 'delete',
+    order: 60,
+    label: 'Onboarding applications',
+    crossTenantReachable: false,
+    rationale:
+      'FK is ON DELETE SET NULL, so a cascade would leave a detached applicant row behind. Deleted explicitly for that reason.',
+  },
+  {
+    table: 'organization_memberships',
+    ownershipKey: 'organization_id',
+    kind: 'authoritative',
+    disposition: 'delete',
+    order: 70,
+    label: 'Memberships',
+    crossTenantReachable: false,
+    rationale:
+      'The link, not the person. Deleting a membership must never be read as deleting the identity behind it.',
+  },
+  {
+    table: 'subscriptions',
+    ownershipKey: 'organization_id',
+    kind: 'authoritative',
+    disposition: 'delete',
+    order: 80,
+    label: 'Subscriptions',
+    crossTenantReachable: false,
+    rationale: 'One tenant’s billing relationship.',
+  },
+  {
+    table: 'organizations',
+    ownershipKey: 'id',
+    kind: 'authoritative',
+    disposition: 'delete',
+    order: 90,
+    label: 'The organization record',
+    crossTenantReachable: false,
+    rationale: 'The tenant itself, deleted only after everything keyed to it.',
+  },
+  {
+    table: 'audit_logs',
+    ownershipKey: 'organization_id',
+    kind: 'immutable_audit',
+    disposition: 'detach',
+    order: 100,
+    label: 'Audit entries',
+    crossTenantReachable: true,
+    rationale:
+      'ON DELETE SET NULL by design: the record that something was destroyed cannot be destroyed with it. Action, actor and timestamp survive; the tombstone carries the legal name so the trail stays readable.',
+  },
+  {
+    table: 'users',
+    ownershipKey: 'organization_memberships.user_id',
+    kind: 'shared',
+    disposition: 'retain',
+    order: 110,
+    label: 'Global identities',
+    crossTenantReachable: true,
+    rationale:
+      'Credentials belong to the global identity, never to one subscriber. Deleted only when separately proven orphaned and test/demo classified — see identity rules in cleanupService.',
+  },
+  {
+    table: 'auth_sessions',
+    ownershipKey: 'user_id',
+    kind: 'shared',
+    disposition: 'retain',
+    order: 120,
+    label: 'Sessions',
+    crossTenantReachable: true,
+    rationale:
+      'Keyed to a person, not a tenant. Revoked for members losing their last membership; a user active elsewhere keeps their access.',
+  },
+  {
+    table: 'password_reset_tokens',
+    ownershipKey: 'user_id',
+    kind: 'shared',
+    disposition: 'retain',
+    order: 130,
+    label: 'Password-reset and invitation tokens',
+    crossTenantReachable: true,
+    rationale: 'Deleted only alongside an identity that is itself being deleted.',
+  },
+  {
+    table: 'platform_user_roles',
+    ownershipKey: 'user_id',
+    kind: 'shared',
+    disposition: 'retain',
+    order: 140,
+    label: 'Platform operator roles',
+    crossTenantReachable: true,
+    rationale: 'Platform authority is global. Its presence is a non-waivable blocker, so this is never reached.',
+  },
+  {
+    table: 'subscription_plans',
+    ownershipKey: '(none)',
+    kind: 'shared',
+    disposition: 'retain',
+    order: 150,
+    label: 'Subscription plans',
+    crossTenantReachable: true,
+    rationale: 'Platform catalogue shared by every tenant.',
+  },
+  {
+    table: 'billing_settings',
+    ownershipKey: '(none)',
+    kind: 'shared',
+    disposition: 'retain',
+    order: 160,
+    label: 'Billing settings',
+    crossTenantReachable: true,
+    rationale: 'A platform-wide singleton, not tenant-owned despite naming an updating user.',
+  },
+  {
+    table: 'bank_details',
+    ownershipKey: '(none)',
+    kind: 'shared',
+    disposition: 'retain',
+    order: 170,
+    label: 'Bank details',
+    crossTenantReachable: true,
+    rationale: 'A platform-wide singleton.',
+  },
+];
+
+/** The tables a tenant deletion actually issues DELETE statements against, in order. */
+export const DELETION_SEQUENCE = TENANT_DEPENDENCIES.filter((d) => d.disposition === 'delete').sort(
+  (a, b) => a.order - b.order,
+);
+
+/**
+ * Tables holding rows keyed directly by `organization_id` that the preview
+ * counts. `payment_proofs` is reached through its invoice and is counted
+ * separately.
+ */
+export const DIRECTLY_OWNED_TABLES = [
+  'subscription_invoices',
+  'subscriber_data_exports',
+  'user_permission_overrides',
+  'subscription_package_changes',
+  'organization_entitlements',
+  'subscription_applications',
+  'organization_memberships',
+  'subscriptions',
+] as const;
+
+export type DirectlyOwnedTable = (typeof DIRECTLY_OWNED_TABLES)[number];
+
+/**
+ * Every table in the live database with a foreign key to `organizations(id)`.
+ *
+ * Read from the catalogue rather than from a list, so the inventory test is
+ * checking reality instead of checking another hand-written list against a
+ * hand-written list.
+ */
+export async function organizationReferencingTables(db: Kysely<Database>): Promise<string[]> {
+  const result = await sql<{ table_name: string }>`
+    SELECT DISTINCT tc.table_name
+    FROM information_schema.table_constraints tc
+    JOIN information_schema.constraint_column_usage ccu
+      ON ccu.constraint_name = tc.constraint_name
+     AND ccu.table_schema = tc.table_schema
+    WHERE tc.constraint_type = 'FOREIGN KEY'
+      AND ccu.table_name = 'organizations'
+      AND tc.table_schema = 'public'
+    ORDER BY tc.table_name
+  `.execute(db);
+
+  return result.rows.map((r) => r.table_name);
+}

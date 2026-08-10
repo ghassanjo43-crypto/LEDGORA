@@ -9,6 +9,7 @@ import type { Kysely, Transaction } from 'kysely';
 import type { Database, OrganizationRole } from '../db/schema.js';
 import { writeAuditLog, type AuditContext } from '../lib/audit.js';
 import { errors } from '../lib/errors.js';
+import { advanceApplicationForUser, ensureApplication } from './applicantService.js';
 
 export interface CreateOrganizationInput {
   legalName: string;
@@ -22,13 +23,30 @@ export interface CreateOrganizationInput {
   booksStartDate?: string;
 }
 
+/**
+ * The organization as the client adopts it.
+ *
+ * Complete on purpose: the browser mirrors this record verbatim (keeping THIS
+ * id), so any field omitted here is a field the client has to invent a default
+ * for — which is how a hydrated organization silently loses the industry and
+ * financial-year settings its owner typed in.
+ */
 export interface OrganizationSummary {
   id: string;
   legalName: string;
   tradingName: string | null;
   country: string;
+  registrationNumber: string | null;
+  taxNumber: string | null;
+  industry: string | null;
   baseCurrency: string;
+  fiscalYearStart: string;
+  booksStartDate: string | null;
   status: string;
+  createdAt: string;
+  /** The organization's owner — not necessarily the caller. */
+  ownerUserId: string | null;
+  /** The CALLER's role in this organization. */
   role: OrganizationRole;
 }
 
@@ -66,6 +84,11 @@ export async function createOrganization(
       .insertInto('organization_memberships')
       .values({ organization_id: organization.id, user_id: userId, role: 'owner', status: 'active' })
       .execute();
+
+    // Attach the tenant to the applicant record. `ensureApplication` first, so a
+    // pre-backfill account still gets one rather than silently losing the link.
+    await ensureApplication(trx, userId, { source: 'organization_created' });
+    await advanceApplicationForUser(trx, userId, { organizationId: organization.id });
 
     await writeAuditLog(trx, {
       ...context,
@@ -109,13 +132,28 @@ export async function getCurrentOrganization(
     .executeTakeFirst();
   if (!organization) return null;
 
+  const owner = await db
+    .selectFrom('organization_memberships')
+    .select('user_id')
+    .where('organization_id', '=', organization.id)
+    .where('role', '=', 'owner')
+    .orderBy('created_at', 'asc')
+    .executeTakeFirst();
+
   return {
     id: organization.id,
     legalName: organization.legal_name,
     tradingName: organization.trading_name,
     country: organization.country,
+    registrationNumber: organization.registration_number,
+    taxNumber: organization.tax_number,
+    industry: organization.industry,
     baseCurrency: organization.base_currency,
+    fiscalYearStart: organization.fiscal_year_start,
+    booksStartDate: organization.books_start_date,
     status: organization.status,
+    createdAt: new Date(organization.created_at).toISOString(),
+    ownerUserId: owner?.user_id ?? null,
     role: membership.role,
   };
 }

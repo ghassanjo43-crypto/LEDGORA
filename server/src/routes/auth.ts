@@ -14,6 +14,7 @@ import { getPlatformRoles, toPublicUser } from '../services/userService.js';
 import { writeAuditLog } from '../lib/audit.js';
 import { errors } from '../lib/errors.js';
 import { requireAuthenticatedUser } from '../guards/platform.js';
+import { describeToken, redeemToken } from '../services/invitationService.js';
 import { MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH } from '../lib/password.js';
 import { deriveCsrfToken, CSRF_HEADER, SESSION_COOKIE } from '../plugins/session.js';
 
@@ -30,6 +31,15 @@ const loginSchema = z.object({ email: emailSchema, password: passwordSchema });
 
 const changePasswordSchema = z.object({
   currentPassword: passwordSchema,
+  newPassword: z.string().min(MIN_PASSWORD_LENGTH).max(MAX_PASSWORD_LENGTH),
+});
+
+/**
+ * Redeeming a link. The token is bounded in length so an oversized value is
+ * rejected before it reaches a hash function or the database.
+ */
+const redeemSchema = z.object({
+  token: z.string().min(1, 'The link is missing its token.').max(500),
   newPassword: z.string().min(MIN_PASSWORD_LENGTH).max(MAX_PASSWORD_LENGTH),
 });
 
@@ -194,13 +204,83 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     });
   });
 
-  app.post('/api/auth/reset-password', async (_request, reply) =>
-    reply.code(501).send({
-      error: {
-        code: 'not_implemented',
-        message: 'Password reset requires the mail service, which is not configured in this deployment.',
+  /* ── Invitation / reset redemption ────────────────────────────────────── */
+
+  /**
+   * Is this link still usable?
+   *
+   * The "set your password" screen calls this before rendering. It consumes
+   * nothing, and returns a masked address and an expiry — never the account's
+   * status, never the full email, and the same negative answer for a token that
+   * is expired, used, revoked or entirely invented.
+   *
+   * ── Why a POST for something that only reads ─────────────────────────────
+   * The token must not travel in the URL. Fastify's request logging records
+   * `req.url`, so a query parameter would write the live credential into the
+   * server log on every call — which is exactly the disclosure the hash-only
+   * storage of these tokens exists to prevent. Carrying it in the body keeps it
+   * out of the log line, out of any proxy's access log, and out of the
+   * `Referer` header. This is the same reason RFC 7662 makes OAuth token
+   * introspection a POST.
+   *
+   * Rate limited on the login budget: it is an unauthenticated endpoint that
+   * accepts a secret, which makes it the one place a token could be guessed at.
+   */
+  app.post(
+    '/api/auth/invitation/inspect',
+    {
+      config: {
+        rateLimit: {
+          max: config.LOGIN_RATE_LIMIT_MAX,
+          timeWindow: config.LOGIN_RATE_LIMIT_WINDOW_MINUTES * 60_000,
+        },
       },
-    }),
+    },
+    async (request, reply) => {
+      const { token } = parse(z.object({ token: z.string().min(1).max(500) }), request.body ?? {});
+      return reply
+        // A credential-bearing response must not sit in any cache on the way back.
+        .header('cache-control', 'no-store, no-cache, must-revalidate, private')
+        .send(await describeToken(app.db, token));
+    },
+  );
+
+  /**
+   * Complete password setup from a single-use link.
+   *
+   * This is the redemption half of the invitation flow — the endpoint that used
+   * to return 501 while three code paths were busy minting tokens for it.
+   *
+   * Deliberately unauthenticated: the token IS the authentication. It is also
+   * deliberately rate limited on the same budget as login, because both are
+   * unauthenticated endpoints that accept a secret.
+   */
+  app.post(
+    '/api/auth/reset-password',
+    {
+      config: {
+        rateLimit: {
+          max: config.LOGIN_RATE_LIMIT_MAX,
+          timeWindow: config.LOGIN_RATE_LIMIT_WINDOW_MINUTES * 60_000,
+        },
+      },
+    },
+    async (request, reply) => {
+      const input = parse(redeemSchema, request.body);
+      const result = await redeemToken(app.db, input, requestContext(request));
+      /*
+       * No session is issued here. Completing setup and signing in are separate
+       * acts: the person proves they hold the link, then proves they know the
+       * password they have just chosen. Handing back a session would make the
+       * link alone sufficient to be logged in.
+       */
+      return reply.send({
+        ok: true,
+        email: result.email,
+        purpose: result.purpose,
+        message: 'Your password has been set. Sign in to continue.',
+      });
+    },
   );
 
   app.post('/api/auth/verify-email', async (_request, reply) =>

@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "LEDGORA backend API — authentication, platform roles, subscriptions and audit",
+  "description": "LEDGORA backend API \u2014 authentication, platform roles, subscriptions and audit",
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
@@ -13,7 +13,10 @@
     "test": "vitest run",
     "db:migrate": "tsx src/cli/migrate.ts up",
     "db:migrate:down": "tsx src/cli/migrate.ts down",
-    "create-platform-admin": "tsx src/cli/createPlatformAdmin.ts"
+    "db:reconcile-applicants": "tsx src/cli/reconcileApplicants.ts",
+    "db:classify-legacy": "tsx src/cli/classifyLegacyData.ts",
+    "create-platform-admin": "tsx src/cli/createPlatformAdmin.ts",
+    "db:process-deletions": "tsx src/cli/processDeletions.ts"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.4",

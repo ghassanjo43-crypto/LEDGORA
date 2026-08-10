@@ -5,7 +5,7 @@
  * through `toPublicUser`, which builds an explicit allow-list rather than
  * deleting fields from the row (a deny-list would leak any column added later).
  */
-import type { Kysely } from 'kysely';
+import type { Kysely, Transaction } from 'kysely';
 import type { Database, PlatformRole, User, UserStatus } from '../db/schema.js';
 import { hashPassword } from '../lib/password.js';
 import { writeAuditLog, type AuditContext } from '../lib/audit.js';
@@ -38,11 +38,14 @@ export function toPublicUser(user: User, platformRoles: PlatformRole[] = []): Pu
   };
 }
 
+/** Either a pooled connection or an open transaction. */
+type Executor = Kysely<Database> | Transaction<Database>;
+
 export function normaliseEmail(email: string): string {
   return email.trim().toLowerCase();
 }
 
-export async function findUserByEmail(db: Kysely<Database>, email: string): Promise<User | undefined> {
+export async function findUserByEmail(db: Executor, email: string): Promise<User | undefined> {
   return db
     .selectFrom('users')
     .selectAll()
@@ -69,17 +72,31 @@ export interface CreateUserInput {
 }
 
 export async function createUser(db: Kysely<Database>, input: CreateUserInput): Promise<User> {
+  // Argon2 is deliberately expensive, so it runs BEFORE any transaction is
+  // opened — a hash must never hold a database connection open.
+  const passwordHash = await hashPassword(input.password);
+  return insertUser(db, { ...input, passwordHash });
+}
+
+export type InsertUserInput = Omit<CreateUserInput, 'password'> & { passwordHash: string };
+
+/**
+ * Insert the row from an already-computed hash, on any executor.
+ *
+ * Split out from `createUser` so registration can create the account and its
+ * applicant record inside ONE transaction without doing the Argon2 work there.
+ */
+export async function insertUser(db: Executor, input: InsertUserInput): Promise<User> {
   const normalized = normaliseEmail(input.email);
   const existing = await findUserByEmail(db, normalized);
   if (existing) throw errors.conflict('An account with this email already exists.');
 
-  const passwordHash = await hashPassword(input.password);
   return db
     .insertInto('users')
     .values({
       email: input.email.trim(),
       normalized_email: normalized,
-      password_hash: passwordHash,
+      password_hash: input.passwordHash,
       full_name: input.fullName.trim(),
       status: input.status ?? 'active',
       must_change_password: input.mustChangePassword ?? false,

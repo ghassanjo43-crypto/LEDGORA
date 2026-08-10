@@ -13,6 +13,50 @@ const booleanish = z
 
 const schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+  /**
+   * Return raw invitation links in API responses.
+   *
+   * A DEVELOPMENT convenience for deployments with no mail service: without it
+   * an invited person cannot be reached at all, because the token exists in one
+   * response and is stored only as a digest.
+   *
+   * It is refused outright in production (see below) rather than merely
+   * defaulting to false — a flag that can be switched on by an environment
+   * variable is a flag that eventually is, and this one hands out a live
+   * credential for somebody else's account.
+   */
+  /**
+   * Transactional email. All three are required before anything is attempted:
+   * a half-configured mailer that silently fails every send is worse than one
+   * that reports itself unavailable.
+   *
+   * `MAIL_PROVIDER_URL` must accept the RESEND-COMPATIBLE contract — a JSON body
+   * of `{from, to[], subject, html, text}` with a `Bearer` token. Postmark,
+   * SendGrid and Mailgun use different payloads and auth schemes and need a
+   * per-provider adapter; see `mail/mailer`.
+   *
+   * `MAIL_API_KEY` is a backend-only credential. It is never returned by an API
+   * response, never logged, and never reaches the browser.
+   */
+  MAIL_PROVIDER_URL: z.string().url().optional(),
+  MAIL_API_KEY: z.string().min(1).optional(),
+  MAIL_FROM: z.string().email().optional(),
+  /**
+   * Permit the DEVELOPMENT bootstrap that reclassifies existing production rows
+   * as test/demo so a development dataset can be cleaned up.
+   *
+   * Refused outright in production (see below) rather than merely defaulting to
+   * false: this is the one route around the retention invariant, and a flag that
+   * an environment variable can switch on is a flag that eventually is.
+   */
+  ALLOW_LEGACY_DATA_CLASSIFICATION: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  EXPOSE_INVITATION_TOKENS: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
   /** Render injects this; the server must bind 0.0.0.0 to be reachable. */
   HOST: z.string().default('0.0.0.0'),
@@ -49,6 +93,16 @@ const schema = z.object({
   SESSION_SECRET: z.string().min(16, 'SESSION_SECRET must be at least 16 characters').default('dev-only-insecure-session-secret'),
   SESSION_TTL_HOURS: z.coerce.number().int().min(1).max(24 * 30).default(24),
   PASSWORD_RESET_TTL_MINUTES: z.coerce.number().int().min(5).max(60 * 24).default(30),
+  /**
+   * How long an administrator-issued TEMPORARY password stays usable.
+   *
+   * Longer than a reset link on purpose: a temporary password is read out or
+   * handed over by a human, which is not instantaneous, whereas a link is
+   * clicked. It still expires — a credential an operator generated and forgot
+   * about must not remain valid indefinitely. The account holder is forced to
+   * replace it at first sign-in regardless.
+   */
+  TEMPORARY_PASSWORD_TTL_MINUTES: z.coerce.number().int().min(5).max(60 * 24 * 30).default(60 * 24),
 
   UPLOAD_DIRECTORY: z.string().default('./storage/payment-proofs'),
   MAX_UPLOAD_BYTES: z.coerce.number().int().min(1024).default(5 * 1024 * 1024),
@@ -61,6 +115,13 @@ const schema = z.object({
   /** Failed attempts before the account is temporarily locked. */
   ACCOUNT_LOCK_THRESHOLD: z.coerce.number().int().min(3).default(8),
   ACCOUNT_LOCK_MINUTES: z.coerce.number().int().min(1).default(15),
+
+  /**
+   * How long an applicant may be inactive before the administrator roster shows
+   * them as dormant. Purely a display overlay — nothing is ever deleted, and the
+   * applicant leaves the dormant tab the moment they sign in again.
+   */
+  APPLICANT_DORMANT_DAYS: z.coerce.number().int().min(1).max(3650).default(30),
 
   /* One-shot administrator bootstrap. Disabled unless explicitly turned on. */
   BOOTSTRAP_ADMIN_ENABLED: booleanish.default(false),
@@ -97,6 +158,21 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
     if (!value.DATABASE_URL) throw new Error('DATABASE_URL is required in production.');
     if (value.SESSION_SECRET === 'dev-only-insecure-session-secret') {
       throw new Error('SESSION_SECRET must be set to a strong random value in production.');
+    }
+    if (value.ALLOW_LEGACY_DATA_CLASSIFICATION) {
+      throw new Error(
+        'ALLOW_LEGACY_DATA_CLASSIFICATION cannot be enabled in production. Reclassifying a production subscriber as test or demo data would remove it from retention protection.',
+      );
+    }
+    if (value.EXPOSE_INVITATION_TOKENS) {
+      /*
+       * Refused, not ignored. Silently disabling it would leave an operator
+       * believing invitation links are being surfaced somewhere; failing at boot
+       * makes the misconfiguration impossible to miss.
+       */
+      throw new Error(
+        'EXPOSE_INVITATION_TOKENS cannot be enabled in production. Invitation links are a bearer credential and must be delivered by the mail service.',
+      );
     }
     if (value.COOKIE_SAMESITE === 'none' && !value.TRUST_PROXY) {
       // Cross-site cookies must be Secure, and only reach the app as Secure when

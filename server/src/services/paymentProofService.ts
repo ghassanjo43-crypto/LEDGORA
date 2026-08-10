@@ -14,6 +14,7 @@ import type { FileStorage } from '../storage/fileStorage.js';
 import { assertAcceptableProof } from '../storage/fileStorage.js';
 import { writeAuditLog, type AuditContext } from '../lib/audit.js';
 import { errors } from '../lib/errors.js';
+import { advanceApplicationForUser, ensureApplication } from './applicantService.js';
 
 export interface SubmitProofInput {
   invoiceId: string;
@@ -117,6 +118,15 @@ export async function submitPaymentProof(
         .set({ status: 'pending_verification', updated_at: new Date() })
         .where('id', '=', invoice.subscription_id)
         .execute();
+
+      // Stage 4 — the receipt is in; the applicant now waits on a reviewer.
+      await ensureApplication(trx, input.userId, { source: 'payment_proof' });
+      await advanceApplicationForUser(trx, input.userId, {
+        status: 'pending_verification',
+        organizationId: input.organizationId,
+        subscriptionId: invoice.subscription_id,
+        proofUploadedAt: new Date(),
+      });
 
       await writeAuditLog(trx, {
         ...context,
