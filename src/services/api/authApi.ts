@@ -105,12 +105,31 @@ export const subscriptionApi = {
     return api.get<{ plans: PublicPlan[] }>('/api/plans/public');
   },
 
-  createOrganization(input: { legalName: string; country: string; tradingName?: string; baseCurrency?: string }) {
-    return api.post<{ organizationId: string }>('/api/organizations', input);
+  /**
+   * Create the caller's organization. The response carries the created record,
+   * so the client adopts the SERVER's organization rather than minting a local
+   * one. A second call for the same owner returns 409 — see the onboarding page,
+   * which adopts the existing organization instead of creating a duplicate.
+   */
+  createOrganization(input: {
+    legalName: string;
+    country: string;
+    tradingName?: string;
+    registrationNumber?: string;
+    taxNumber?: string;
+    industry?: string;
+    baseCurrency?: string;
+    fiscalYearStart?: string;
+    booksStartDate?: string;
+  }) {
+    return api.post<{ organizationId: string; organization: Record<string, unknown> | null }>(
+      '/api/organizations',
+      input,
+    );
   },
 
-  currentOrganization() {
-    return api.get<{ organization: Record<string, unknown> | null }>('/api/organizations/current');
+  currentOrganization(signal?: AbortSignal) {
+    return api.get<{ organization: Record<string, unknown> | null }>('/api/organizations/current', signal);
   },
 
   selectPlan(planId: string, billingCycle: 'monthly' | 'annual' = 'monthly') {
@@ -168,9 +187,121 @@ export interface AdminPaymentProof {
   rejectionReason: string | null;
 }
 
+/**
+ * Where an applicant stands in the onboarding funnel.
+ *
+ * `registered_no_package` is the one that matters most: it is what a customer
+ * who has created an account and nothing else looks like. They are visible to
+ * the operator from that moment, with no organization and no subscription.
+ */
+export type ApplicantStage =
+  | 'registered_no_package'
+  | 'package_selected'
+  | 'awaiting_payment'
+  | 'pending_verification'
+  | 'active_subscriber'
+  | 'dormant_applicant'
+  | 'suspended'
+  | 'archived';
+
+export interface Applicant {
+  userId: string;
+  applicationId: string | null;
+  fullName: string;
+  email: string;
+  accountStatus: string;
+  emailVerified: boolean;
+  registeredAt: string;
+  lastLoginAt: string | null;
+  lastActivityAt: string;
+  /** Stage including the dormancy overlay — what the roster displays. */
+  stage: ApplicantStage;
+  /** Stage actually reached, ignoring dormancy. */
+  funnelStage: Exclude<ApplicantStage, 'dormant_applicant'>;
+  dormant: boolean;
+  source: string | null;
+  organizationId: string | null;
+  organizationName: string | null;
+  organizationCountry: string | null;
+  planId: string | null;
+  planCode: string | null;
+  planName: string | null;
+  planCurrency: string | null;
+  planMonthlyPrice: number | null;
+  subscriptionId: string | null;
+  subscriptionStatus: string | null;
+  billingCycle: string | null;
+  subscriptionExpiresAt: string | null;
+  invoiceId: string | null;
+  invoiceNumber: string | null;
+  invoiceStatus: string | null;
+  invoiceTotal: number | null;
+  paymentReference: string | null;
+  proofId: string | null;
+  proofStatus: string | null;
+  packageSelectedAt: string | null;
+  paymentStartedAt: string | null;
+  proofUploadedAt: string | null;
+  activatedAt: string | null;
+}
+
+export interface ApplicantListResponse {
+  applicants: Applicant[];
+  pagination: { limit: number; offset: number; count: number; total: number };
+  stageCounts: Record<string, number>;
+  dormantDays: number;
+}
+
+export interface ApplicantQuery {
+  stage?: ApplicantStage | 'all';
+  search?: string;
+  sort?: 'registered_at' | 'last_activity_at' | 'full_name' | 'email' | 'organization_name' | 'stage';
+  direction?: 'asc' | 'desc';
+  limit?: number;
+  offset?: number;
+}
+
 export const adminApi = {
   me() {
     return api.get<{ user: BackendUser }>('/api/admin/me');
+  },
+
+  /**
+   * Every registered customer, at whatever stage — including the ones who have
+   * chosen nothing yet. This is the roster the operator works from.
+   */
+  listApplicants(query: ApplicantQuery = {}, signal?: AbortSignal) {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) {
+      if (value !== undefined && value !== '') params.set(key, String(value));
+    }
+    const suffix = params.toString();
+    return api.get<ApplicantListResponse>(`/api/admin/applicants${suffix ? `?${suffix}` : ''}`, signal);
+  },
+
+  getApplicant(userId: string, signal?: AbortSignal) {
+    return api.get<{ applicant: Applicant }>(`/api/admin/applicants/${encodeURIComponent(userId)}`, signal);
+  },
+
+  remindApplicant(userId: string) {
+    return api.post<{ applicant: Applicant; delivered: boolean; message: string }>(
+      `/api/admin/applicants/${encodeURIComponent(userId)}/remind`,
+    );
+  },
+
+  /** Suspend, archive or restore. None of these delete the account. */
+  setApplicantState(userId: string, action: 'suspend' | 'archive' | 'restore', reason: string) {
+    return api.post<{ applicant: Applicant }>(
+      `/api/admin/applicants/${encodeURIComponent(userId)}/${action}`,
+      { reason },
+    );
+  },
+
+  activateSubscription(subscriptionId: string, reason: string) {
+    return api.post<{ id: string; status: string }>(
+      `/api/admin/subscriptions/${encodeURIComponent(subscriptionId)}/activate`,
+      { reason },
+    );
   },
 
   listPaymentProofs(status = 'submitted') {

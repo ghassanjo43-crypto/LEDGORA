@@ -30,6 +30,8 @@ import {
   generateDevelopmentReference,
   paymentReferenceMatches,
 } from '@/services/paymentReferenceService';
+import { subscriptionApi } from '@/services/api/authApi';
+import { ApiError, isApiConfigured } from '@/services/api/client';
 import { useMeteringConfigStore } from './meteringConfigStore';
 import { useEntitlementStore } from './entitlementStore';
 import { useBillingStore } from './billingStore';
@@ -59,11 +61,58 @@ export interface CreateOrganizationInput {
   booksStartDate: string;
 }
 
+/**
+ * How far the backend confirmation of the current organization has got.
+ *
+ * `idle`/`loading` mean WE DO NOT KNOW YET. Nothing may conclude "this user has
+ * no organization" from either of them — doing exactly that is what produced the
+ * false "Create your organization first." blocker.
+ */
+export type OrganizationHydrationStatus = 'idle' | 'loading' | 'ready' | 'error';
+
+export interface OrganizationHydration {
+  status: OrganizationHydrationStatus;
+  /**
+   * The organization id the backend confirmed, or null once it has positively
+   * confirmed that this user has none. Meaningless unless `status` is `ready`.
+   */
+  confirmedOrganizationId: string | null;
+  error: string | null;
+}
+
+export interface HydrationResult {
+  status: OrganizationHydrationStatus;
+  organizationId: string | null;
+}
+
+/** The backend's organization shape, as `GET /api/organizations/current` returns it. */
+export type BackendOrganizationPayload = Record<string, unknown>;
+
 interface OrganizationState {
   organization: Organization | null;
   subscription: OnboardingSubscription | null;
   invoices: OnboardingInvoice[];
   auditTrail: OnboardingAuditEntry[];
+
+  /**
+   * Backend confirmation state. Deliberately NOT persisted: a reload must
+   * re-confirm with the server rather than trusting whatever this browser last
+   * wrote, which is the whole point of "the backend is the source of truth".
+   */
+  hydration: OrganizationHydration;
+
+  /**
+   * Read `GET /api/organizations/current` and adopt the answer. Concurrent calls
+   * share one request. Resolves to what the backend said, so a caller can act on
+   * the result instead of guessing from store state a tick later.
+   */
+  hydrateFromBackend: (options?: { force?: boolean }) => Promise<HydrationResult>;
+
+  /**
+   * Adopt an organization the backend returned — keeping ITS id, so every later
+   * API call is made against the organization the server actually has.
+   */
+  adoptBackendOrganization: (organization: BackendOrganizationPayload) => string | null;
 
   createOrganization: (input: CreateOrganizationInput) => OrgActionResult;
   saveDraftSubscription: (cart: SubscriptionCart) => OrgActionResult;
@@ -152,6 +201,32 @@ function addMonths(from: Date, months: number): Date {
   return d;
 }
 
+const asText = (value: unknown, fallback = ''): string => (typeof value === 'string' ? value : fallback);
+
+/**
+ * The in-flight hydration request, shared by every concurrent caller.
+ *
+ * Three components mounting at once (page, gate, stepper) must produce ONE
+ * `GET /api/organizations/current`, and must all settle on the same answer.
+ */
+let inFlightHydration: Promise<HydrationResult> | null = null;
+
+/** Push the accounting engine's company profile at the adopted organization. */
+function seedCompanySettings(org: Organization): void {
+  useStore.getState().updateSettings({
+    companyName: org.legalName,
+    tradingName: org.tradingName,
+    industryType: org.industry,
+    registrationNumber: org.registrationNumber,
+    taxRegistrationNumber: org.taxNumber,
+    taxRegistered: Boolean(org.taxNumber),
+    country: org.country,
+    baseCurrency: org.baseCurrency,
+    fiscalYearStart: org.fiscalYearStart,
+    booksStartDate: org.booksStartDate,
+  });
+}
+
 export const useOrganizationStore = create<OrganizationState>()(
   persist(
     (set, get) => ({
@@ -159,6 +234,116 @@ export const useOrganizationStore = create<OrganizationState>()(
       subscription: null,
       invoices: [],
       auditTrail: [],
+      hydration: { status: 'idle', confirmedOrganizationId: null, error: null },
+
+      /* ── Backend confirmation (the source of truth) ────────────────────── */
+
+      adoptBackendOrganization: (payload) => {
+        const id = asText(payload.id);
+        if (!id) return null;
+
+        const year = new Date().getFullYear();
+        const existing = get().organization;
+        const org: Organization = {
+          // The BACKEND id, never a locally generated one — every subsequent
+          // API call is scoped to the organization the server actually holds.
+          id,
+          ownerUserId: asText(payload.ownerUserId) || getCurrentUser()?.id || existing?.ownerUserId || '',
+          legalName: asText(payload.legalName, 'Your organization'),
+          tradingName: asText(payload.tradingName),
+          country: asText(payload.country),
+          registrationNumber: asText(payload.registrationNumber),
+          taxNumber: asText(payload.taxNumber),
+          industry: asText(payload.industry, 'general'),
+          baseCurrency: asText(payload.baseCurrency, 'USD'),
+          fiscalYearStart: asText(payload.fiscalYearStart, '01-01'),
+          booksStartDate: asText(payload.booksStartDate, `${year}-01-01`),
+          createdAt: asText(payload.createdAt) || existing?.createdAt || nowIso(),
+        };
+
+        // Membership context for the signed-in user, so the local read model
+        // agrees with the backend's organization_memberships row.
+        useAuthStore.getState().attachOrganization(org.id, 'owner');
+        seedCompanySettings(org);
+
+        set((s) => ({
+          organization: org,
+          hydration: { status: 'ready', confirmedOrganizationId: org.id, error: null },
+          // Re-point a draft subscription that was created against a stale local
+          // id, so confirmation cannot target an organization the server lacks.
+          subscription: s.subscription ? { ...s.subscription, organizationId: org.id } : s.subscription,
+          auditTrail:
+            existing?.id === org.id
+              ? s.auditTrail
+              : [
+                  ...s.auditTrail,
+                  audit('organization-created', `Organization "${org.legalName}" confirmed by the LEDGORA service.`, {
+                    organizationId: org.id,
+                  }),
+                ],
+        }));
+        return org.id;
+      },
+
+      hydrateFromBackend: async (options = {}) => {
+        // No backend in this build: the local store IS the only truth there is,
+        // and blocking the static demo on a request that cannot happen would
+        // strand it on a loading state forever.
+        if (!isApiConfigured()) {
+          const local = get().organization?.id ?? null;
+          set({ hydration: { status: 'ready', confirmedOrganizationId: local, error: null } });
+          return { status: 'ready', organizationId: local };
+        }
+
+        const current = get().hydration;
+        if (!options.force && current.status === 'ready') {
+          return { status: 'ready', organizationId: current.confirmedOrganizationId };
+        }
+        if (inFlightHydration) return inFlightHydration;
+
+        set((s) => ({ hydration: { ...s.hydration, status: 'loading', error: null } }));
+
+        inFlightHydration = (async (): Promise<HydrationResult> => {
+          try {
+            const { organization } = await subscriptionApi.currentOrganization();
+            if (organization && asText(organization.id)) {
+              const id = get().adoptBackendOrganization(organization);
+              return { status: 'ready', organizationId: id };
+            }
+            // The server positively answered "no organization". Drop any stale
+            // local shell so nothing downstream keeps acting on an id the
+            // backend does not have.
+            set({
+              organization: null,
+              hydration: { status: 'ready', confirmedOrganizationId: null, error: null },
+            });
+            return { status: 'ready', organizationId: null };
+          } catch (error) {
+            // No session is not a failed lookup — there is simply nobody to have
+            // an organization. Reporting it as an error would show a retry
+            // prompt to someone who just needs to sign in.
+            if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
+              set({ hydration: { status: 'ready', confirmedOrganizationId: null, error: null } });
+              return { status: 'ready', organizationId: null };
+            }
+            // A failed request tells us NOTHING about whether an organization
+            // exists. Leave the local shell alone and report the failure
+            // honestly — callers must not read this as "no organization".
+            set((s) => ({
+              hydration: {
+                status: 'error',
+                confirmedOrganizationId: s.hydration.confirmedOrganizationId,
+                error: error instanceof ApiError ? error.message : 'We could not load your organization.',
+              },
+            }));
+            return { status: 'error', organizationId: null };
+          } finally {
+            inFlightHydration = null;
+          }
+        })();
+
+        return inFlightHydration;
+      },
 
       /* ── Organization creation (owner) ─────────────────────────────────── */
       createOrganization: (input) => {
@@ -192,20 +377,14 @@ export const useOrganizationStore = create<OrganizationState>()(
         };
         useAuthStore.getState().attachOrganization(org.id, 'owner');
         // Seed the primary company profile for the accounting engine.
-        useStore.getState().updateSettings({
-          companyName: org.legalName,
-          tradingName: org.tradingName,
-          industryType: org.industry,
-          registrationNumber: org.registrationNumber,
-          taxRegistrationNumber: org.taxNumber,
-          taxRegistered: Boolean(org.taxNumber),
-          country: org.country,
-          baseCurrency: org.baseCurrency,
-          fiscalYearStart: org.fiscalYearStart,
-          booksStartDate: org.booksStartDate,
-        });
+        seedCompanySettings(org);
         set((s) => ({
           organization: org,
+          // Local creation is authoritative only where there is no backend to
+          // ask. Where there is one, `adoptBackendOrganization` supersedes this.
+          hydration: isApiConfigured()
+            ? s.hydration
+            : { status: 'ready', confirmedOrganizationId: org.id, error: null },
           auditTrail: [...s.auditTrail, audit('organization-created', `Organization "${org.legalName}" created; ${user.fullName} set as owner.`, { organizationId: org.id })],
         }));
         return { ok: true, id: org.id };
@@ -499,7 +678,7 @@ export const useOrganizationStore = create<OrganizationState>()(
         useAuthStore.setState({ currentUserId: userId });
 
         const orgId = generateId('org');
-        const org: Organization = {
+        const bootstrapped: Organization = {
           id: orgId,
           ownerUserId: userId,
           legalName: settings.companyName || 'Demo Organization',
@@ -531,10 +710,26 @@ export const useOrganizationStore = create<OrganizationState>()(
           createdAt: now,
           updatedAt: now,
         };
-        set({ organization: org, subscription: sub, invoices: [], auditTrail: [] });
+        set({
+          organization: bootstrapped,
+          subscription: sub,
+          invoices: [],
+          auditTrail: [],
+          // A dev-bootstrapped tenant is as confirmed as it will ever get.
+          hydration: { status: 'ready', confirmedOrganizationId: orgId, error: null },
+        });
       },
 
-      resetToDefault: () => set({ organization: null, subscription: null, invoices: [], auditTrail: [] }),
+      resetToDefault: () => {
+        inFlightHydration = null;
+        set({
+          organization: null,
+          subscription: null,
+          invoices: [],
+          auditTrail: [],
+          hydration: { status: 'idle', confirmedOrganizationId: null, error: null },
+        });
+      },
     }),
     {
       name: 'ledgora-organization',

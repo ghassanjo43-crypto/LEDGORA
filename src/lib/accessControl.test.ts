@@ -33,8 +33,12 @@ describe('resolvePostLoginRoute', () => {
     expect(resolvePostLoginRoute({ user: verified, hasOrganization: false, subscriptionStatus: null })).toBe(ROUTES.onboardingOrganization);
     expect(resolvePostLoginRoute({ user: verified, hasOrganization: true, subscriptionStatus: null })).toBe(ROUTES.onboardingSubscription);
     expect(resolvePostLoginRoute({ ...base, subscriptionStatus: 'draft' })).toBe(ROUTES.onboardingSubscription);
-    expect(resolvePostLoginRoute({ ...base, subscriptionStatus: 'pending_payment' })).toBe(ROUTES.billingPayment);
-    expect(resolvePostLoginRoute({ ...base, subscriptionStatus: 'pending_verification' })).toBe(ROUTES.subscriptionStatus);
+    // A chosen package earns the application immediately, in Free Preview.
+    // These two used to resolve to /billing/payment and /subscription/status,
+    // which — with the `'app'` surface simultaneously refused — is what trapped
+    // a paid-but-unverified subscriber outside Ledgora.
+    expect(resolvePostLoginRoute({ ...base, subscriptionStatus: 'pending_payment' })).toBe(ROUTES.appDashboard);
+    expect(resolvePostLoginRoute({ ...base, subscriptionStatus: 'pending_verification' })).toBe(ROUTES.appDashboard);
     expect(resolvePostLoginRoute({ ...base, subscriptionStatus: 'active' })).toBe(ROUTES.appDashboard);
     expect(resolvePostLoginRoute({ ...base, subscriptionStatus: 'expired' })).toBe(ROUTES.billingRenew);
     expect(resolvePostLoginRoute({ ...base, subscriptionStatus: 'suspended' })).toBe(ROUTES.subscriptionSuspended);
@@ -54,14 +58,33 @@ describe('surface policy', () => {
     expect(surfaceOf('/pricing')).toBe('public');
   });
 
-  it('blocks the app for a pending subscription but allows onboarding/billing/support', () => {
+  it('opens the app in Free Preview for a pending subscription, and keeps the lifecycle surfaces', () => {
     const pending: AccessContext = { user: verified, hasOrganization: true, subscriptionStatus: 'pending_verification' };
-    expect(isPathAllowed(pending, '/app/dashboard')).toBe(false);
-    expect(isPathAllowed(pending, '/app/invoices')).toBe(false);
+    expect(isPathAllowed(pending, '/app/dashboard')).toBe(true);
+    expect(isPathAllowed(pending, '/app/invoices')).toBe(true);
+    // Informational, not exclusive — still reachable.
     expect(isPathAllowed(pending, ROUTES.billingPayment)).toBe(true);
     expect(isPathAllowed(pending, ROUTES.subscriptionStatus)).toBe(true);
     expect(isPathAllowed(pending, ROUTES.profile)).toBe(true);
     expect(isPathAllowed(pending, ROUTES.support)).toBe(true);
+  });
+
+  it('still blocks the app for a customer who has selected no package', () => {
+    const noPlan: AccessContext = { user: verified, hasOrganization: true, subscriptionStatus: null };
+    expect(isPathAllowed(noPlan, '/app/dashboard')).toBe(false);
+    expect(isPathAllowed(noPlan, ROUTES.onboardingSubscription)).toBe(true);
+    // A draft is an unconfirmed choice: package selection, not the application.
+    const draft: AccessContext = { user: verified, hasOrganization: true, subscriptionStatus: 'draft' };
+    expect(isPathAllowed(draft, '/app/dashboard')).toBe(false);
+  });
+
+  it('never grants Free Preview without an organization or a session', () => {
+    expect(
+      isPathAllowed({ user: verified, hasOrganization: false, subscriptionStatus: 'pending_verification' }, '/app/dashboard'),
+    ).toBe(false);
+    expect(
+      isPathAllowed({ user: null, hasOrganization: true, subscriptionStatus: 'pending_verification' }, '/app/dashboard'),
+    ).toBe(false);
   });
 
   it('opens the whole app once active', () => {

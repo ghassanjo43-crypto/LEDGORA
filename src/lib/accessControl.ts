@@ -18,6 +18,7 @@ import type { LedgoraEdition, LedgoraModule } from '@/types/entitlements';
 import type { PlatformCapability, PlatformRole } from '@/types/roles';
 import { platformRoleHasCapability } from '@/types/roles';
 import { EDITION_MODULES, sortModules } from '@/config/editions';
+import { isFreePreviewEligible } from './freePreview';
 
 /* ── Route constants (the literal paths from the specification) ────────────── */
 
@@ -28,6 +29,14 @@ export const ROUTES = {
   login: '/login',
   register: '/register',
   verifyEmail: '/verify-email',
+  /**
+   * "Set your password", opened by a single-use invitation or reset link.
+   *
+   * Public by necessity: the token IS the authentication, and the account it
+   * belongs to has no usable password yet. The token travels in the query
+   * string, so the path itself carries no secret.
+   */
+  acceptInvitation: '/set-password',
   onboardingOrganization: '/onboarding/organization',
   onboardingSubscription: '/onboarding/subscription',
   billingPayment: '/billing/payment',
@@ -64,9 +73,18 @@ export const PUBLIC_PATHS: string[] = [
   ROUTES.login,
   ROUTES.register,
   ROUTES.verifyEmail,
+  // Reachable with no session, and deliberately so — see the route comment.
+  ROUTES.acceptInvitation,
 ];
 
-/** Surfaces a logged-in user may use while their subscription is NOT active. */
+/**
+ * Surfaces a logged-in user may use while their subscription is NOT active AND
+ * they are not in Free Preview.
+ *
+ * `'app'` is absent deliberately — a customer with no package has nothing to
+ * open. It used to exclude Free Preview customers too, which is half of the
+ * lockout: see `freePreviewAllowed` below.
+ */
 const INACTIVE_ALLOWED_SURFACES: Surface[] = [
   'public',
   'onboarding',
@@ -157,12 +175,34 @@ export function requiredAdminCapability(path: string): PlatformCapability {
 }
 
 /**
+ * Does this context earn Free Preview? The ONE adapter between the access
+ * context and `lib/freePreview`, so the redirect resolver, the path policy, the
+ * shell's render guard and the entitlement widening all get the same answer.
+ */
+export function freePreviewAllowed(ctx: AccessContext): boolean {
+  return isFreePreviewEligible({
+    authenticated: !!ctx.user,
+    hasOrganization: ctx.hasOrganization,
+    subscriptionStatus: ctx.subscriptionStatus,
+    isPlatformOperator: isPlatformOperator(ctx.platformRole),
+    demoActive: ctx.demoActive,
+  });
+}
+
+/**
  * Where the given user belongs right now. Implements the exact specification:
  *   unverified → /verify-email · no org → /onboarding/organization ·
- *   no subscription → /onboarding/subscription · pending_payment → /billing/payment ·
- *   pending_verification → /subscription/status · active → /app/dashboard ·
+ *   no subscription → /onboarding/subscription · active → /app/dashboard ·
  *   expired → /billing/renew · suspended → /subscription/suspended ·
  *   rejected → /billing/payment.
+ *
+ * `pending_payment` and `pending_verification` land on /app/dashboard in Free
+ * Preview. They used to resolve to /billing/payment and /subscription/status,
+ * and because `isPathAllowed` simultaneously refused the `'app'` surface to any
+ * non-active subscription, every attempt to reach the application bounced
+ * straight back here — the lockout. Both pages remain fully reachable (the Free
+ * Preview banner links to them); they are simply no longer a destination the
+ * customer cannot leave.
  */
 export function resolvePostLoginRoute(ctx: AccessContext): string {
   // ── Platform operators are resolved BEFORE any customer state ────────────
@@ -192,10 +232,15 @@ export function resolvePostLoginRoute(ctx: AccessContext): string {
   if (!status || status === 'draft') return ROUTES.onboardingSubscription;
 
   switch (status) {
+    // A package is chosen; payment/proof verification is LEDGORA's work, not a
+    // reason to hold the customer outside their books.
     case 'pending_payment':
-      return ROUTES.billingPayment;
     case 'pending_verification':
-      return ROUTES.subscriptionStatus;
+      return freePreviewAllowed(ctx)
+        ? ROUTES.appDashboard
+        : // Only reachable when preview is refused for another reason (no
+          // organization), in which case the payment page is the useful surface.
+          ROUTES.billingPayment;
     case 'active':
       return ROUTES.appDashboard;
     case 'expired':
@@ -245,6 +290,10 @@ export function isPathAllowed(ctx: AccessContext, path: string): boolean {
   // AccessGate).
   if (ctx.demoActive) return true;
   if (ctx.subscriptionStatus === 'active') return true;
+  // Free Preview opens every customer surface, the application included. Without
+  // this the shell refuses /app/* and redirects back to the pending-status page
+  // it just came from.
+  if (freePreviewAllowed(ctx)) return true;
   return INACTIVE_ALLOWED_SURFACES.includes(surface);
 }
 

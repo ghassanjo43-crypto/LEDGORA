@@ -65,6 +65,12 @@ export function clearLocalSession(): void {
   clearWorkspaceForSignOut();
   useAuthStore.getState().logout();
   clearCsrfToken();
+  // The organization confirmation belonged to the session that just ended. Left
+  // behind, the next visitor would inherit a "confirmed" verdict for an
+  // organization that is not theirs.
+  useOrganizationStore.setState({
+    hydration: { status: 'idle', confirmedOrganizationId: null, error: null },
+  });
 }
 
 /** Read the organization the backend has for this user, tolerating failure. */
@@ -80,30 +86,42 @@ export async function fetchBackendOrganization(): Promise<Record<string, unknown
 }
 
 /**
- * Ensure the local organization shell matches the backend. Only creates one
- * when the server says an organization exists and the browser has none.
+ * Adopt the organization the backend returned, keeping the SERVER's id.
+ *
+ * This used to funnel the backend's organization through the local
+ * `createOrganization` mutator, which was wrong in three ways and produced the
+ * "Create your organization first." blocker on a working account:
+ *
+ *  1. That mutator refuses when `emailVerified` is false — and it is false for
+ *     every self-registered backend account, because `POST /api/auth/verify-email`
+ *     is still a 501 seam. The refusal was returned as a value and discarded, so
+ *     the store stayed EMPTY while the backend held a perfectly good
+ *     organization.
+ *  2. It minted a fresh local id, so even on success the browser and the server
+ *     disagreed about which organization this was.
+ *  3. It bailed out whenever a local organization already existed, so a stale
+ *     one was never corrected.
+ *
+ * Adoption has none of those properties: it is not gated on local user state,
+ * it keeps the backend id, and it always reconciles.
  */
 export function mirrorOrganization(organization: Record<string, unknown> | null): void {
-  if (!organization) return;
   const store = useOrganizationStore.getState();
-  if (store.organization) return;
-  const year = new Date().getFullYear();
-  store.createOrganization({
-    legalName: asText(organization.legalName, 'Your organization'),
-    tradingName: asText(organization.tradingName),
-    country: asText(organization.country),
-    registrationNumber: asText(organization.registrationNumber),
-    taxNumber: asText(organization.taxNumber),
-    industry: asText(organization.industry, 'general'),
-    baseCurrency: asText(organization.baseCurrency, 'USD'),
-    fiscalYearStart: asText(organization.fiscalYearStart, '01-01'),
-    booksStartDate: asText(organization.booksStartDate, `${year}-01-01`),
-  });
+  if (organization && asText(organization.id)) {
+    store.adoptBackendOrganization(organization);
+    return;
+  }
+  // Nothing came back. That is only a confirmed absence when the caller reached
+  // the server; `fetchBackendOrganization` swallows failures, so this path must
+  // not clear anything or claim anything — `hydrateFromBackend` owns that.
 }
 
 /** Convenience: fetch and mirror the organization in one call. */
 export async function mirrorOrganizationFromBackend(): Promise<Record<string, unknown> | null> {
-  const organization = await fetchBackendOrganization();
-  mirrorOrganization(organization);
-  return organization;
+  // Go through the store's hydration so the confirmation STATE is recorded, not
+  // just the organization itself. Without it every consumer is back to
+  // guessing whether "no organization" means "none" or "not asked yet".
+  await useOrganizationStore.getState().hydrateFromBackend({ force: true });
+  const organization = useOrganizationStore.getState().organization;
+  return organization ? { ...organization } : null;
 }

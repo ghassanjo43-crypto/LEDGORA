@@ -10,6 +10,7 @@
  *  | anonymous           | No                                     |
  *  | registered-no-plan  | No                                     |
  *  | free-demo           | No                                     |
+ *  | free-preview        | No — package chosen, payment unverified |
  *  | trial               | Yes, when the trial permits storage    |
  *  | subscribed          | Yes                                    |
  *  | past-due            | Existing grace-period rules            |
@@ -37,6 +38,10 @@ export function resolvePersistencePolicy(input: PersistencePolicyInput): Persist
     case 'anonymous':
     case 'registered-no-plan':
     case 'free-demo':
+    // Free Preview grants every FEATURE and no DURABLE STORAGE. The customer
+    // may run any workflow end to end; the records evaporate with the session,
+    // because the subscription that would justify keeping them is not yet paid.
+    case 'free-preview':
       return MEMORY_ONLY;
     case 'trial':
       return input.trialAllowsStorage === false ? MEMORY_ONLY : DURABLE;

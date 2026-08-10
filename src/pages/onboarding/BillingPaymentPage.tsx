@@ -83,7 +83,11 @@ export function BillingPaymentPage() {
       setFormError(res.error ?? 'Upload failed.');
       return;
     }
-    navigate(ROUTES.subscriptionStatus);
+    // Into the application, not onto a dead end. Uploading proof used to land
+    // the customer on /subscription/status, which offered only "Sign out" and
+    // "Contact support" — the reported lockout. Verification is our work; they
+    // continue in Free Preview while it happens.
+    navigate(ROUTES.appDashboard);
   };
 
   const bank = invoice.bank;

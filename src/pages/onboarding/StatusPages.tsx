@@ -1,7 +1,11 @@
 /**
- * Subscription status + lifecycle surfaces reachable while the app itself is
- * gated: pending-verification status, suspended, renew (expired), plus the
- * lightweight profile and support pages a pending user may always open.
+ * Subscription status + lifecycle surfaces: pending-verification status,
+ * suspended, renew (expired), plus the lightweight profile and support pages a
+ * pending user may always open.
+ *
+ * `SubscriptionStatusPage` is INFORMATIONAL, never a destination a customer is
+ * held on. It used to be the exclusive route for a `pending_verification`
+ * subscriber and offered no way into the product — see `lib/freePreview`.
  */
 import { useMemo } from 'react';
 import { useOrganizationStore } from '@/store/organizationStore';
@@ -9,6 +13,8 @@ import { useAuthStore } from '@/store/authStore';
 import { useRouterStore } from '@/store/routerStore';
 import { CenteredCard, money } from '@/components/onboarding/OnboardingChrome';
 import { ROUTES } from '@/lib/accessControl';
+import { FREE_PREVIEW_COPY } from '@/lib/freePreview';
+import { useIsFreePreview } from '@/store/freePreviewAccess';
 import { Button } from '@/components/ui/Button';
 import { Alert } from '@/components/ui/Alert';
 import { Badge } from '@/components/ui/Badge';
@@ -20,6 +26,7 @@ export function SubscriptionStatusPage() {
   const invoices = useOrganizationStore((s) => s.invoices);
   const navigate = useRouterStore((s) => s.navigate);
   const logout = useAuthStore((s) => s.logout);
+  const previewAllowed = useIsFreePreview();
 
   const invoice = useMemo(
     () => (subscription?.invoiceId ? invoices.find((i) => i.id === subscription.invoiceId) ?? null : null),
@@ -49,7 +56,8 @@ export function SubscriptionStatusPage() {
         {subscription.status === 'pending_verification' && (
           <Alert variant="info" title="Awaiting verification">
             We’ve received your payment proof {invoice ? `for invoice ${invoice.number}` : ''} and our team is reviewing
-            it. You’ll get an activation email once it’s approved. You can sign in any time to check progress.
+            it. You’ll get an activation email once it’s approved — and you can keep working in Free Preview in the
+            meantime.
           </Alert>
         )}
         {invoice?.infoRequest && (
@@ -61,9 +69,28 @@ export function SubscriptionStatusPage() {
           </Alert>
         )}
 
+        {/*
+          The way out. This page used to offer only "Sign out" and "Contact
+          support", which is what made a verified-payment-pending subscriber
+          unable to enter Ledgora at all. The application is now the PRIMARY
+          action whenever the preview applies.
+        */}
+        {previewAllowed && (
+          <Button className="w-full" onClick={() => navigate(ROUTES.appDashboard)}>
+            {FREE_PREVIEW_COPY.enterPreview}
+          </Button>
+        )}
+        <Button
+          className="w-full"
+          variant="outline"
+          onClick={() => navigate(ROUTES.billingPayment)}
+        >
+          {FREE_PREVIEW_COPY.paymentStatus}
+        </Button>
+
         <div className="flex justify-between">
           <Button variant="ghost" size="sm" onClick={() => { logout(); navigate(ROUTES.login); }}>Sign out</Button>
-          <Button variant="outline" size="sm" onClick={() => navigate(ROUTES.support)}>Contact support</Button>
+          <Button variant="ghost" size="sm" onClick={() => navigate(ROUTES.support)}>Contact support</Button>
         </div>
       </div>
     </CenteredCard>

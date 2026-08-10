@@ -21,7 +21,7 @@ import {
   setWorkspaceStorageMode,
   clearMemoryWorkspace,
 } from '@/lib/workspaceStorage';
-import { rehydrateBusinessWorkspace } from '@/store/businessWorkspace';
+import { openBusinessWorkspace, rehydrateBusinessWorkspace } from '@/store/businessWorkspace';
 import { ROUTES } from '@/lib/accessControl';
 import { FREE_DEMO_COPY } from '@/config/freeDemo';
 
@@ -293,6 +293,14 @@ describe('subscribed workspace', () => {
       await authService.register(REGISTRATION);
     });
     expect(getWorkspaceStorageMode()).toBe('backend');
+
+    /*
+     * Open the subscriber's books, as the shell does once an organization is
+     * known. Durable business records are namespaced by organization, so until a
+     * tenant is open nothing is written durably — that is the fail-closed
+     * behaviour that stops one subscriber's books reaching another's.
+     */
+    openBusinessWorkspace({ kind: 'tenant', organizationId: 'durable-test-org' });
 
     addDemoJournalEntry();
     expect(JSON.stringify({ ...localStorage })).toContain('Temporary demo entry');

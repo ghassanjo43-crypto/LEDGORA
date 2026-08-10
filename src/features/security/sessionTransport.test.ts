@@ -216,9 +216,12 @@ describe('normal tenant routing is unchanged', () => {
       ],
       currentUserId: 'cust-1',
     });
+    // Backend-confirmed organization: routing reads the confirmation, not a
+    // bare local object, so the fixture has to state it.
     useOrganizationStore.setState({
       organization: { id: 'org-1', legalName: 'Acme' } as never,
       subscription: { status: 'active' } as never,
+      hydration: { status: 'ready', confirmedOrganizationId: 'org-1', error: null },
     });
     // A verified session with no platform role — an ordinary tenant.
     useBackendSessionStore.setState({ status: 'ready', user: backendUser({ id: 'cust-1', platformRoles: [] }), platformRoles: [], error: null });
@@ -243,7 +246,11 @@ describe('normal tenant routing is unchanged', () => {
       ],
       currentUserId: 'cust-2',
     });
-    useOrganizationStore.setState({ organization: { id: 'org-2', legalName: 'Beta' } as never, subscription: null });
+    useOrganizationStore.setState({
+      organization: { id: 'org-2', legalName: 'Beta' } as never,
+      subscription: null,
+      hydration: { status: 'ready', confirmedOrganizationId: 'org-2', error: null },
+    });
     useBackendSessionStore.setState({ status: 'ready', user: backendUser({ id: 'cust-2', platformRoles: [] }), platformRoles: [], error: null });
 
     expect(resolvePostLoginRoute(readAccessContext())).toBe(ROUTES.onboardingSubscription);

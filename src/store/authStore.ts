@@ -14,6 +14,7 @@ import { persist } from 'zustand/middleware';
 import type { MemberStatus, OrgUserRole, RegisteredUser } from '@/types/onboarding';
 import { useEntitlementStore } from './entitlementStore';
 import { isPlatformAdminFullAccess } from './platformFullAccess';
+import { effectiveOrganizationId } from './effectiveOrganization';
 import { getPlatformRole } from './sessionStore';
 import { hasPlatformCapability } from '@/lib/platformAccess';
 import {
@@ -79,6 +80,21 @@ interface AuthState {
 }
 
 /** Only an org owner/admin (or the platform super-admin) may manage members. */
+/**
+ * The organization a member mutation applies to.
+ *
+ * The canonical resolver first — in operator mode that is the VIEWED subscriber,
+ * not the (tenantless) administrator. Falling back to the actor's own membership
+ * keeps the plain subscriber path working before hydration has settled.
+ *
+ * Note these mutations are the no-backend path. Where an API is configured the
+ * Members page calls the capability-guarded endpoints instead, and the SERVER
+ * decides — a resolver in the browser is never authorization.
+ */
+function memberScopeOrganizationId(actor: RegisteredUser | null): string | undefined {
+  return effectiveOrganizationId() ?? actor?.organizationId;
+}
+
 function assertCanManageMembers(actor: RegisteredUser | null): AuthResult {
   // A LEDGORA operator may administer any tenant — but only when the
   // platform policy actually grants it (never in production).
@@ -210,7 +226,7 @@ export const useAuthStore = create<AuthState>()(
         const actor = get().users.find((u) => u.id === get().currentUserId) ?? null;
         const guard = assertCanManageMembers(actor);
         if (!guard.ok) return guard;
-        const orgId = actor!.organizationId;
+        const orgId = memberScopeOrganizationId(actor);
         if (!orgId) return { ok: false, error: 'Create your organization first.' };
 
         const fieldErrors: Record<string, string> = {};
@@ -259,7 +275,7 @@ export const useAuthStore = create<AuthState>()(
         const guard = assertCanManageMembers(actor);
         if (!guard.ok) return guard;
         const target = get().users.find((u) => u.id === userId);
-        if (!target || target.organizationId !== actor!.organizationId) return { ok: false, error: 'Member not found.' };
+        if (!target || target.organizationId !== memberScopeOrganizationId(actor)) return { ok: false, error: 'Member not found.' };
         if (target.role === 'owner' && role !== 'owner' && lastOwner(get().users, target)) {
           return { ok: false, error: 'The organization must keep at least one owner.' };
         }
@@ -272,7 +288,7 @@ export const useAuthStore = create<AuthState>()(
         const guard = assertCanManageMembers(actor);
         if (!guard.ok) return guard;
         const target = get().users.find((u) => u.id === userId);
-        if (!target || target.organizationId !== actor!.organizationId) return { ok: false, error: 'Member not found.' };
+        if (!target || target.organizationId !== memberScopeOrganizationId(actor)) return { ok: false, error: 'Member not found.' };
         if (target.id === actor!.id) return { ok: false, error: 'You cannot change your own status.' };
         if (status === 'suspended' && target.role === 'owner' && lastOwner(get().users, target)) {
           return { ok: false, error: 'The last owner cannot be suspended.' };
@@ -286,7 +302,7 @@ export const useAuthStore = create<AuthState>()(
         const guard = assertCanManageMembers(actor);
         if (!guard.ok) return guard;
         const target = get().users.find((u) => u.id === userId);
-        if (!target || target.organizationId !== actor!.organizationId) return { ok: false, error: 'Member not found.' };
+        if (!target || target.organizationId !== memberScopeOrganizationId(actor)) return { ok: false, error: 'Member not found.' };
         if (target.id === actor!.id) return { ok: false, error: 'You cannot remove yourself.' };
         if (target.role === 'owner') return { ok: false, error: 'Transfer ownership before removing an owner.' };
         set((s) => ({ users: s.users.filter((u) => u.id !== userId) }));

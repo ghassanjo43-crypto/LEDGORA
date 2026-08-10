@@ -11,8 +11,31 @@
  * `platformRole: 'none'` — see `lib/platformAccess`.
  */
 
-/** Membership role inside a subscriber organization. */
-export type OrganizationRole = 'owner' | 'admin' | 'accountant' | 'member' | 'viewer';
+/**
+ * Membership role inside a subscriber organization — the authority ladder,
+ * strongest first.
+ *
+ * These are the SAME six values the backend's
+ * `organization_memberships.role` constraint accepts (migration 006). They were
+ * not always: this type declared `admin` while the database refused it, so a UI
+ * offering that role produced a constraint violation. The backend now carries
+ * the full ladder and this list is its mirror.
+ *
+ * Their display names and the permissions each carries are served by the backend
+ * (`GET /api/admin/permissions/catalog`) rather than restated here, so there is
+ * one definition of what a role means.
+ */
+export type OrganizationRole = 'owner' | 'admin' | 'manager' | 'accountant' | 'member' | 'viewer';
+
+/** The ladder in display order. */
+export const ORGANIZATION_ROLES: OrganizationRole[] = [
+  'owner',
+  'admin',
+  'manager',
+  'accountant',
+  'member',
+  'viewer',
+];
 
 /** LEDGORA platform operator role. `'none'` is every normal customer. */
 export type PlatformRole = 'none' | 'support' | 'billing-admin' | 'super-admin';

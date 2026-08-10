@@ -7,8 +7,11 @@ import { VIEW_META, VIEW_MODULE_REQUIREMENTS } from '@/config/navigation';
 import { ModuleRoute } from '@/components/entitlements/ModuleRoute';
 import { ModuleUnavailablePage } from '@/components/entitlements/ModuleUnavailablePage';
 import { AccessGate } from '@/components/access/AccessGate';
+import { AccountAccessRequiredPage } from '@/components/access/AccountAccessRequiredPage';
 import { FreeDemoBanner } from '@/components/onboarding/FreeDemoBanner';
 import { FreeDemoNotices } from '@/components/onboarding/FreeDemoNotices';
+import { FreePreviewBanner } from '@/components/onboarding/FreePreviewBanner';
+import { FreePreviewNotices } from '@/components/onboarding/FreePreviewNotices';
 import { OperatorViewBanner } from '@/components/shell/OperatorViewBanner';
 
 /**
@@ -303,13 +306,18 @@ export default function App() {
       <OperatorViewBanner />
       <FreeDemoNotices />
       <FreeDemoBanner />
+      <FreePreviewNotices />
+      <FreePreviewBanner />
       <AppLayout>
         {/*
           Onboarding access gate. A view is only rendered when the account
           status permits the application at all, and — in a Free Demo — only
-          when the view is on the demo allow-list.
+          when the view is on the demo allow-list. A refusal here is an
+          ACCOUNT-level state (no plan, payment pending, suspended, …), so the
+          fallback explains the account state — module entitlement failures
+          render ModuleUnavailablePage via ModuleRoute above instead.
         */}
-        <AccessGate view={activeView} fallback={<ModuleUnavailablePage />}>
+        <AccessGate view={activeView} fallback={<AccountAccessRequiredPage />}>
           <Suspense fallback={<PageSkeleton />}>{guarded}</Suspense>
         </AccessGate>
       </AppLayout>

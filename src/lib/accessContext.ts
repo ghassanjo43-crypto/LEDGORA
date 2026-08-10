@@ -14,6 +14,7 @@
  */
 import { type AccessContext, isPlatformOperator } from './accessControl';
 import { effectivePlatformRole } from './platformAccess';
+import { hasCurrentOrganization, organizationAvailability } from './currentOrganization';
 import { getCurrentUser } from '@/store/authStore';
 import { useOrganizationStore } from '@/store/organizationStore';
 import { useAccountSessionStore } from '@/store/accountSessionStore';
@@ -31,7 +32,10 @@ export function readAccessContext(): AccessContext {
 
   return {
     user: user ? { emailVerified: user.emailVerified } : null,
-    hasOrganization: !!org.organization,
+    // The same backend-confirmed answer the stepper, the subscription page and
+    // its confirm button use. Reading `org.organization` here independently is
+    // what let the guard and the page disagree.
+    hasOrganization: hasCurrentOrganization(),
     subscriptionStatus: org.subscription?.status ?? null,
     demoActive: useAccountSessionStore.getState().demoActive,
     platformRole,
@@ -55,7 +59,14 @@ export function isSessionResolving(): boolean {
   // stall the static demo build's first paint forever.
   if (!isApiConfigured()) return false;
   const status = useBackendSessionStore.getState().status;
-  return status === 'unknown' || status === 'loading';
+  if (status === 'unknown' || status === 'loading') return true;
+
+  // The organization lookup is part of "who is this?" for routing purposes: a
+  // signed-in customer whose organization has not arrived yet is indistinguish-
+  // able from one who has none, and would be bounced back to the organization
+  // step they just completed. Only wait while a session actually exists.
+  if (!useBackendSessionStore.getState().user) return false;
+  return organizationAvailability() === 'loading';
 }
 
 /**

@@ -15,6 +15,8 @@ import { usePlatformEntitlementOverride } from '@/store/platformFullAccess';
 import { useEffectivePlatformRole } from '@/hooks/usePlatformRole';
 import { isPlatformOperator, ROUTES } from '@/lib/accessControl';
 import { useRouterStore } from '@/store/routerStore';
+import { useEffectiveOrganizationSync } from '@/store/effectiveOrganization';
+import { useMemberDirectoryStore } from '@/store/memberDirectoryStore';
 
 export function OperatorViewBanner() {
   const active = useOperatorViewStore((s) => s.active);
@@ -25,6 +27,10 @@ export function OperatorViewBanner() {
   const role = useEffectivePlatformRole();
   const override = usePlatformEntitlementOverride();
   const navigate = useRouterStore((s) => s.navigate);
+  // Confirms the viewed organization against the backend and keeps that
+  // confirmation in step when the operator switches subscribers.
+  const context = useEffectiveOrganizationSync();
+  const clearMembers = useMemberDirectoryStore((s) => s.clear);
 
   if (!active || !isPlatformOperator(role)) return null;
 
@@ -32,11 +38,17 @@ export function OperatorViewBanner() {
     // Clear the selected subscriber context (and any full-access override with
     // it) first, then route back. The role is never touched — the operator was
     // a super-admin throughout.
+    // The roster goes too: a cached member list is tenant data, and it must not
+    // be sitting there when the next subscriber's workspace is opened.
+    clearMembers();
     exit();
     navigate(ROUTES.adminConsole, { replace: true });
   };
 
-  const subscriberName = orgName ?? 'The subscriber';
+  // Prefer the name the BACKEND confirmed for the viewed organization over the
+  // label carried in sessionStorage: the two are the pair that disagreed in the
+  // Members-page defect, and the server is the authority on which tenant this is.
+  const subscriberName = context.organizationName ?? orgName ?? 'The subscriber';
   const message =
     override === 'full_access'
       ? `You are viewing Ledgora as a platform administrator with full feature access. ${subscriberName}’s subscription remains unchanged.`

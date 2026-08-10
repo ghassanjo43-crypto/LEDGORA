@@ -44,6 +44,19 @@ const ROLE_GRANTS: Record<OrganizationRole, CurrencyPermission[]> = {
     'exchangeRate.view', 'exchangeRate.create', 'exchangeRate.edit',
     'exchangeRate.import', 'exchangeRate.deleteDraft',
   ],
+  /**
+   * Manager — the approval rung between Accountant and Organization Admin.
+   *
+   * Everything an Accountant does, and no more here: this module has no
+   * approval-shaped permission, so the two are identical rather than the
+   * Manager being arbitrarily given configuration rights the ladder does not
+   * award them. The ladder stays monotone either way.
+   */
+  manager: [
+    'currency.view', 'currency.activate',
+    'exchangeRate.view', 'exchangeRate.create', 'exchangeRate.edit',
+    'exchangeRate.import', 'exchangeRate.deleteDraft',
+  ],
   member: ['currency.view', 'exchangeRate.view'],
   viewer: ['currency.view', 'exchangeRate.view'],
 };

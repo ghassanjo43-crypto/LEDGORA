@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/Button';
 import { useAuthStore } from '@/store/authStore';
 import { useRouterStore } from '@/store/routerStore';
 import { ROUTES } from '@/lib/accessControl';
+import { useHasCurrentOrganization } from '@/lib/currentOrganization';
 
 export function Brand({ className }: { className?: string }) {
   const navigate = useRouterStore((s) => s.navigate);
@@ -100,12 +101,37 @@ export function CenteredCard({
 
 const ONBOARDING_STEPS = ['Account', 'Verify', 'Organization', 'Subscription', 'Payment'] as const;
 
-export function Stepper({ current }: { current: (typeof ONBOARDING_STEPS)[number] }) {
+export type OnboardingStep = (typeof ONBOARDING_STEPS)[number];
+
+/**
+ * Onboarding progress.
+ *
+ * The Organization tick is driven by `hasCurrentOrganization` — the same
+ * backend-confirmed answer the subscription page, its confirm button and the
+ * route guard use. It used to be purely positional: every step before the
+ * current page was drawn as complete, whatever the underlying state was. That
+ * is why the indicator could show "Organization ✓" while the page below it
+ * insisted the organization did not exist. A progress bar that reports where
+ * you are standing rather than what you have done cannot contradict anything,
+ * because it never knew anything.
+ */
+export function Stepper({ current }: { current: OnboardingStep }) {
   const activeIndex = ONBOARDING_STEPS.indexOf(current);
+  const hasOrganization = useHasCurrentOrganization();
+
+  const stateOf = (step: OnboardingStep, index: number): 'done' | 'active' | 'todo' => {
+    // A step is only "done" when it is genuinely done. For the organization
+    // that means the backend confirmed one — position on the route proves
+    // nothing, least of all on a page reached by a direct link or a refresh.
+    if (step === 'Organization' && index < activeIndex) return hasOrganization ? 'done' : 'todo';
+    if (index < activeIndex) return 'done';
+    return index === activeIndex ? 'active' : 'todo';
+  };
+
   return (
     <ol className="mb-6 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
       {ONBOARDING_STEPS.map((step, i) => {
-        const state = i < activeIndex ? 'done' : i === activeIndex ? 'active' : 'todo';
+        const state = stateOf(step, i);
         return (
           <li key={step} className="flex items-center gap-2">
             <span

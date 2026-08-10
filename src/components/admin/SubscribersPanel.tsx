@@ -1,14 +1,18 @@
 /**
  * Platform super-administrator view of subscribers.
  *
- * Every registered account (`authStore.users`) that owns/started an organization
- * is a subscriber, so the roster is derived from the user registry — that's the
- * only array that holds ALL sign-ups (e.g. a newly-registered subscriber).
+ * ── Two honest implementations, chosen by what actually exists ───────────────
+ * With a backend configured, the roster is the real multi-tenant one served by
+ * `/api/admin/subscribers` — every organization, its plan, status, renewal date,
+ * seats, owner and outstanding payment. That is `BackendSubscribersPanel`, and it
+ * is what a deployed Ledgora uses.
  *
- * Ledgora is frontend-only and SINGLE-TENANT today: only one organization +
- * subscription + invoice set is retained at a time. So full plan/invoice detail
- * is available for the active organization; other accounts show the sign-up
- * data that is retained. A real multi-tenant backend keeps every org's detail.
+ * Without a backend (the static demo build) the component below is the truth
+ * available: Ledgora is then frontend-only and SINGLE-TENANT, so only one
+ * organization + subscription + invoice set is retained at a time. Full
+ * plan/invoice detail exists for the active organization; other accounts show
+ * only the sign-up data that was kept. Reporting that honestly — rather than
+ * fabricating rows or showing an empty table — is why this path stays.
  *
  * The row "View" opens an accessible detail drawer for THAT subscriber (never
  * ambient state), and — for the retained active tenant — lets the operator open
@@ -20,6 +24,7 @@ import { useAuthStore, membersOf } from '@/store/authStore';
 import { useEntitlementStore } from '@/store/entitlementStore';
 import { useMeteringConfigStore } from '@/store/meteringConfigStore';
 import { useOperatorViewStore } from '@/store/operatorViewStore';
+import { useMemberDirectoryStore } from '@/store/memberDirectoryStore';
 import { useRouterStore } from '@/store/routerStore';
 import { ROUTES } from '@/lib/accessControl';
 import { Card } from '@/components/ui/Card';
@@ -27,6 +32,9 @@ import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Alert } from '@/components/ui/Alert';
 import { formatCurrency } from '@/lib/money';
+import { isApiConfigured } from '@/services/api/client';
+import type { PlatformCapabilityName } from '@/services/api/adminConsoleApi';
+import { BackendSubscribersPanel } from './BackendSubscribersPanel';
 import {
   SubscriberDetailDrawer,
   type ActiveTenantDetail,
@@ -38,7 +46,35 @@ function statusTone(status?: string): 'green' | 'amber' | 'red' | 'slate' {
   return status === 'active' ? 'green' : status === 'pending_verification' || status === 'pending_payment' ? 'amber' : status === 'suspended' || status === 'rejected' || status === 'expired' ? 'red' : 'slate';
 }
 
-export function SubscribersPanel() {
+export interface SubscribersPanelProps {
+  capabilities?: PlatformCapabilityName[];
+  onAddSubscriber?: () => void;
+  onAssignPackage?: (organizationId: string, organizationName: string) => void;
+  onViewMembers?: (organizationId: string, organizationName: string) => void;
+  onCleanUp?: (organizationId: string) => void;
+}
+
+/**
+ * Route to whichever roster is real for this build. The demo path below runs only
+ * when there is no account service to ask.
+ */
+export function SubscribersPanel(props: SubscribersPanelProps = {}) {
+  if (isApiConfigured()) {
+    return (
+      <BackendSubscribersPanel
+        capabilities={props.capabilities ?? []}
+        onAddSubscriber={props.onAddSubscriber ?? (() => undefined)}
+        onAssignPackage={props.onAssignPackage ?? (() => undefined)}
+        onViewMembers={props.onViewMembers ?? (() => undefined)}
+        onCleanUp={props.onCleanUp}
+      />
+    );
+  }
+  return <DemoSubscribersPanel />;
+}
+
+/** The browser-only, single-tenant roster. See the module comment. */
+function DemoSubscribersPanel() {
   const organization = useOrganizationStore((s) => s.organization);
   const subscription = useOrganizationStore((s) => s.subscription);
   const invoices = useOrganizationStore((s) => s.invoices);
@@ -114,6 +150,10 @@ export function SubscribersPanel() {
   const openWorkspace = (row: SubscriberRow): void => {
     const org = useOrganizationStore.getState().organization;
     if (row.state !== 'active-tenant' || !org || org.ownerUserId !== row.owner.id) return;
+    // Drop any roster held for a previously viewed subscriber BEFORE the new
+    // context is set, so the Members page can never paint one tenant's people
+    // under another tenant's name.
+    useMemberDirectoryStore.getState().clear();
     enterSubscriberView({
       organizationId: org.id,
       ownerUserId: row.owner.id,

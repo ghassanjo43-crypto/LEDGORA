@@ -42,6 +42,19 @@ const ROLE_GRANTS: Record<OrganizationRole, FixedAssetPermission[]> = {
     'fa.post_journals', 'fa.transfer', 'fa.impair', 'fa.revalue',
     'fa.dispose', 'fa.reverse', 'fa.reports',
   ],
+  /**
+   * Manager — everything an Accountant may do, plus the approvals.
+   *
+   * This is the rung the backend catalogue defines the same way: the role that
+   * posts is deliberately not the role that approves, so the Manager exists to
+   * hold the second pair of eyes. Configuration stays with the administrators.
+   */
+  manager: [
+    'fa.view', 'fa.create', 'fa.edit_draft', 'fa.run_depreciation',
+    'fa.post_journals', 'fa.transfer', 'fa.impair', 'fa.revalue',
+    'fa.dispose', 'fa.reverse', 'fa.reports',
+    'fa.approve_capitalization', 'fa.approve_depreciation',
+  ],
   member: ['fa.view', 'fa.create', 'fa.edit_draft', 'fa.reports'],
   viewer: ['fa.view', 'fa.reports'],
 };

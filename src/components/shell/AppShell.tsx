@@ -16,6 +16,7 @@ import { useOrganizationStore } from '@/store/organizationStore';
 import { useBillingStore } from '@/store/billingStore';
 import { useMeteringConfigStore } from '@/store/meteringConfigStore';
 import {
+  freePreviewAllowed,
   isPathAllowed,
   requiredAdminCapability,
   resolvePostLoginRoute,
@@ -28,6 +29,11 @@ import { useAccountSessionStore } from '@/store/accountSessionStore';
 import { useOperatorViewStore } from '@/store/operatorViewStore';
 import { readSessionState } from '@/store/sessionSnapshot';
 import { syncWorkspaceStorageMode } from '@/lib/freeDemoSession';
+import {
+  closeBusinessWorkspace,
+  openBusinessWorkspace,
+  FREE_DEMO_WORKSPACE_ID,
+} from '@/store/businessWorkspace';
 import { platformAdminToolsAllowed } from '@/lib/platformAccess';
 import { useBackendSessionBootstrap, useEffectivePlatformRole } from '@/hooks/usePlatformRole';
 import { useBackendSessionStore } from '@/store/backendSessionStore';
@@ -39,6 +45,7 @@ import { PricingPage } from '@/pages/onboarding/PricingPage';
 import { RegisterPage } from '@/pages/onboarding/RegisterPage';
 import { LoginPage } from '@/pages/onboarding/LoginPage';
 import { VerifyEmailPage } from '@/pages/onboarding/VerifyEmailPage';
+import { AcceptInvitationPage } from '@/pages/AcceptInvitationPage';
 import { OnboardingOrganizationPage } from '@/pages/onboarding/OnboardingOrganizationPage';
 import { BillingPaymentPage } from '@/pages/onboarding/BillingPaymentPage';
 import { AdminPaymentReviewPage } from '@/pages/onboarding/AdminPaymentReviewPage';
@@ -83,6 +90,9 @@ export function AppShell() {
   const demoActive = useAccountSessionStore((s) => s.demoActive);
   // Re-run the gate when the operator enters/leaves subscriber-view mode.
   const operatorViewing = useOperatorViewStore((s) => s.active);
+  // The tenant an operator has explicitly entered, if any. Drives which books
+  // the workspace opens — an operator has no organization of their own.
+  const viewedOrganizationId = useOperatorViewStore((s) => (s.active ? s.organizationId ?? null : null));
   // Re-run the gate when the server session resolves or demands a new password.
   const backendStatus = useBackendSessionStore((s) => s.status);
   const backendUser = useBackendSessionStore((s) => s.user);
@@ -102,6 +112,41 @@ export function AppShell() {
   useEffect(() => {
     syncWorkspaceStorageMode(readSessionState().accountStatus);
   }, [currentUserId, orgId, subStatus, demoActive]);
+
+  /**
+   * Point the books at the organization actually being viewed.
+   *
+   * This is the tenant-isolation boundary for browser-resident business data.
+   * Every accounting store persists under a namespace derived from the identity
+   * set here, so opening a different organization physically changes which keys
+   * the stores address — and re-reads them, which is what stops the previous
+   * tenant's records staying on screen after a switch.
+   *
+   * An operator in subscriber-view mode gets the VIEWED tenant's namespace, not
+   * their own (they have none). Signing out closes the workspace without
+   * deleting anything: the records stay, unreachable, until that tenant is
+   * opened again.
+   */
+  useEffect(() => {
+    if (sessionResolving) return;
+    if (demoActive) {
+      openBusinessWorkspace({ kind: 'demo', organizationId: FREE_DEMO_WORKSPACE_ID });
+      return;
+    }
+    // The operator's viewed tenant wins: it is the organization on screen.
+    const activeOrganizationId = viewedOrganizationId ?? orgId;
+    if (!currentUserId && !activeOrganizationId) {
+      closeBusinessWorkspace();
+      return;
+    }
+    if (!activeOrganizationId) {
+      // Signed in but not yet onboarded — there is no tenant to open, and the
+      // durable namespace must not be guessed.
+      closeBusinessWorkspace();
+      return;
+    }
+    openBusinessWorkspace({ kind: 'tenant', organizationId: activeOrganizationId });
+  }, [sessionResolving, demoActive, orgId, viewedOrganizationId, currentUserId]);
 
   // Access enforcement.
   useEffect(() => {
@@ -177,8 +222,18 @@ function Surface({ path, platformRole }: { path: string; platformRole: string })
   // an active subscription or a running Free Demo reaches it.
   if (surface === 'app') {
     // A verified operator in explicit subscriber-view mode may open the
-    // application even though they hold no subscription of their own.
-    if (!ctx.demoActive && ctx.subscriptionStatus !== 'active' && !ctx.operatorViewing) return <Blank />;
+    // application even though they hold no subscription of their own, and a
+    // Free Preview customer may open it while their payment is verified.
+    // Omitting the preview case here would leave the customer staring at a
+    // blank page even once routing let them through.
+    if (
+      !ctx.demoActive &&
+      ctx.subscriptionStatus !== 'active' &&
+      !ctx.operatorViewing &&
+      !freePreviewAllowed(ctx)
+    ) {
+      return <Blank />;
+    }
     return <App />;
   }
   if (surface === 'admin') {
@@ -208,6 +263,8 @@ function Surface({ path, platformRole }: { path: string; platformRole: string })
       return <LoginPage />;
     case ROUTES.verifyEmail:
       return <VerifyEmailPage />;
+    case ROUTES.acceptInvitation:
+      return <AcceptInvitationPage />;
     case ROUTES.onboardingOrganization:
       return <OnboardingOrganizationPage />;
     case ROUTES.onboardingSubscription:

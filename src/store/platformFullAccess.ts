@@ -24,6 +24,7 @@ import { useSessionStore } from './sessionStore';
 import { useBackendSessionStore } from './backendSessionStore';
 import { useOperatorViewStore } from './operatorViewStore';
 import { useOrganizationStore } from './organizationStore';
+import { useViewedOrganizationStore } from './effectiveOrganization';
 
 /* ── Imperative reads (guards, store actions, non-React policy code) ───────── */
 
@@ -41,7 +42,21 @@ export function getPlatformEntitlementOverride(): PlatformEntitlementOverride {
     viewAsSubscriber: view.viewAsSubscriber,
     viewedOrganizationId: view.organizationId,
     activeOrganizationId: useOrganizationStore.getState().organization?.id ?? null,
+    viewedOrganizationConfirmed: viewedOrganizationConfirmed(view.organizationId),
   });
+}
+
+/**
+ * Has the backend confirmed the viewed organization?
+ *
+ * Read lazily from the module registry rather than imported at the top, because
+ * `store/effectiveOrganization` imports this module — resolving the binding at
+ * call time keeps the cycle harmless.
+ */
+function viewedOrganizationConfirmed(viewedOrganizationId: string | null): boolean {
+  if (!viewedOrganizationId) return false;
+  const viewed = useViewedOrganizationStore.getState();
+  return viewed.status === 'ready' && viewed.organizationId === viewedOrganizationId;
 }
 
 /** True while the verified super-admin has full feature access in a workspace. */
@@ -59,6 +74,8 @@ export function usePlatformEntitlementOverride(): PlatformEntitlementOverride {
   const viewAsSubscriber = useOperatorViewStore((s) => s.viewAsSubscriber);
   const viewedOrganizationId = useOperatorViewStore((s) => s.organizationId);
   const activeOrganizationId = useOrganizationStore((s) => s.organization?.id ?? null);
+  const confirmedStatus = useViewedOrganizationStore((s) => s.status);
+  const confirmedId = useViewedOrganizationStore((s) => s.organizationId);
 
   return useMemo(
     () =>
@@ -68,8 +85,10 @@ export function usePlatformEntitlementOverride(): PlatformEntitlementOverride {
         viewAsSubscriber,
         viewedOrganizationId,
         activeOrganizationId,
+        viewedOrganizationConfirmed:
+          !!viewedOrganizationId && confirmedStatus === 'ready' && confirmedId === viewedOrganizationId,
       }),
-    [storedRole, backendRoles, active, viewAsSubscriber, viewedOrganizationId, activeOrganizationId],
+    [storedRole, backendRoles, active, viewAsSubscriber, viewedOrganizationId, activeOrganizationId, confirmedStatus, confirmedId],
   );
 }
 

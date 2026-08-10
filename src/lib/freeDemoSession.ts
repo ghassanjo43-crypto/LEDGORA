@@ -10,32 +10,62 @@ import type { AccountStatus } from '@/types/session';
 import {
   clearMemoryWorkspace,
   getWorkspaceStorageMode,
+  setActiveWorkspace,
   setWorkspaceStorageMode,
   type WorkspaceStorageMode,
 } from './workspaceStorage';
-import { resetBusinessWorkspace, rehydrateBusinessWorkspace } from '@/store/businessWorkspace';
+import {
+  FREE_DEMO_WORKSPACE_ID,
+  resetBusinessWorkspace,
+  rehydrateBusinessWorkspace,
+} from '@/store/businessWorkspace';
 import { useAccountSessionStore } from '@/store/accountSessionStore';
 import { useOperatorViewStore } from '@/store/operatorViewStore';
 
 /**
  * The storage mode a given account status runs in.
  *
- * `anonymous` and `free-demo` are memory-only: no business record can reach
- * durable storage. `registered-no-plan` also cannot persist business data, but
- * it is enforced upstream — that status cannot open the accounting application
- * at all (see `lib/sessionModel.canOpenApplication`), so there is no business
- * data to write; keeping durable mode preserves the organization profile the
- * subscription step needs.
+ * `anonymous`, `free-demo` and `free-preview` are memory-only: no business
+ * record can reach durable storage. For Free Preview this is the whole
+ * mechanism behind `canPersistData: false` — the customer explores every
+ * feature, and because every business store persists through
+ * `businessJSONStorage`, not one of their records touches localStorage,
+ * sessionStorage, IndexedDB or the backend.
+ *
+ * `registered-no-plan` also cannot persist business data, but it is enforced
+ * upstream — that status cannot open the accounting application at all (see
+ * `lib/sessionModel.canOpenApplication`), so there is no business data to write;
+ * keeping durable mode preserves the organization profile the subscription step
+ * needs.
  */
 export function storageModeFor(status: AccountStatus): WorkspaceStorageMode {
-  return status === 'anonymous' || status === 'free-demo' ? 'memory' : 'backend';
+  return status === 'anonymous' || status === 'free-demo' || status === 'free-preview'
+    ? 'memory'
+    : 'backend';
 }
 
-/** Apply the storage mode for a status. Returns true when the mode changed. */
+/**
+ * Apply the storage mode for a status. Returns true when the mode changed.
+ *
+ * Entering memory mode also DROPS whatever the business stores currently hold.
+ * Without that a customer who signed in (durable rehydrate) and then resolved to
+ * Free Preview would carry the durable workspace into the preview in memory,
+ * where they could edit records that were never meant to be writable. Leaving
+ * memory mode re-reads the durable workspace for the same reason.
+ */
 export function syncWorkspaceStorageMode(status: AccountStatus): boolean {
   const next = storageModeFor(status);
   if (getWorkspaceStorageMode() === next) return false;
   setWorkspaceStorageMode(next);
+  if (next === 'memory') {
+    // The mode is switched FIRST, so these default-writes land in the volatile
+    // map and cannot overwrite the durable workspace.
+    resetBusinessWorkspace();
+  } else {
+    // Re-read only. Resetting here would write defaults THROUGH to durable
+    // storage and the rehydrate would then faithfully read back the wreckage.
+    rehydrateBusinessWorkspace();
+  }
   return true;
 }
 
@@ -44,6 +74,16 @@ export function startFreeDemoWorkspace(): void {
   // Order matters: switch to memory FIRST so the reset below cannot overwrite a
   // durable workspace belonging to a real subscriber.
   setWorkspaceStorageMode('memory');
+  /*
+   * Claim the demo workspace identity here, not just in the shell.
+   *
+   * The demo is the ONE workspace allowed to hold seed fixtures, and this is
+   * where it is seeded. Recording the identity at the same moment means the
+   * shell's workspace effect sees the demo already open and leaves it alone —
+   * otherwise its first run would treat the demo as a new workspace and reset
+   * it, throwing away whatever the visitor had already entered.
+   */
+  setActiveWorkspace({ kind: 'demo', organizationId: FREE_DEMO_WORKSPACE_ID });
   resetBusinessWorkspace();
   useAccountSessionStore.getState().setDemoActive(true);
 }
@@ -72,6 +112,13 @@ export function clearWorkspaceForSignOut(): void {
   // Leaving the account also leaves any operator subscriber-view mode, so a
   // later session never resumes viewing a tenant.
   useOperatorViewStore.getState().exit();
+  /*
+   * Release the tenant namespace. The signed-out account's records are left
+   * exactly where they are — signing out is not a request to destroy books —
+   * but they stop being addressable, so whoever signs in next cannot read them
+   * even before their own workspace is opened.
+   */
+  setActiveWorkspace(null);
   resetBusinessWorkspace();
   clearMemoryWorkspace();
 }

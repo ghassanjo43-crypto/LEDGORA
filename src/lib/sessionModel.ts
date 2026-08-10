@@ -12,6 +12,7 @@ import type { SubscriptionStatus } from '@/types/subscription';
 import type { OnboardingSubscriptionStatus } from '@/types/onboarding';
 import type { RegisteredUser } from '@/types/onboarding';
 import { resolvePersistencePolicy } from './persistencePolicy';
+import { isFreePreviewEligible } from './freePreview';
 
 export interface SessionInputs {
   user: RegisteredUser | null;
@@ -30,7 +31,7 @@ export function resolveAccountStatus(input: SessionInputs): AccountStatus {
   if (input.demoActive) return 'free-demo';
   if (!input.user) return 'anonymous';
 
-  // Only an activated onboarding subscription grants application access.
+  // An activated onboarding subscription grants normal, durable access.
   if (input.onboardingStatus === 'active') {
     switch (input.entitlementStatus) {
       case 'trial':
@@ -45,7 +46,21 @@ export function resolveAccountStatus(input: SessionInputs): AccountStatus {
         return 'subscribed';
     }
   }
+  // An administratively suspended subscription keeps its restriction.
   if (input.onboardingStatus === 'suspended') return 'suspended';
+
+  // Package chosen, payment or proof still being verified: full features, no
+  // durable storage. This branch is what stops a paying customer being told
+  // they have no plan and held outside the application. See `lib/freePreview`.
+  if (
+    isFreePreviewEligible({
+      authenticated: true,
+      hasOrganization: !!input.organizationId,
+      subscriptionStatus: input.onboardingStatus,
+    })
+  ) {
+    return 'free-preview';
+  }
 
   // Registered, but nothing purchased, paid for or activated yet.
   return 'registered-no-plan';
@@ -73,18 +88,36 @@ export function resolveSessionState(input: SessionInputs): SessionState {
     // inside its grace window (it becomes expired/suspended afterwards).
     inGracePeriod: true,
   });
+  // A demo has no package; every other status reports the one it holds. In Free
+  // Preview this is the package AWAITING ACTIVATION, which is exactly what the
+  // banner and the status page need to name.
+  const selectedPlanId = accountStatus === 'free-demo' ? null : input.subscriptionPlanId;
   return {
     user: toAuthenticatedUser(input.user, input.organizationName),
     accountStatus,
     organizationId: input.organizationId,
-    subscriptionPlanId: accountStatus === 'free-demo' ? null : input.subscriptionPlanId,
+    subscriptionPlanId: selectedPlanId,
+    selectedPlanId,
+    subscriptionStatus: input.onboardingStatus,
     canPersistData: policy.canPersistBusinessData,
     isAuthenticated: !!input.user,
   };
 }
 
-/** Account statuses that may open the accounting application at all. */
-const APP_STATUSES: AccountStatus[] = ['free-demo', 'trial', 'subscribed', 'past-due', 'suspended'];
+/**
+ * Account statuses that may open the accounting application at all.
+ *
+ * `free-preview` is here because keeping it out is precisely what trapped a
+ * paid-but-unverified subscriber on the status page.
+ */
+const APP_STATUSES: AccountStatus[] = [
+  'free-demo',
+  'free-preview',
+  'trial',
+  'subscribed',
+  'past-due',
+  'suspended',
+];
 
 export function canOpenApplication(status: AccountStatus): boolean {
   return APP_STATUSES.includes(status);

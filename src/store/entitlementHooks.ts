@@ -31,34 +31,58 @@ import {
 } from '@/lib/entitlementResolution';
 import { FULL_ACCESS_MODULE_IDS } from '@/lib/platformEntitlementOverride';
 import { isPlatformAdminFullAccess, usePlatformAdminFullAccess } from './platformFullAccess';
+import { isFreePreviewActive, useIsFreePreview } from './freePreviewAccess';
+
+/* ── Full module access ───────────────────────────────────────────────────── */
+
+/**
+ * The two — and only two — reasons every module is reachable regardless of the
+ * package owned:
+ *
+ *  · a verified platform operator in subscriber-view mode (audited override);
+ *  · a customer in Free Preview, whose package is chosen but unactivated.
+ *
+ * Both widen the module set only. Neither touches the stored subscription, so
+ * the package awaiting activation is preserved exactly and applies the instant
+ * the payment is approved.
+ */
+function useFullModuleAccess(): boolean {
+  const operator = usePlatformAdminFullAccess();
+  const preview = useIsFreePreview();
+  return operator || preview;
+}
+
+function fullModuleAccess(): boolean {
+  return isPlatformAdminFullAccess() || isFreePreviewActive();
+}
 
 /* ── Hooks ────────────────────────────────────────────────────────────────── */
 
 /** Stable array of accessible module ids (owned, or all under full access). */
 export function useEffectiveModules(): LedgoraModule[] {
   const owned = useEntitlementStore((s) => s.effectiveModuleIds);
-  const fullAccess = usePlatformAdminFullAccess();
+  const fullAccess = useFullModuleAccess();
   return fullAccess ? FULL_ACCESS_MODULE_IDS : owned;
 }
 
 export function useHasModule(module: LedgoraModule): boolean {
   const owned = useEntitlementStore((s) => s.effectiveModuleIds.includes(module));
-  return usePlatformAdminFullAccess() || owned;
+  return useFullModuleAccess() || owned;
 }
 
 export function useHasAllModules(modules: readonly LedgoraModule[]): boolean {
   const owned = useEntitlementStore((s) => hasAllModules(s.effectiveModuleIds, modules));
-  return usePlatformAdminFullAccess() || owned;
+  return useFullModuleAccess() || owned;
 }
 
 export function useHasAnyModule(modules: readonly LedgoraModule[]): boolean {
   const owned = useEntitlementStore((s) => hasAnyModule(s.effectiveModuleIds, modules));
-  return usePlatformAdminFullAccess() || owned;
+  return useFullModuleAccess() || owned;
 }
 
 export function useCanAccessFeature(req: ModuleRequirement | undefined): boolean {
   const owned = useEntitlementStore((s) => canAccessFeature(s.effectiveModuleIds, req));
-  return usePlatformAdminFullAccess() || owned;
+  return useFullModuleAccess() || owned;
 }
 
 export function useCurrentEdition(): LedgoraEdition {
@@ -99,7 +123,7 @@ export function useEntitlements(): EffectiveEntitlements {
 /* ── Imperative helpers (for use inside non-React store code) ─────────────── */
 
 export function getEffectiveModuleIds(): LedgoraModule[] {
-  if (isPlatformAdminFullAccess()) return FULL_ACCESS_MODULE_IDS;
+  if (fullModuleAccess()) return FULL_ACCESS_MODULE_IDS;
   return useEntitlementStore.getState().effectiveModuleIds;
 }
 

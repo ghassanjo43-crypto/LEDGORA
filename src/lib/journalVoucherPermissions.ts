@@ -46,6 +46,20 @@ const ROLE_GRANTS: Record<OrganizationRole, JournalVoucherPermission[]> = {
     'journalVoucher.viewAttachments', 'journalVoucher.manageTemplates',
     'journalVoucher.postTaxAdjustment',
   ],
+  /**
+   * Manager — the Accountant's rights plus approval.
+   *
+   * `configureTypes` and the specially-controlled voucher classes (opening
+   * balance, intercompany) stay with the administrators: approving a voucher is
+   * a different authority from deciding which voucher types exist.
+   */
+  manager: [
+    'journalVoucher.view', 'journalVoucher.create', 'journalVoucher.editDraft',
+    'journalVoucher.submit', 'journalVoucher.review', 'journalVoucher.post',
+    'journalVoucher.reverse', 'journalVoucher.correct', 'journalVoucher.cancelDraft',
+    'journalVoucher.viewAttachments', 'journalVoucher.manageTemplates',
+    'journalVoucher.postTaxAdjustment', 'journalVoucher.approve',
+  ],
   member: ['journalVoucher.view', 'journalVoucher.create', 'journalVoucher.editDraft', 'journalVoucher.submit', 'journalVoucher.cancelDraft', 'journalVoucher.viewAttachments'],
   viewer: ['journalVoucher.view', 'journalVoucher.viewAttachments'],
 };

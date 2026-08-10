@@ -65,9 +65,33 @@ describe('account status resolution', () => {
     expect(resolveAccountStatus({ ...base, user: null })).toBe('anonymous');
   });
 
-  it('is registered-no-plan for a new account without an activated subscription', () => {
+  it('is registered-no-plan for a new account that has selected nothing', () => {
     expect(resolveAccountStatus(base)).toBe('registered-no-plan');
-    expect(resolveAccountStatus({ ...base, onboardingStatus: 'pending_payment' })).toBe('registered-no-plan');
+    // A draft is an unconfirmed choice with no invoice — still onboarding.
+    expect(resolveAccountStatus({ ...base, onboardingStatus: 'draft' })).toBe('registered-no-plan');
+  });
+
+  it('is free-preview once a package is selected and payment is being verified', () => {
+    expect(resolveAccountStatus({ ...base, onboardingStatus: 'pending_payment' })).toBe('free-preview');
+    expect(resolveAccountStatus({ ...base, onboardingStatus: 'pending_verification' })).toBe('free-preview');
+  });
+
+  it('never grants free-preview without an organization', () => {
+    expect(
+      resolveAccountStatus({ ...base, organizationId: null, onboardingStatus: 'pending_verification' }),
+    ).toBe('registered-no-plan');
+  });
+
+  it('keeps lapsed and withdrawn subscriptions on their own restrictions', () => {
+    expect(resolveAccountStatus({ ...base, onboardingStatus: 'suspended' })).toBe('suspended');
+    // Expired is not a preview: the subscription lapsed, it is not being set up.
+    expect(resolveAccountStatus({ ...base, onboardingStatus: 'expired' })).toBe('registered-no-plan');
+  });
+
+  it('free-preview opens the app, and never persists', () => {
+    expect(canOpenApplication('free-preview')).toBe(true);
+    expect(canPersistFor('free-preview')).toBe(false);
+    expect(storageModeFor('free-preview')).toBe('memory');
   });
 
   it('is free-demo whenever a demo workspace is running, never a paid status', () => {

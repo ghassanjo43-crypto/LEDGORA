@@ -24,6 +24,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { businessJSONStorage } from '@/lib/workspaceStorage';
+import type { OrganizationRole } from '@/types/roles';
 import type {
   AssetAttachment,
   AssetCategory,
@@ -87,7 +88,9 @@ const auditActor = (): string => resolveAuditActor('Finance Manager');
  * administrator in full-access operator mode acts with admin grants (their
  * identity — not the subscriber's — goes on the audit trail). A workspace with
  * no signed-in member record (local demo) defaults to owner. */
-function currentRole(): 'owner' | 'admin' | 'accountant' | 'member' | 'viewer' {
+// Typed as `OrganizationRole` rather than restating the union, so a role added
+// to the ladder reaches the permission check instead of failing to compile here.
+function currentRole(): OrganizationRole {
   if (isPlatformAdminFullAccess()) return 'admin';
   return getCurrentUser()?.role ?? 'owner';
 }

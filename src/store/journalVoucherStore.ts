@@ -30,6 +30,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { businessJSONStorage } from '@/lib/workspaceStorage';
+import type { OrganizationRole } from '@/types/roles';
 import type {
   JournalVoucher,
   JournalVoucherAuditEntry,
@@ -80,7 +81,9 @@ export interface JvResult {
 
 const actor = (): string => resolveAuditActor('Finance Manager');
 
-function currentRole(): 'owner' | 'admin' | 'accountant' | 'member' | 'viewer' {
+// Typed as `OrganizationRole` rather than restating the union, so a role added
+// to the ladder reaches the permission check instead of failing to compile here.
+function currentRole(): OrganizationRole {
   if (isPlatformAdminFullAccess()) return 'admin';
   return getCurrentUser()?.role ?? 'owner';
 }

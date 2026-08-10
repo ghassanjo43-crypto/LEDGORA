@@ -18,6 +18,11 @@ const STATUS_TEXT: Record<AccountStatus, { variant: 'info' | 'warning' | 'succes
     title: 'Free Demo running',
     body: 'You are working in a temporary demonstration workspace. Choose a package to keep your records.',
   },
+  'free-preview': {
+    variant: 'warning',
+    title: 'Free Preview — subscription being activated',
+    body: 'Your package is chosen and every Ledgora feature is open to you while we verify your payment. Work entered now is temporary and is not saved until the subscription is activated.',
+  },
   trial: { variant: 'success', title: 'Trial active', body: 'Your trial is running. Choose a package before it ends to keep working.' },
   subscribed: { variant: 'success', title: 'Subscription active', body: 'Your subscription is active.' },
   'past-due': { variant: 'warning', title: 'Payment past due', body: 'Settle the open invoice to avoid interruption.' },

@@ -227,7 +227,7 @@ export const NAV_GROUPS: NavGroup[] = [
     label: 'System',
     items: [
       { key: 'import-export', label: 'Import / Export', icon: ArrowLeftRight, description: 'Accounts CSV & JSON', requiredModule: 'core_accounting' },
-      { key: 'members', label: 'Members', icon: Users, description: 'Organization users, roles & invitations' },
+      { key: 'members', label: 'Users & Roles', icon: Users, description: 'Invite people, set roles and manage seats in your organization' },
       { key: 'subscription', label: 'Subscription', icon: CreditCard, description: 'Edition, modules & subscription status' },
       { key: 'settings', label: 'Settings', icon: Settings2, description: 'Company & presentation' },
     ],
@@ -321,7 +321,7 @@ const SUBTITLES: Partial<Record<ViewKey, string>> = {
   'fixed-assets-reports': 'Registers, schedules, movement analysis and reconciliation of the asset register to the General Ledger',
   'import-export': 'Move your chart of accounts in and out as CSV or JSON',
   subscription: 'Your Ledgora edition, enabled modules, limits and subscription status',
-  members: 'Invite teammates, assign roles and manage seats within your plan limit',
+  members: 'Invite people into YOUR organization, assign roles and manage seats within your plan limit',
   settings: 'Company profile, accounting and presentation preferences',
 };
 

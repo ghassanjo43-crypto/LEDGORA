@@ -52,6 +52,20 @@ export interface PlatformOverrideInput {
   viewedOrganizationId: string | null;
   /** The organization actually loaded in the workspace right now. */
   activeOrganizationId: string | null;
+  /**
+   * The viewed organization has been CONFIRMED to exist by the backend, through
+   * the capability-guarded admin lookup (see `store/effectiveOrganization`).
+   *
+   * This exists because the coherence check below originally compared the viewed
+   * organization against `organizationStore.organization` — the ACTING USER's own
+   * loaded workspace. A real platform operator is deliberately tenantless, so
+   * that field is null for them and the check failed closed every time: operator
+   * mode was unreachable in any deployment with a backend. Server confirmation of
+   * the viewed tenant is the coherent, and stronger, form of the same guarantee —
+   * it is the server saying "this organization exists and you may administer it",
+   * rather than the browser saying "the workspace I loaded happens to match".
+   */
+  viewedOrganizationConfirmed?: boolean;
 }
 
 /**
@@ -70,10 +84,11 @@ export function resolvePlatformEntitlementOverride(
   if (!platformRoleHasCapability(input.platformRole, 'manage-any-organization')) return 'none';
   // Only inside explicit, session-scoped operator viewing mode.
   if (!input.operatorViewActive) return 'none';
-  // The viewed-organization context must match the loaded workspace. A viewing
-  // record naming an organization that is not the one loaded (or none loaded)
-  // is incoherent — fail closed rather than widen access over unknown data.
-  if (input.viewedOrganizationId !== null) {
+  // The viewed organization must be coherent — established EITHER by the backend
+  // confirming it (the tenantless-operator path, and the stronger of the two), OR
+  // by it being the workspace actually loaded in this browser. Failing both, fail
+  // closed rather than widen access over unknown data.
+  if (input.viewedOrganizationId !== null && !input.viewedOrganizationConfirmed) {
     if (input.activeOrganizationId === null) return 'none';
     if (input.viewedOrganizationId !== input.activeOrganizationId) return 'none';
   }

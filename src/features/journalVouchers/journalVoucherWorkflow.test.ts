@@ -22,7 +22,8 @@ import { useBackendSessionStore } from '@/store/backendSessionStore';
 import { useOperatorViewStore } from '@/store/operatorViewStore';
 import { useEntitlementStore } from '@/store/entitlementStore';
 import { useCompanyStore } from '@/store/companyStore';
-import { resetBusinessWorkspace } from '@/store/businessWorkspace';
+import { openBusinessWorkspace, resetBusinessWorkspace } from '@/store/businessWorkspace';
+import { workspaceScope, type WorkspaceIdentity } from '@/lib/workspaceStorage';
 import { computeVoucherTotals, renumber } from '@/lib/journalVoucherValidation';
 import { openingBalanceVouchers, manualTaxAdjustments, reconcileVouchersToJournal } from '@/lib/journalVoucherReports';
 import { calculateAccountClosingNet, calculateAccountPeriodMovement } from '@/lib/trialBalanceCalculations';
@@ -32,6 +33,13 @@ import type { AssetCategory } from '@/types/fixedAssets';
 import { generateId, nowIso } from '@/lib/utils';
 
 /* ── Workbench ────────────────────────────────────────────────────────────── */
+
+/**
+ * Business data is tenant-scoped, so these tests run inside one organization.
+ * Durable records are namespaced under this identity — there is no bare,
+ * organization-less key to read any more.
+ */
+const TEST_WORKSPACE: WorkspaceIdentity = { kind: 'tenant', organizationId: 'jv-test-org' };
 
 const jv = () => useJournalVoucherStore.getState();
 const journal = () => useJournalStore.getState();
@@ -143,6 +151,8 @@ function glNet(accountId: string): number {
 beforeEach(() => {
   localStorage.clear();
   sessionStorage.clear();
+  // Open the tenant's books, as the shell does once an organization is known.
+  openBusinessWorkspace(TEST_WORKSPACE);
 });
 
 afterEach(() => {
@@ -730,7 +740,12 @@ describe('tax adjustments and permissions', () => {
     // The durable workspace snapshot a page reload would rehydrate from
     // already carries the posted voucher (browser storage today — see the
     // backend persistence note in the store).
-    const raw = localStorage.getItem('ledgora-journal-vouchers');
+    //
+    // Read through the TENANT-SCOPED key: business records are namespaced by
+    // organization, so there is no bare `ledgora-journal-vouchers` to read.
+    const raw = localStorage.getItem(
+      `${workspaceScope(TEST_WORKSPACE)}ledgora-journal-vouchers`,
+    );
     expect(raw).toBeTruthy();
     const persisted = JSON.parse(raw!) as { state: { vouchers: JournalVoucher[] } };
     const restored = persisted.state.vouchers.find((x) => x.id === v.id);
