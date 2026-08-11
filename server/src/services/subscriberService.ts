@@ -248,6 +248,15 @@ export async function createSubscriber(
         base_currency: input.baseCurrency ?? 'USD',
         data_classification: input.dataClassification ?? 'production',
         classified_by: context.actorUserId,
+        /*
+         * Created through the console, where an operator picked the type on the
+         * form — so this is a reviewed decision from birth and must not show up
+         * in the reconciliation queue alongside rows the 008 migration
+         * defaulted. Self-service registrations get no such stamp, because
+         * nobody reviewed those.
+         */
+        classification_reviewed_at: new Date(),
+        classification_reviewed_by: context.actorUserId,
         fiscal_year_start: '01-01',
         status: input.organizationStatus ?? 'active',
         internal_notes: input.internalNotes?.trim() || null,
@@ -452,6 +461,12 @@ export interface SubscriberRow {
    * not be shown a button that will always be refused.
    */
   dataClassification: string;
+  /**
+   * When a human confirmed the classification, or null when the 008 migration
+   * default is the only thing that ever set it. Null is "nobody has reviewed
+   * this", never "not production".
+   */
+  classificationReviewedAt: string | null;
   legalHold: boolean;
   createdAt: string;
   planId: string | null;
@@ -480,6 +495,8 @@ export interface SubscriberRow {
 
 export interface ListSubscribersOptions {
   status?: string;
+  /** `production | test | demo`, or `all`/absent for every classification. */
+  classification?: string;
   subscriptionStatus?: string;
   planId?: string;
   search?: string;
@@ -516,6 +533,7 @@ function subscriberCte() {
         o.country                             AS country,
         o.status                              AS organization_status,
         o.data_classification                 AS data_classification,
+        o.classification_reviewed_at          AS classification_reviewed_at,
         o.legal_hold                          AS legal_hold,
         o.created_at                          AS created_at,
         sub.id                                AS subscription_id,
@@ -601,6 +619,14 @@ function subscriberPredicate(options: ListSubscribersOptions) {
   if (options.planId) {
     clauses.push(sql`plan_id = ${options.planId}::uuid`);
   }
+  /*
+   * Filtered in SQL rather than in the browser: a roster page is a window over
+   * the whole table, so filtering the loaded page would silently show "the
+   * demo tenants on page 1" and let an operator conclude there are no others.
+   */
+  if (options.classification && options.classification !== 'all') {
+    clauses.push(sql`data_classification = ${options.classification}`);
+  }
   if (options.search) {
     // Parameterised — the pattern is a bound value, never interpolated SQL.
     const pattern = `%${options.search.replace(/[%_\\]/g, (c) => `\\${c}`)}%`;
@@ -634,6 +660,7 @@ interface SubscriberQueryRow {
   country: string;
   organization_status: string;
   data_classification: string;
+  classification_reviewed_at: Date | null;
   legal_hold: boolean;
   created_at: Date;
   subscription_id: string | null;
@@ -671,6 +698,10 @@ function toSubscriberRow(row: SubscriberQueryRow): SubscriberRow {
     country: row.country,
     organizationStatus: row.organization_status,
     dataClassification: row.data_classification,
+    /* Null means the 008 migration default is the only thing that ever set it. */
+    classificationReviewedAt: row.classification_reviewed_at
+      ? new Date(row.classification_reviewed_at).toISOString()
+      : null,
     legalHold: Boolean(row.legal_hold),
     createdAt: new Date(row.created_at).toISOString(),
     planId: row.plan_id,

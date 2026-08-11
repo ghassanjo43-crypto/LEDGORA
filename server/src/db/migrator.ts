@@ -20,6 +20,7 @@ import * as userPermissions from './migrations/006_user_permissions.js';
 import * as subscriberClosure from './migrations/007_subscriber_closure.js';
 import * as dataClassification from './migrations/008_data_classification.js';
 import * as disposableCleanup from './migrations/009_disposable_cleanup.js';
+import * as classificationReview from './migrations/010_classification_review.js';
 
 const MIGRATIONS: Record<string, Migration> = {
   '001_initial_schema': initialSchema,
@@ -31,6 +32,7 @@ const MIGRATIONS: Record<string, Migration> = {
   '007_subscriber_closure': subscriberClosure,
   '008_data_classification': dataClassification,
   '009_disposable_cleanup': disposableCleanup,
+  '010_classification_review': classificationReview,
 };
 
 class StaticMigrationProvider implements MigrationProvider {

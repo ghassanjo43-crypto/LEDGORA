@@ -662,7 +662,7 @@ describe('the subscriber roster', () => {
     renderRoster([rosterRow()]);
 
     await waitFor(() => expect(screen.getByTestId(`classification-${PROD_ORG}`)).toBeTruthy());
-    expect(screen.getByTestId(`classification-${PROD_ORG}`).textContent).toBe('production');
+    expect(screen.getByTestId(`classification-${PROD_ORG}`).textContent).toBe('PRODUCTION');
 
     // Archive is offered; permanent deletion is not, and the reason is stated.
     expect(screen.getByTestId(`archive-${PROD_ORG}`)).toBeTruthy();
@@ -676,7 +676,7 @@ describe('the subscriber roster', () => {
     ]);
 
     await waitFor(() => expect(screen.getByTestId(`classification-${TEST_ORG}`)).toBeTruthy());
-    expect(screen.getByTestId(`classification-${TEST_ORG}`).textContent).toBe('test');
+    expect(screen.getByTestId(`classification-${TEST_ORG}`).textContent).toBe('TEST');
     expect(screen.getByTestId(`permanently-delete-${TEST_ORG}`)).toBeTruthy();
     expect(screen.getByTestId(`archive-${TEST_ORG}`)).toBeTruthy();
     expect(screen.queryByTestId(`retention-note-${TEST_ORG}`)).toBeNull();

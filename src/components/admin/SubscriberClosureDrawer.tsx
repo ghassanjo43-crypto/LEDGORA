@@ -30,10 +30,12 @@ import { Drawer } from '@/components/ui/Drawer';
 import { Button } from '@/components/ui/Button';
 import { Alert } from '@/components/ui/Alert';
 import { Badge } from '@/components/ui/Badge';
+import type { BadgeTone } from '@/data/ifrsOptions';
 import { ApiError } from '@/services/api/client';
 import { adminSubscriberApi, type PlatformCapabilityName } from '@/services/api/adminConsoleApi';
 import {
   subscriberClosureApi,
+  changeClassification,
   type ClosureStatus,
   type CreatedExport,
   type DeletionImpact,
@@ -95,9 +97,19 @@ export function SubscriberClosureDrawer({
   /** The one-time export credential. Local state only — see the module note. */
   const [freshExport, setFreshExport] = useState<CreatedExport | null>(null);
 
+  /** Open state of the reclassification prompt, and the chosen destination. */
+  const [reclassifying, setReclassifying] = useState(false);
+  const [reclassifyTarget, setReclassifyTarget] = useState<'production' | 'test' | 'demo'>('production');
+
   const canArchive = capabilities.includes('subscribers.archive');
   const canRequestDeletion = capabilities.includes('subscribers.request_deletion');
   const canExport = capabilities.includes('subscribers.export');
+  /*
+   * The same capability the PATCH route requires. Matching them means a control
+   * is never offered to somebody the server is going to refuse — but the server
+   * check is the one that decides.
+   */
+  const canManage = capabilities.includes('subscribers.manage');
 
   const load = useCallback(
     async (signal?: AbortSignal) => {
@@ -165,6 +177,41 @@ export function SubscriberClosureDrawer({
       setBusy(false);
     }
   };
+
+  const runReclassify = async (reason: string): Promise<void> => {
+    if (busy) return;
+    setBusy(true);
+    setActionError(null);
+    try {
+      const result = await changeClassification(organizationId, {
+        classification: reclassifyTarget,
+        reason,
+      });
+      setReclassifying(false);
+      const message = `${legalName} reclassified from ${result.classification.previousClassification} to ${result.classification.classification}.`;
+      setNotice(message);
+      // Re-read rather than assume: promotion also stamps a timestamp, and the
+      // available actions change with the new classification.
+      await load();
+      onChanged(message);
+    } catch (caught) {
+      /*
+       * The server's own refusal, shown verbatim. A downgrade attempt that
+       * somehow reached the API must read as the server's "no", not as this
+       * component's guess about why.
+       */
+      setActionError(
+        caught instanceof ApiError ? caught.message : 'The classification could not be changed.',
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /** Undefined for an unrecognised or absent classification. */
+  const classificationTone = (
+    { production: 'green', test: 'amber', demo: 'violet' } as Record<string, BadgeTone | undefined>
+  )[closure?.dataClassification ?? ''];
 
   const status = closure?.organizationStatus ?? '';
   const pendingDeletion = Boolean(closure?.deletionRequestedAt);
@@ -251,10 +298,49 @@ export function SubscriberClosureDrawer({
                 <Fact label="Account status">
                   <StatusBadge status={status} pendingDeletion={pendingDeletion} />
                 </Fact>
+                {/*
+                  Next to the account status deliberately: the two together are
+                  what decide which actions exist, and reading one without the
+                  other is how an operator expects a delete button that is never
+                  going to appear.
+                */}
+                <Fact label="Classification">
+                  <span data-testid="detail-classification">
+                    {/* Unknown is shown as unknown — never coerced into a type. */}
+                    {classificationTone ? (
+                      <Badge tone={classificationTone}>
+                        {closure.dataClassification.toUpperCase()}
+                      </Badge>
+                    ) : (
+                      <Badge tone="red">Classification required</Badge>
+                    )}
+                  </span>
+                </Fact>
                 {closure.archivedAt && (
                   <Fact label="Archived">{new Date(closure.archivedAt).toLocaleString()}</Fact>
                 )}
               </div>
+
+              {/*
+                What the classification MEANS, in the two sentences an operator
+                needs. "Disposable" is stated as conditional on the eligibility
+                assessment, because classification is necessary for deletion and
+                nowhere near sufficient.
+              */}
+              {closure.dataClassification === 'production' ? (
+                <div data-testid="classification-notice">
+                  <Alert variant="info" title="Production account">
+                    Production account — protected by Ledgora retention policy. It can be archived, and its
+                    classification is permanent.
+                  </Alert>
+                </div>
+              ) : (
+                <div data-testid="classification-notice">
+                  <Alert variant="warning" title="Disposable account">
+                    Disposable account — permanent deletion may be available after eligibility assessment.
+                  </Alert>
+                </div>
+              )}
 
               {closure.legalHold && (
                 <Alert variant="warning" title="Legal hold in force">
@@ -381,6 +467,36 @@ export function SubscriberClosureDrawer({
                   </Button>
                 )}
 
+                {/*
+                  Change classification. Offered ONLY for a disposable account:
+                  for a production one there is no legal move, so the control is
+                  replaced by the sentence explaining why rather than shown
+                  disabled with no reason attached.
+
+                  Hiding it is presentation, not protection — the service and the
+                  trigger both refuse the downgrade regardless of what this
+                  renders.
+                */}
+                {canManage &&
+                  (closure.dataClassification === 'production' ? (
+                    <span
+                      className="self-center text-xs text-slate-500"
+                      data-testid="classification-permanent-note"
+                    >
+                      Production classification is permanent. This subscriber cannot be reclassified as Demo or
+                      Test.
+                    </span>
+                  ) : (
+                    <Button
+                      variant="outline"
+                      disabled={busy}
+                      data-testid="action-change-classification"
+                      onClick={() => setReclassifying(true)}
+                    >
+                      Change classification
+                    </Button>
+                  ))}
+
                 {canExport && (
                   <Button
                     variant="outline"
@@ -506,6 +622,64 @@ export function SubscriberClosureDrawer({
         onConfirm={(reason) => void runPending(reason)}
         onCancel={() => {
           setPending(null);
+          setActionError(null);
+        }}
+      />
+
+      {/*
+        Reclassification. Reuses the audited-reason dialog because the reason is
+        the point: a classification change is a retention decision, and "who
+        decided this account was real" has to be answerable later.
+      */}
+      <ReasonPromptDialog
+        open={reclassifying}
+        title="Change classification"
+        description={
+          <>
+            Move <span className="font-semibold">{legalName}</span> from{' '}
+            <span className="font-semibold">{closure?.dataClassification?.toUpperCase()}</span> to{' '}
+            <span className="font-semibold">{reclassifyTarget.toUpperCase()}</span>.
+          </>
+        }
+        consequences={
+          <div className="space-y-2">
+            <label className="block text-xs font-medium text-slate-700 dark:text-slate-200">
+              New classification
+              <select
+                className="mt-1 w-full rounded border border-slate-300 p-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+                value={reclassifyTarget}
+                aria-label="New classification"
+                data-testid="reclassify-target"
+                onChange={(event) =>
+                  setReclassifyTarget(event.target.value as 'production' | 'test' | 'demo')
+                }
+              >
+                {/* Only the moves the database permits. Production is absent as a
+                    SOURCE everywhere; here it is offered only as a destination. */}
+                {(closure?.dataClassification === 'demo'
+                  ? ['test', 'production']
+                  : ['demo', 'production']
+                ).map((value) => (
+                  <option key={value} value={value}>
+                    {value.toUpperCase()}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {reclassifyTarget === 'production' && (
+              <Alert variant="warning" title="Promotion is irreversible">
+                A production account can never be reclassified as Demo or Test, and can never be permanently
+                deleted. It becomes archive-only from this point on.
+              </Alert>
+            )}
+          </div>
+        }
+        confirmLabel="Change classification"
+        busy={busy}
+        error={actionError}
+        onConfirm={(reason) => void runReclassify(reason)}
+        onCancel={() => {
+          setReclassifying(false);
           setActionError(null);
         }}
       />

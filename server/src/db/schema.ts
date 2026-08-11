@@ -170,6 +170,13 @@ export interface OrganizationsTable {
   classified_production_at: Timestamp;
   classified_by: string | null;
   /**
+   * When a human last confirmed this classification, or null when the only
+   * thing that ever set it was the 008 migration default. Null means "nobody
+   * has looked", never "not production".
+   */
+  classification_reviewed_at: Timestamp | null;
+  classification_reviewed_by: string | null;
+  /**
    * Set inside the deletion transaction, under this row's lock. A tenant write
    * arriving mid-destruction is refused rather than creating a row that belongs
    * to an organization which is about to stop existing.

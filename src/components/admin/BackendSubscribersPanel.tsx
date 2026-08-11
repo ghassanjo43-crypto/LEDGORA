@@ -41,6 +41,7 @@ import { ReasonPromptDialog } from './ReasonPromptDialog';
 import { SubscriberClosureDrawer, ARCHIVED_STATUSES, StatusBadge } from './SubscriberClosureDrawer';
 import { SubscriberMembersDrawer } from './SubscriberMembersDrawer';
 import { RequestDeletionDialog } from './RequestDeletionDialog';
+import { ClassifySubscriberDialog } from './ClassifySubscriberDialog';
 import type { DeletionImpact } from '@/services/api/closureApi';
 
 const PAGE_SIZE = 25;
@@ -54,6 +55,28 @@ const ORG_STATUS_FILTERS = [
   { value: 'archived', label: 'Archived' },
   { value: 'pending_deletion', label: 'Deletion scheduled' },
   { value: 'closed', label: 'Closed (legacy)' },
+];
+
+/**
+ * Classification filter. "Any type" rather than "All" so the dropdown reads as
+ * a filter that is currently off, not as a selected classification called All.
+ */
+/**
+ * Tone per classification, and the lookup that decides whether a value is a
+ * recognised classification at all. Anything absent from this map renders as
+ * "Classification required" rather than being coerced into a type.
+ */
+const CLASSIFICATION_TONES: Record<string, BadgeTone | undefined> = {
+  production: 'green',
+  test: 'amber',
+  demo: 'violet',
+};
+
+const CLASSIFICATION_FILTERS = [
+  { value: 'all', label: 'Any type' },
+  { value: 'production', label: 'Production' },
+  { value: 'demo', label: 'Demo' },
+  { value: 'test', label: 'Test' },
 ];
 
 const SUBSCRIPTION_FILTERS = [
@@ -123,6 +146,7 @@ export function BackendSubscribersPanel({
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
   const [orgStatus, setOrgStatus] = useState('all');
+  const [classification, setClassification] = useState('all');
   const [subscriptionStatus, setSubscriptionStatus] = useState('all');
   const [sort, setSort] = useState<NonNullable<AdminSubscriberQuery['sort']>>('created_at');
   const [direction, setDirection] = useState<'asc' | 'desc'>('desc');
@@ -151,6 +175,12 @@ export function BackendSubscribersPanel({
   } | null>(null);
   const [busy, setBusy] = useState(false);
   const [pending, setPending] = useState<PendingAction | null>(null);
+  /**
+   * The subscriber being reconciled. Separate from the ordinary "change
+   * classification" flow because this account has no previous human decision to
+   * change — the migration default is being confirmed for the first time.
+   */
+  const [classifyTarget, setClassifyTarget] = useState<AdminSubscriberRow | null>(null);
 
   const load = useAdminSubscriberStore((s) => s.load);
   const status = useAdminSubscriberStore((s) => s.status);
@@ -183,13 +213,14 @@ export function BackendSubscribersPanel({
     () => ({
       ...(search ? { search } : {}),
       ...(orgStatus !== 'all' ? { status: orgStatus } : {}),
+      ...(classification !== 'all' ? { classification } : {}),
       ...(subscriptionStatus !== 'all' ? { subscriptionStatus } : {}),
       sort,
       direction,
       limit: PAGE_SIZE,
       offset,
     }),
-    [search, orgStatus, subscriptionStatus, sort, direction, offset],
+    [search, orgStatus, classification, subscriptionStatus, sort, direction, offset],
   );
 
   const queryKey = useMemo(() => requestKeyOf(query as Record<string, unknown>), [query]);
@@ -337,6 +368,19 @@ export function BackendSubscribersPanel({
             }}
           />
         </div>
+        <div className="w-48">
+          <Select
+            options={CLASSIFICATION_FILTERS}
+            value={classification}
+            aria-label="Filter by classification"
+            data-testid="classification-filter"
+            onChange={(event) => {
+              setClassification(event.target.value);
+              // Back to page 1: the current offset indexes a different result set.
+              setOffset(0);
+            }}
+          />
+        </div>
         <div className="w-52">
           <Select
             options={SUBSCRIPTION_FILTERS}
@@ -468,17 +512,45 @@ export function BackendSubscribersPanel({
                       className="ml-1"
                       data-testid={`classification-${row.organizationId}`}
                     >
-                      <Badge
-                        tone={
-                          row.dataClassification === 'production'
-                            ? 'green'
-                            : row.dataClassification === 'test'
-                              ? 'amber'
-                              : 'violet'
-                        }
-                      >
-                        {row.dataClassification}
-                      </Badge>
+                      {/*
+                        An unclassified row is NOT quietly shown as one of the
+                        three types. A subscriber predating the classification
+                        column, or one returned by an older server, has an
+                        unknown status — and "unknown" must never render as
+                        "demo", which is how an uncertain historical customer
+                        becomes disposable by accident.
+                      */}
+                      {CLASSIFICATION_TONES[row.dataClassification] ? (
+                        <>
+                          <Badge tone={CLASSIFICATION_TONES[row.dataClassification]!}>
+                            {/* Uppercased for scanning: the classification is the
+                                field an operator sweeps a roster looking for. */}
+                            {row.dataClassification.toUpperCase()}
+                          </Badge>
+                          {/*
+                            Classified by the 008 migration default, with nobody
+                            having looked. Shown separately from the type because
+                            "production" and "nobody checked whether this is
+                            production" are different facts.
+                          */}
+                          {row.classificationReviewedAt === null && (
+                            <Badge
+                              tone="slate"
+                              className="ml-1"
+                              title="Classified by a data migration default. No administrator has reviewed it."
+                            >
+                              unreviewed
+                            </Badge>
+                          )}
+                        </>
+                      ) : (
+                        <Badge
+                          tone="red"
+                          title="This subscriber has no recorded classification. An administrator must classify it before its retention is decided."
+                        >
+                          Classification required
+                        </Badge>
+                      )}
                     </span>
                     {row.entitlementActive ? (
                       <Badge tone="green" className="ml-1">
@@ -569,6 +641,23 @@ export function BackendSubscribersPanel({
                         A production row gets an explanation in its place rather
                         than a disabled button with no reason attached.
                       */}
+                      {/*
+                        Reconciliation, offered only while nobody has reviewed
+                        the migration's guess. It disappears the moment the
+                        account is classified, so the queue drains visibly.
+                      */}
+                      {can.manage && row.classificationReviewedAt === null && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          disabled={busy}
+                          onClick={() => setClassifyTarget(row)}
+                          aria-label={`Classify ${row.legalName}`}
+                          data-testid={`classify-${row.organizationId}`}
+                        >
+                          Classify subscriber
+                        </Button>
+                      )}
                       {capabilities.includes('subscribers.delete') &&
                         (row.dataClassification === 'test' || row.dataClassification === 'demo' ? (
                           <Button
@@ -705,6 +794,26 @@ export function BackendSubscribersPanel({
         A SIBLING of the drawer, never a child — so dismissing the drawer cannot
         unmount the dialog while a step-up submission is in flight.
       */}
+      {/*
+        Reconciliation. On success the roster is reloaded rather than patched
+        locally, so the badge, the "unreviewed" marker and the action set all
+        come from the server — no page refresh, and no guess about what the
+        write actually did.
+      */}
+      {classifyTarget && (
+        <ClassifySubscriberDialog
+          open
+          organizationId={classifyTarget.organizationId}
+          legalName={classifyTarget.legalName}
+          onClose={() => setClassifyTarget(null)}
+          onClassified={(message) => {
+            setClassifyTarget(null);
+            setNotice(message);
+            void refresh();
+          }}
+        />
+      )}
+
       {deletionTarget && (
         <RequestDeletionDialog
           open

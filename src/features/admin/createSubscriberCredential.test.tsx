@@ -24,7 +24,7 @@
  *               an unqualified success message.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react';
 import { SuperAdminConsolePage } from '@/pages/SuperAdminConsolePage';
 import { MembersPanel } from '@/components/admin/MembersPanel';
 import { CredentialResultDialog } from '@/components/admin/CredentialResultDialog';
@@ -189,6 +189,140 @@ afterEach(() => {
   sessionStorage.clear();
   useAdminSubscriberStore.getState().clear();
   useAdminMemberStore.getState().clear();
+});
+
+/* ══ 0: the subscriber type decides whether it can ever be deleted ═════════ */
+
+/**
+ * The classification chosen here is the single input that makes a tenant
+ * destroyable. These tests hold the form to the safe default and to sending the
+ * operator's actual choice — a form that quietly omitted the field would look
+ * identical for Production and silently mislabel every sandbox.
+ */
+describe('the subscriber type selector', () => {
+  /** The JSON body of the create request, read back off the fetch spy. */
+  function createRequestBody(): Record<string, unknown> {
+    const mock = globalThis.fetch as unknown as {
+      mock: { calls: [unknown, RequestInit | undefined][] };
+    };
+    const call = mock.mock.calls.find(
+      ([url, init]) =>
+        String(url).includes('/api/admin/subscribers') &&
+        (init?.method ?? 'GET').toUpperCase() === 'POST',
+    );
+    expect(call, 'the create request must have been made').toBeTruthy();
+    return JSON.parse(String(call![1]!.body));
+  }
+
+  it('defaults to Production and says so on the wire', async () => {
+    mockConsole({ onCreate: () => json(createdSubscriber(TEMPORARY_CREDENTIAL), 201) });
+
+    render(<SuperAdminConsolePage />);
+    await createSubscriber('temporary');
+    await screen.findByTestId('credential-value');
+
+    // Production is what an operator gets by not choosing.
+    expect(createRequestBody().dataClassification).toBe('production');
+  });
+
+  it('sends the disposable type the operator actually picked', async () => {
+    mockConsole({ onCreate: () => json(createdSubscriber(TEMPORARY_CREDENTIAL), 201) });
+
+    render(<SuperAdminConsolePage />);
+    fireEvent.click(await screen.findByTestId('console-add-subscriber'));
+    await screen.findByLabelText('Base package');
+
+    fireEvent.change(screen.getByPlaceholderText('Nadia Owner'), { target: { value: 'Nadia Owner' } });
+    fireEvent.change(screen.getByPlaceholderText('nadia@company.com'), {
+      target: { value: 'nadia@newco.test' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('NewCo Trading LLC'), {
+      target: { value: 'NewCo Trading LLC' },
+    });
+
+    // Choosing Test warns that the tenant becomes destroyable.
+    fireEvent.click(
+      within(screen.getByTestId('classification-choice-test')).getByRole('radio'),
+    );
+    expect(screen.getByText(/can be permanently deleted/i)).toBeTruthy();
+    expect(screen.getByText(/legal hold or a platform-operator membership blocks it/i)).toBeTruthy();
+
+    // A disposable account cannot be created without the acknowledgement.
+    fireEvent.click(within(screen.getByTestId('disposable-acknowledgement')).getByRole('checkbox'));
+    fireEvent.click(screen.getByTestId('create-subscriber-submit'));
+    await screen.findByTestId('credential-value');
+
+    expect(createRequestBody().dataClassification).toBe('test');
+  });
+
+  /*
+   * The acknowledgement is the deliberateness gate. Production needs none — it
+   * is the protected choice — but marking an account disposable should not be
+   * something an operator can do by clicking past a default.
+   */
+  it('requires the disposable acknowledgement before a Demo account can be created', async () => {
+    mockConsole({ onCreate: () => json(createdSubscriber(TEMPORARY_CREDENTIAL), 201) });
+    render(<SuperAdminConsolePage />);
+    fireEvent.click(await screen.findByTestId('console-add-subscriber'));
+    await screen.findByLabelText('Base package');
+
+    const submit = () => screen.getByTestId('create-subscriber-submit') as HTMLButtonElement;
+
+    // Production: no acknowledgement, and nothing blocking submission.
+    expect(screen.queryByTestId('disposable-acknowledgement')).toBeNull();
+    expect(submit().disabled).toBe(false);
+
+    fireEvent.click(within(screen.getByTestId('classification-choice-demo')).getByRole('radio'));
+    expect(submit().disabled, 'a disposable account needs the acknowledgement').toBe(true);
+    expect(screen.getByTestId('disposable-acknowledgement').textContent).toMatch(
+      /I confirm this account is not a real production customer\./,
+    );
+
+    fireEvent.click(within(screen.getByTestId('disposable-acknowledgement')).getByRole('checkbox'));
+    expect(submit().disabled).toBe(false);
+
+    // Switching Demo -> Test must not inherit the tick made for Demo.
+    fireEvent.click(within(screen.getByTestId('classification-choice-test')).getByRole('radio'));
+    expect(submit().disabled, 'the acknowledgement is re-armed on a change').toBe(true);
+  });
+
+  it('summarises the choice in the review section before submission', async () => {
+    mockConsole({ onCreate: () => json(createdSubscriber(TEMPORARY_CREDENTIAL), 201) });
+    render(<SuperAdminConsolePage />);
+    fireEvent.click(await screen.findByTestId('console-add-subscriber'));
+    await screen.findByLabelText('Base package');
+
+    fireEvent.change(screen.getByPlaceholderText('NewCo Trading LLC'), {
+      target: { value: 'Ledgora Training Company' },
+    });
+    fireEvent.click(within(screen.getByTestId('classification-choice-demo')).getByRole('radio'));
+
+    const review = screen.getByTestId('create-subscriber-review');
+    expect(review.textContent).toMatch(/Ledgora Training Company/);
+    expect(screen.getByTestId('review-classification').textContent).toBe('DEMO');
+    expect(review.textContent).toMatch(/Invitation link|Temporary password/);
+  });
+
+  it('describes Production as never permanently deletable, not conditionally', async () => {
+    mockConsole({ onCreate: () => json(createdSubscriber(TEMPORARY_CREDENTIAL), 201) });
+    render(<SuperAdminConsolePage />);
+    fireEvent.click(await screen.findByTestId('console-add-subscriber'));
+    await screen.findByLabelText('Base package');
+
+    const production = screen.getByTestId('classification-choice-production');
+    expect(production.textContent).toMatch(/protected by the retention and archive policy/i);
+
+    /*
+     * The rule is unconditional: assessSubscriberDeletion refuses a production
+     * tenant before it looks at anything else. Copy implying deletion becomes
+     * possible while the account is still empty would describe a gate that does
+     * not exist, so that phrasing must not creep back in.
+     */
+    expect(production.textContent).not.toMatch(/once protected data exists/i);
+
+    // And the irreversibility is stated where the choice is made.
+    expect(screen.getByText(/never converted back/i)).toBeTruthy();
+  });
 });
 
 /* ══ 1 & 2: the credential reaches the dialog ══════════════════════════════ */

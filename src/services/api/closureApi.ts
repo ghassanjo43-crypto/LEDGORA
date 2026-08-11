@@ -34,9 +34,82 @@ export interface ClosureStatus {
   deletionReason: string | null;
   legalHold: boolean;
   legalHoldReason: string | null;
+  /** `production | test | demo`, read from the row rather than a cached roster. */
+  dataClassification: string;
+  classifiedProductionAt: string | null;
+  classificationReason: string | null;
+  /** Null when nobody has reviewed the 008 migration default. */
+  classificationReviewedAt: string | null;
   recoveryDaysRemaining: number | null;
   canCancelDeletion: boolean;
   canRestore: boolean;
+}
+
+/**
+ * What is known about whether a tenant was ever real, for the reconciliation
+ * dialog. Computed server-side and recomputed by the write, so the dialog cannot
+ * show one thing while the endpoint acts on another.
+ */
+export interface ClassificationEvidence {
+  organizationId: string;
+  legalName: string;
+  ownerEmail: string | null;
+  createdAt: string;
+  organizationStatus: string;
+  currentClassification: string;
+  reviewedAt: string | null;
+  everActivated: boolean;
+  subscriptionCount: number;
+  paidInvoiceCount: number;
+  approvedProofCount: number;
+  legalHold: boolean;
+  platformOperatorMember: boolean;
+  findings: string[];
+  looksDisposable: boolean;
+}
+
+export function classificationEvidence(organizationId: string, signal?: AbortSignal) {
+  return api.get<{ evidence: ClassificationEvidence }>(
+    `/api/admin/subscribers/${encodeURIComponent(organizationId)}/classification-evidence`,
+    signal,
+  );
+}
+
+/**
+ * Confirm the 008 migration's default as a human decision.
+ *
+ * The only outcome this can write is reviewed-production. `classification` is
+ * still sent so a demo/test request is refused explicitly by the server rather
+ * than silently returning production — an operator who believes they marked a
+ * tenant disposable must not walk away with the opposite result.
+ */
+export function classifySubscriber(
+  organizationId: string,
+  input: { classification: 'production' | 'test' | 'demo'; reason: string },
+) {
+  return api.post<{
+    classification: {
+      organizationId: string;
+      classification: string;
+      reviewedAt: string;
+      evidence: ClassificationEvidence;
+    };
+  }>(`/api/admin/subscribers/${encodeURIComponent(organizationId)}/classify`, input);
+}
+
+/** Promote to production, or move between the two disposable flavours. */
+export function changeClassification(
+  organizationId: string,
+  input: { classification: 'production' | 'test' | 'demo'; reason: string },
+) {
+  return api.patch<{
+    classification: {
+      organizationId: string;
+      previousClassification: string;
+      classification: string;
+      classifiedProductionAt: string | null;
+    };
+  }>(`/api/admin/subscribers/${organizationId}/classification`, input);
 }
 
 /* ── The eligibility assessment ───────────────────────────────────────────── */

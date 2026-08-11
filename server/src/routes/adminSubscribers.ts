@@ -24,6 +24,12 @@ import {
   summariseExternalCleanup,
 } from '../services/cleanupService.js';
 import { z } from 'zod';
+import {
+  changeSubscriberClassification,
+  confirmSubscriberClassification,
+  gatherClassificationEvidence,
+  ClassificationBootstrapRefused,
+} from '../services/classificationService.js';
 import { requirePlatformCapability } from '../guards/platform.js';
 import {
   SUBSCRIBER_SORT_FIELDS,
@@ -46,6 +52,8 @@ import { errors } from '../lib/errors.js';
 
 const listQuery = z.object({
   status: z.enum(['all', 'active', 'suspended', 'archived', 'closed']).optional(),
+  /** Roster filter. `all` and an absent value mean the same thing. */
+  classification: z.enum(['all', 'production', 'test', 'demo']).optional(),
   subscriptionStatus: z.string().trim().max(40).optional(),
   planId: z.string().uuid().optional(),
   search: z.string().trim().max(200).optional(),
@@ -178,6 +186,30 @@ const cleanupExecuteSchema = z.object({
 });
 
 const cleanupRetrySchema = z.object({ operationId: z.string().uuid().optional() });
+
+/**
+ * Note the enum accepts `production` as a TARGET only. There is no shape of this
+ * body that expresses "make this production account disposable": the service
+ * reads the current classification from the locked row and refuses, and the
+ * trigger refuses again beneath it.
+ */
+const classificationSchema = z.object({
+  classification: z.enum(['production', 'test', 'demo']),
+  reason: z.string().trim().min(10, 'Explain why this subscriber is being reclassified.').max(1000),
+});
+
+/**
+ * Reconciliation of the 008 migration's blanket default.
+ *
+ * `demo` and `test` are accepted by the SCHEMA so the service can refuse them
+ * with an explanation and the evidence. Rejecting them here instead would return
+ * a validation error, which reads as "you sent the wrong shape" rather than
+ * "this is not something this endpoint is allowed to do".
+ */
+const classifySchema = z.object({
+  classification: z.enum(['production', 'test', 'demo']),
+  reason: z.string().trim().min(10, 'Explain the basis for this classification.').max(1000),
+});
 
 export async function adminSubscriberRoutes(app: FastifyInstance): Promise<void> {
   const adminContext = (request: {
@@ -422,5 +454,91 @@ export async function adminSubscriberRoutes(app: FastifyInstance): Promise<void>
           adminContext(request),
         ),
       }),
+  );
+
+  /**
+   * Change a subscriber's classification.
+   *
+   * `subscribers.manage` is super_admin-only, but the authority that matters is
+   * not this guard: the service and the database trigger both refuse
+   * production -> test|demo, so no caller reaching this route — forged body,
+   * stolen session or otherwise — can make a protected account disposable. The
+   * guard decides who may promote a sandbox, not who may override retention.
+   */
+  /**
+   * The evidence behind a reconciliation decision. A read: it computes the same
+   * summary the POST below re-computes inside its own transaction, so the dialog
+   * cannot show one thing and the write act on another.
+   */
+  app.get<{ Params: { organizationId: string } }>(
+    '/api/admin/subscribers/:organizationId/classification-evidence',
+    { preHandler: requirePlatformCapability('subscribers.manage') },
+    async (request, reply) => {
+      const evidence = await gatherClassificationEvidence(app.db, request.params.organizationId);
+      if (!evidence) throw errors.notFound('Subscriber');
+      return reply.send({ evidence });
+    },
+  );
+
+  /**
+   * Confirm the classification of a subscriber nobody has reviewed.
+   *
+   * Writes exactly one outcome: reviewed-production. It cannot make anything
+   * disposable at any evidence level, which is what makes it safe to expose over
+   * HTTP at all — unlike the development CLI, it never moves data out of
+   * production protection, so it grants no authority over retention.
+   */
+  app.post<{ Params: { organizationId: string } }>(
+    '/api/admin/subscribers/:organizationId/classify',
+    { preHandler: requirePlatformCapability('subscribers.manage') },
+    async (request, reply) => {
+      const body = parse(classifySchema, request.body);
+      try {
+        return reply.send({
+          classification: await confirmSubscriberClassification(
+            app.db,
+            { organizationId: request.params.organizationId, ...body },
+            { ...adminContext(request), requestId: request.id },
+          ),
+        });
+      } catch (caught) {
+        if (caught instanceof ClassificationBootstrapRefused) {
+          throw caught.code === 'not_found'
+            ? errors.notFound('Subscriber')
+            : errors.conflict(caught.message);
+        }
+        throw caught;
+      }
+    },
+  );
+
+  app.patch<{ Params: { organizationId: string } }>(
+    '/api/admin/subscribers/:organizationId/classification',
+    { preHandler: requirePlatformCapability('subscribers.manage') },
+    async (request, reply) => {
+      const body = parse(classificationSchema, request.body);
+      try {
+        return reply.send({
+          classification: await changeSubscriberClassification(
+            app.db,
+            { organizationId: request.params.organizationId, ...body },
+            { ...adminContext(request), requestId: request.id },
+          ),
+        });
+      } catch (caught) {
+        if (caught instanceof ClassificationBootstrapRefused) {
+          /*
+           * 404 for a missing subscriber, 409 for every refusal. A refusal is a
+           * statement about the account's state, not about the request being
+           * malformed, so it must not read as a validation error the client
+           * could fix by resending different fields.
+           */
+          throw caught.code === 'not_found'
+            ? errors.notFound('Subscriber')
+            : errors.conflict(caught.message);
+        }
+        throw caught;
+      }
+    },
   );
 }

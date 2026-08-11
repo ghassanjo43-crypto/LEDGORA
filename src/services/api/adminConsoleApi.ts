@@ -320,6 +320,12 @@ export interface AdminSubscriberRow {
    * button that is always refused is its own kind of lie.
    */
   dataClassification: string;
+  /**
+   * Null when the 008 migration default is the only thing that ever set the
+   * classification. Null means "nobody has reviewed this", never "not
+   * production" — the column is NOT NULL, so an unclassified row cannot exist.
+   */
+  classificationReviewedAt: string | null;
   legalHold: boolean;
   createdAt: string;
   planId: string | null;
@@ -353,6 +359,12 @@ export interface AdminSubscriberListResponse {
 
 export interface AdminSubscriberQuery {
   status?: string;
+  /**
+   * `production | test | demo`, or `all`/absent. Applied server-side in SQL:
+   * filtering the loaded page instead would show only the matches that happened
+   * to land on it.
+   */
+  classification?: string;
   subscriptionStatus?: string;
   planId?: string;
   search?: string;
@@ -490,6 +502,13 @@ export interface CreateSubscriberInput {
   paymentConfirmed?: boolean;
   internalNotes?: string;
   onboarding: 'invite' | 'temporary';
+  /**
+   * Whether the tenant is real or disposable. Omitted means `production` on the
+   * server — the safe default is never inferred from anything else about the
+   * request, and a test/demo value here is what makes permanent deletion
+   * possible at all.
+   */
+  dataClassification?: 'production' | 'test' | 'demo';
 }
 
 export interface CreateSubscriberResponse {

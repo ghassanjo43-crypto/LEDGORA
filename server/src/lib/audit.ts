@@ -61,6 +61,20 @@ export type AuditAction =
    * one, so this can be found in a trail without knowing to look for it.
    */
   | 'organization.classification_bootstrapped'
+  /**
+   * An ordinary reclassification through the console: promotion to production,
+   * or one disposable flavour to the other. Distinct from the bootstrap action
+   * above, which is the development-only escape hatch — conflating them would
+   * hide the dangerous one inside the traffic of the routine one.
+   */
+  | 'organization.classification_changed'
+  /**
+   * A human confirmed the classification the 008 migration defaulted. Records
+   * that somebody looked; changes no classification. Distinct from
+   * `classification_changed` so "reviewed the default" and "moved between
+   * classifications" stay countable apart in the trail.
+   */
+  | 'organization.classification_reviewed'
   | 'subscriber.created'
   | 'subscription.package_assigned'
   | 'entitlement.recalculated'

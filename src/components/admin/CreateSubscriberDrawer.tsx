@@ -67,9 +67,15 @@ interface FormState {
   paymentConfirmed: boolean;
   internalNotes: string;
   onboarding: 'invite' | 'temporary';
+  /** Decides whether this tenant can ever be permanently deleted. */
+  dataClassification: 'production' | 'test' | 'demo';
 }
 
 const today = (): string => new Date().toISOString().slice(0, 10);
+
+/** "Demo"/"Test" for prose, so the warning names the type the operator picked. */
+const choiceLabel = (value: FormState['dataClassification']): string =>
+  value.charAt(0).toUpperCase() + value.slice(1);
 
 const EMPTY: FormState = {
   fullName: '',
@@ -89,7 +95,51 @@ const EMPTY: FormState = {
   paymentConfirmed: false,
   internalNotes: '',
   onboarding: 'invite',
+  /*
+   * Production by default, matching the server. The safe value has to be the one
+   * an operator gets by not thinking about it: mislabelling a real customer as
+   * disposable is the failure that ends in a deleted business, while
+   * mislabelling a sandbox merely means it has to be archived.
+   */
+  dataClassification: 'production',
 };
+
+/**
+ * The three account types, described by what each one permits.
+ *
+ * Wording is deliberately about CONSEQUENCES rather than intent — "internal QA
+ * account" tells an operator what it is for, but "eligible for permanent
+ * deletion" tells them what they are agreeing to.
+ */
+const CLASSIFICATION_CHOICES: {
+  value: FormState['dataClassification'];
+  label: string;
+  description: string;
+}[] = [
+  {
+    value: 'production',
+    label: 'Production',
+    description:
+      'Real customer account. Production accounts are protected by the retention and archive policy.',
+  },
+  {
+    value: 'demo',
+    label: 'Demo',
+    description:
+      'Temporary demonstration account. May be permanently deleted if the backend deletion-impact assessment confirms it is eligible.',
+  },
+  {
+    value: 'test',
+    label: 'Test',
+    description:
+      'Internal testing/QA account. May be permanently deleted if the backend deletion-impact assessment confirms it is eligible.',
+  },
+];
+
+/** Typed once by the operator for a disposable account. Not persisted — its job
+ *  is to make "this is not a real customer" a deliberate statement rather than a
+ *  default they clicked past. */
+export const DISPOSABLE_ACKNOWLEDGEMENT = 'I confirm this account is not a real production customer.';
 
 /** Optional modules the operator may add on top of a package. */
 const OPTIONAL_MODULES = [
@@ -129,6 +179,13 @@ export function CreateSubscriberDrawer({ open, onClose, onCreated }: CreateSubsc
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [loadingPlans, setLoadingPlans] = useState(false);
+  /**
+   * Ticked only for Demo/Test. Not sent anywhere — the server has its own rules
+   * and would be wrong to trust a checkbox. It exists so an operator cannot
+   * create a disposable tenant without stating, in words, that it is not a real
+   * customer.
+   */
+  const [disposableAcknowledged, setDisposableAcknowledged] = useState(false);
 
   // A fresh form each time it opens: a half-typed subscriber from a cancelled
   // attempt must not be submitted as part of the next one.
@@ -233,6 +290,13 @@ export function CreateSubscriberDrawer({ open, onClose, onCreated }: CreateSubsc
         paymentConfirmed: form.paymentConfirmed,
         ...(form.internalNotes.trim() ? { internalNotes: form.internalNotes.trim() } : {}),
         onboarding: form.onboarding,
+        /*
+         * Always sent, never conditional. The server defaults an absent value to
+         * `production`, which matches this form's default — but relying on that
+         * would mean the wire says nothing about a choice the operator actually
+         * made, and the audit trail should record the decision, not its absence.
+         */
+        dataClassification: form.dataClassification,
       });
       /*
        * Hand the WHOLE response over before doing anything else. No close, no
@@ -267,7 +331,20 @@ export function CreateSubscriberDrawer({ open, onClose, onCreated }: CreateSubsc
           <Button variant="outline" onClick={onClose} disabled={busy}>
             Cancel
           </Button>
-          <Button onClick={() => void submit()} disabled={busy || loadingPlans} data-testid="create-subscriber-submit">
+          <Button
+            onClick={() => void submit()}
+            /*
+             * A disposable classification needs the acknowledgement before the
+             * account can be created at all. Production needs nothing extra: it
+             * is the protected choice.
+             */
+            disabled={
+              busy ||
+              loadingPlans ||
+              (form.dataClassification !== 'production' && !disposableAcknowledged)
+            }
+            data-testid="create-subscriber-submit"
+          >
             {busy ? 'Creating…' : 'Create subscriber'}
           </Button>
         </>
@@ -486,6 +563,103 @@ export function CreateSubscriberDrawer({ open, onClose, onCreated }: CreateSubsc
               the link to pass on yourself — it never claims to have sent a message it did not send.
             </Alert>
           )}
+        </fieldset>
+
+        {/* ── Subscriber type ────────────────────────────────────────────── */}
+        <fieldset className="space-y-3">
+          <legend className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Subscriber type
+          </legend>
+
+          <div className="space-y-2" role="radiogroup" aria-label="Subscriber type">
+            {CLASSIFICATION_CHOICES.map((choice) => (
+              <label
+                key={choice.value}
+                className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 ${
+                  form.dataClassification === choice.value
+                    ? 'border-indigo-400 bg-indigo-50/60 dark:bg-indigo-500/10'
+                    : 'border-slate-200 dark:border-slate-700'
+                }`}
+                data-testid={`classification-choice-${choice.value}`}
+              >
+                <input
+                  type="radio"
+                  name="dataClassification"
+                  className="mt-1"
+                  value={choice.value}
+                  checked={form.dataClassification === choice.value}
+                  onChange={() => {
+                    set('dataClassification', choice.value);
+                    // Re-arm the acknowledgement on every change, so switching
+                    // Demo -> Test cannot inherit a tick made for the other.
+                    setDisposableAcknowledged(false);
+                  }}
+                />
+                <span className="text-sm">
+                  <span className="font-medium text-slate-800 dark:text-slate-100">{choice.label}</span>
+                  <span className="block text-xs text-slate-500 dark:text-slate-400">{choice.description}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+
+          {/*
+            The two mistakes are not symmetrical. Picking Production is
+            irreversible but safe. Picking Demo/Test is reversible — promotion is
+            allowed — but marks the tenant destroyable meanwhile, and that is the
+            one that loses data. So only the disposable branch asks for a
+            deliberate acknowledgement.
+          */}
+          {form.dataClassification === 'production' ? (
+            <Alert variant="info" title="This choice is one-way">
+              A production subscriber can be promoted from Demo/Test later, but never converted back. The rule is
+              enforced by the database, not just by this screen.
+            </Alert>
+          ) : (
+            <>
+              <Alert variant="warning" title="This subscriber can be permanently deleted">
+                {choiceLabel(form.dataClassification)} accounts appear in “Clean up test/demo data” and can be
+                destroyed along with their memberships, sessions and server-held data. Deletion still runs the full
+                impact check — a legal hold or a platform-operator membership blocks it.
+              </Alert>
+              <label className="flex items-start gap-2 text-sm" data-testid="disposable-acknowledgement">
+                <input
+                  type="checkbox"
+                  className="mt-1"
+                  checked={disposableAcknowledged}
+                  onChange={(event) => setDisposableAcknowledged(event.target.checked)}
+                />
+                <span className="text-slate-700 dark:text-slate-200">{DISPOSABLE_ACKNOWLEDGEMENT}</span>
+              </label>
+            </>
+          )}
+        </fieldset>
+
+        {/* ── Review ─────────────────────────────────────────────────────── */}
+        <fieldset className="space-y-2">
+          <legend className="text-xs font-semibold uppercase tracking-wide text-slate-500">Review</legend>
+          {/*
+            A plain restatement of what is about to be created. The classification
+            is the line most worth re-reading, because it is the only field here
+            whose consequence (destroyable or protected) is invisible afterwards.
+          */}
+          <dl
+            className="grid grid-cols-[auto,1fr] gap-x-4 gap-y-1 rounded-lg border border-slate-200 p-3 text-sm dark:border-slate-700"
+            data-testid="create-subscriber-review"
+          >
+            <dt className="text-slate-500">Subscriber</dt>
+            <dd>{form.fullName.trim() || <span className="text-slate-400">—</span>}</dd>
+            <dt className="text-slate-500">Organization</dt>
+            <dd>{form.organizationLegalName.trim() || <span className="text-slate-400">—</span>}</dd>
+            <dt className="text-slate-500">Package</dt>
+            <dd>{selectedPlan?.name ?? <span className="text-slate-400">—</span>}</dd>
+            <dt className="text-slate-500">Classification</dt>
+            <dd data-testid="review-classification" className="font-medium">
+              {form.dataClassification.toUpperCase()}
+            </dd>
+            <dt className="text-slate-500">Access</dt>
+            <dd>{form.onboarding === 'temporary' ? 'Temporary password' : 'Invitation link'}</dd>
+          </dl>
         </fieldset>
 
         <Field label="Internal notes" hint="Visible to platform staff only. Never shown to the customer.">

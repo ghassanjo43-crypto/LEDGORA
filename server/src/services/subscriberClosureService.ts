@@ -515,6 +515,16 @@ export interface ClosureStatus {
   deletionReason: string | null;
   legalHold: boolean;
   legalHoldReason: string | null;
+  /**
+   * `production | test | demo`. Read straight from the row so the drawer states
+   * the account's real protection rather than what a roster page cached.
+   */
+  dataClassification: string;
+  /** Null when nobody has reviewed the 008 migration default. */
+  classificationReviewedAt: string | null;
+  /** Set when the account was promoted to production, which is irreversible. */
+  classifiedProductionAt: string | null;
+  classificationReason: string | null;
   /** Days left in the recovery window, or null when nothing is pending. */
   recoveryDaysRemaining: number | null;
   canCancelDeletion: boolean;
@@ -539,6 +549,10 @@ export async function getClosureStatus(
       'deletion_reason',
       'legal_hold',
       'legal_hold_reason',
+      'data_classification',
+      'classified_production_at',
+      'classification_reason',
+      'classification_reviewed_at',
     ])
     .where('id', '=', organizationId)
     .executeTakeFirst();
@@ -564,6 +578,14 @@ export async function getClosureStatus(
     deletionReason: organization.deletion_reason,
     legalHold: organization.legal_hold,
     legalHoldReason: organization.legal_hold_reason,
+    dataClassification: organization.data_classification,
+    classifiedProductionAt: organization.classified_production_at
+      ? new Date(organization.classified_production_at).toISOString()
+      : null,
+    classificationReason: organization.classification_reason,
+    classificationReviewedAt: organization.classification_reviewed_at
+      ? new Date(organization.classification_reviewed_at).toISOString()
+      : null,
     recoveryDaysRemaining: remaining,
     canCancelDeletion: Boolean(organization.deletion_requested_at),
     // Restoring is offered for an archived tenant, and for a pending one only
