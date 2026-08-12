@@ -202,7 +202,21 @@ export async function requestSubscriberDeletion(
     context,
   );
 
-  const days = Math.max(input.recoveryDays ?? DELETION_RECOVERY_DAYS, 1);
+  /*
+   * ── The recovery window, and when it does not apply ─────────────────────
+   * Thirty days exists to protect real records from a mistaken deletion. A
+   * disposable tenant that never activated, never billed and holds no payment
+   * evidence has nothing for the window to protect — and imposing one leaves the
+   * development dataset undeletable for a month, which is the problem this
+   * whole feature exists to solve.
+   *
+   * The verdict comes from `assessSubscriberDeletion`, computed above and
+   * already re-checked at purge time, so the shortcut cannot be requested by a
+   * client: it is derived from the same evidence that decides eligibility.
+   * Production is never immediately purgeable, whatever its history.
+   */
+  const immediate = impact.immediatePurgeEligible;
+  const days = immediate ? 0 : Math.max(input.recoveryDays ?? DELETION_RECOVERY_DAYS, 1);
   const requestedAt = new Date();
   const eligibleAfter = new Date(requestedAt.getTime() + days * 86_400_000);
 
@@ -241,6 +255,7 @@ export async function requestSubscriberDeletion(
         newStatus: 'pending_deletion',
         scheduledPurgeAfter: eligibleAfter.toISOString(),
         recoveryDays: days,
+        immediatePurge: immediate,
         revokedSessions: archived.revokedSessions,
         memberCount,
         reauthenticated: true,

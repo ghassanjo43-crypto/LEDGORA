@@ -16,7 +16,8 @@
     "db:reconcile-applicants": "tsx src/cli/reconcileApplicants.ts",
     "db:classify-legacy": "tsx src/cli/classifyLegacyData.ts",
     "create-platform-admin": "tsx src/cli/createPlatformAdmin.ts",
-    "db:process-deletions": "tsx src/cli/processDeletions.ts"
+    "db:process-deletions": "tsx src/cli/processDeletions.ts",
+    "dev:reset-subscribers": "tsx src/cli/resetSubscriberData.ts"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.4",

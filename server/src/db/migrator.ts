@@ -21,6 +21,8 @@ import * as subscriberClosure from './migrations/007_subscriber_closure.js';
 import * as dataClassification from './migrations/008_data_classification.js';
 import * as disposableCleanup from './migrations/009_disposable_cleanup.js';
 import * as classificationReview from './migrations/010_classification_review.js';
+import * as identityClassificationGuard from './migrations/011_identity_classification_guard.js';
+import * as repairDeletionTombstoneStatusColumns from './migrations/012_repair_deletion_tombstone_status_columns.js';
 
 const MIGRATIONS: Record<string, Migration> = {
   '001_initial_schema': initialSchema,
@@ -33,6 +35,8 @@ const MIGRATIONS: Record<string, Migration> = {
   '008_data_classification': dataClassification,
   '009_disposable_cleanup': disposableCleanup,
   '010_classification_review': classificationReview,
+  '011_identity_classification_guard': identityClassificationGuard,
+  '012_repair_deletion_tombstone_status_columns': repairDeletionTombstoneStatusColumns,
 };
 
 class StaticMigrationProvider implements MigrationProvider {

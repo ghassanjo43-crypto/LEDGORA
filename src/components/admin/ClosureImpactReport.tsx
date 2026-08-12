@@ -33,7 +33,16 @@ export function ClosureImpactReport({ impact }: { impact: DeletionImpact }) {
         </span>
         <span data-testid="impact-verdict">
           {impact.deletionPermitted ? (
-            <Badge tone="green">Eligible</Badge>
+            /*
+              A clean disposable tenant has nothing for a recovery window to
+              protect, so saying only "Eligible" would leave an operator
+              expecting the 30-day wait that no longer applies to it.
+            */
+            impact.immediatePurgeEligible ? (
+              <Badge tone="green">Eligible for immediate permanent deletion</Badge>
+            ) : (
+              <Badge tone="green">Eligible</Badge>
+            )
           ) : (
             <Badge tone="red">Not eligible</Badge>
           )}
@@ -62,6 +71,54 @@ export function ClosureImpactReport({ impact }: { impact: DeletionImpact }) {
           </ul>
         </div>
       )}
+
+      {/* ── People, one line each ───────────────────────────────────────── */}
+      {impact.people && impact.people.length > 0 && (
+        <div
+          className="rounded-lg border border-slate-200 p-3 dark:border-slate-700"
+          data-testid="impact-people"
+        >
+          <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-500">People</h4>
+          <ul className="mt-2 space-y-2 text-sm">
+            {impact.people.map((person) => (
+              <li key={person.userId} data-testid={`impact-person-${person.userId}`}>
+                <span className="font-medium">{person.email}</span>{' '}
+                {/*
+                  Disposable and retained are visually distinct because this is
+                  the line that answers "will deleting this tenant delete my
+                  colleague's login?" — a question a generic "members will be
+                  anonymised" summary cannot answer at all.
+                */}
+                {person.outcome === 'disposable' ? (
+                  <Badge tone="red">disposable — will be deleted</Badge>
+                ) : (
+                  <Badge tone="green">retained — membership removed</Badge>
+                )}
+                <span className="block text-xs text-slate-500 dark:text-slate-400">{person.detail}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* ── Why the shortcut is unavailable ─────────────────────────────── */}
+      {impact.deletionPermitted &&
+        !impact.immediatePurgeEligible &&
+        (impact.immediatePurgeBlockers?.length ?? 0) > 0 && (
+          <div
+            className="rounded-lg border border-amber-200 bg-amber-50/60 p-3 text-xs dark:border-amber-500/30 dark:bg-amber-500/10"
+            data-testid="impact-recovery-window"
+          >
+            <p className="font-semibold text-amber-800 dark:text-amber-200">
+              A recovery window applies before the purge can run
+            </p>
+            <ul className="mt-1 space-y-1 text-amber-800 dark:text-amber-200">
+              {impact.immediatePurgeBlockers!.map((blocker) => (
+                <li key={blocker}>· {blocker}</li>
+              ))}
+            </ul>
+          </div>
+        )}
 
       {/* ── Counts ──────────────────────────────────────────────────────── */}
       <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700">

@@ -147,7 +147,20 @@ export interface DeletionImpact {
   willBePermanentlyDeleted: string[];
   willBeRetained: string[];
   recommendation: string;
+  /** Per-person outcome. `disposable` is the only one that deletes an account. */
+  people?: IdentityOutcome[];
+  /** True when the tenant may be purged now, with no recovery window. */
+  immediatePurgeEligible?: boolean;
+  immediatePurgeBlockers?: string[];
   assessedAt: string;
+}
+
+export interface IdentityOutcome {
+  userId: string;
+  email: string;
+  fullName: string;
+  outcome: 'disposable' | 'retained_other_membership' | 'retained_platform_role' | 'retained_production';
+  detail: string;
 }
 
 /* ── Deletion request ─────────────────────────────────────────────────────── */

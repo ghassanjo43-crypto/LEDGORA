@@ -22,7 +22,8 @@
     "db:migrate": "npm run db:migrate --workspace @ledgora/server",
     "db:reconcile-applicants": "npm run db:reconcile-applicants --workspace @ledgora/server",
     "create-platform-admin": "npm run create-platform-admin --workspace @ledgora/server --",
-    "db:process-deletions": "npm run db:process-deletions --workspace @ledgora/server --"
+    "db:process-deletions": "npm run db:process-deletions --workspace @ledgora/server --",
+    "dev:reset-subscribers": "npm run dev:reset-subscribers --workspace @ledgora/server --"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.1",

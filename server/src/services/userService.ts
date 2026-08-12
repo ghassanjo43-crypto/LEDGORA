@@ -6,7 +6,7 @@
  * deleting fields from the row (a deny-list would leak any column added later).
  */
 import type { Kysely, Transaction } from 'kysely';
-import type { Database, PlatformRole, User, UserStatus } from '../db/schema.js';
+import type { Database, DataClassification, PlatformRole, User, UserStatus } from '../db/schema.js';
 import { hashPassword } from '../lib/password.js';
 import { writeAuditLog, type AuditContext } from '../lib/audit.js';
 import { errors } from '../lib/errors.js';
@@ -69,6 +69,18 @@ export interface CreateUserInput {
   status?: UserStatus;
   mustChangePassword?: boolean;
   emailVerified?: boolean;
+  /**
+   * Is this a real person, or an identity created solely to populate a
+   * disposable tenant?
+   *
+   * Omitted means `production` — the safe answer, and the column default — so no
+   * caller can create a deletable identity by forgetting the field. It is set at
+   * INSERT rather than patched afterwards because the 008 trigger makes
+   * production one-way: an identity created production and then downgraded is a
+   * move the database refuses, so the classification has to be right the first
+   * time.
+   */
+  dataClassification?: DataClassification;
 }
 
 export async function createUser(db: Kysely<Database>, input: CreateUserInput): Promise<User> {
@@ -101,6 +113,7 @@ export async function insertUser(db: Executor, input: InsertUserInput): Promise<
       status: input.status ?? 'active',
       must_change_password: input.mustChangePassword ?? false,
       email_verified_at: input.emailVerified ? new Date() : null,
+      data_classification: input.dataClassification ?? 'production',
     })
     .returningAll()
     .executeTakeFirstOrThrow();

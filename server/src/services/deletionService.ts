@@ -92,8 +92,37 @@ export interface DeletionImpact {
   willBeRetained: string[];
   /** Present when deletion is refused — the exact sentence the UI shows. */
   recommendation: string;
+  /**
+   * Per-person outcome, so the impact screen can distinguish the identity that
+   * exists only for this tenant from the colleague who also belongs elsewhere.
+   * A single "members will be anonymised" line cannot say which is which, and
+   * that is exactly the distinction an operator needs before confirming.
+   */
+  people: IdentityOutcome[];
+  /**
+   * True when this tenant can be destroyed NOW, with no recovery window.
+   *
+   * The 30-day window exists to protect real records from a mistaken deletion.
+   * A disposable tenant that has never billed, never activated and holds no
+   * evidence has nothing for the window to protect, and forcing one on it leaves
+   * development data undeletable for a month — the problem this feature exists
+   * to solve. Production is never immediately purgeable, whatever its history.
+   */
+  immediatePurgeEligible: boolean;
+  /** Why immediate purge is unavailable. Empty when it is available. */
+  immediatePurgeBlockers: string[];
   /** Recomputed every time; a client may not cache or forge it. */
   assessedAt: string;
+}
+
+/** What happens to one person when this tenant is destroyed. */
+export interface IdentityOutcome {
+  userId: string;
+  email: string;
+  fullName: string;
+  /** `disposable` is the only outcome that deletes the account itself. */
+  outcome: 'disposable' | 'retained_other_membership' | 'retained_platform_role' | 'retained_production';
+  detail: string;
 }
 
 /** The retention refusal, worded so the operator knows the safe action. */
@@ -197,10 +226,23 @@ export async function assessSubscriberDeletion(
 ): Promise<DeletionImpact> {
   const organization = await requireOrganizationRow(db, organizationId);
 
+  /*
+   * Joined to `users` because the impact report names each person and states
+   * what happens to them. `data_classification` comes from the IDENTITY, never
+   * from the organization: the two are independent, which is the whole reason a
+   * real person can sit inside a demo tenant and survive it.
+   */
   const members = await db
     .selectFrom('organization_memberships')
-    .select(['user_id', 'role'])
-    .where('organization_id', '=', organizationId)
+    .innerJoin('users', 'users.id', 'organization_memberships.user_id')
+    .select([
+      'organization_memberships.user_id as user_id',
+      'organization_memberships.role as role',
+      'users.email as email',
+      'users.full_name as full_name',
+      'users.data_classification as data_classification',
+    ])
+    .where('organization_memberships.organization_id', '=', organizationId)
     .execute();
 
   const invoices = await db
@@ -394,6 +436,114 @@ export async function assessSubscriberDeletion(
 
   const deletionPermitted = blockingReasons.length === 0;
 
+  /*
+   * ── Per-person outcomes ─────────────────────────────────────────────────
+   * Default is RETAIN, and an identity reaches `disposable` only by proving
+   * every reason to keep it is absent. The order matters: a person who belongs
+   * elsewhere is retained for that reason regardless of how they are
+   * classified, because deleting them would reach into a tenant this operation
+   * has no business touching.
+   */
+  const people: IdentityOutcome[] = [];
+  for (const member of members) {
+    const elsewhere = await db
+      .selectFrom('organization_memberships')
+      .select('id')
+      .where('user_id', '=', member.user_id)
+      .where('organization_id', '!=', organizationId)
+      .executeTakeFirst();
+
+    if (elsewhere) {
+      people.push({
+        userId: member.user_id,
+        email: member.email,
+        fullName: member.full_name,
+        outcome: 'retained_other_membership',
+        detail: 'Belongs to another organization. Its membership here is removed; the account is kept.',
+      });
+      continue;
+    }
+
+    if (platformStaff.some((s) => s.user_id === member.user_id)) {
+      people.push({
+        userId: member.user_id,
+        email: member.email,
+        fullName: member.full_name,
+        outcome: 'retained_platform_role',
+        detail: 'Holds a Ledgora platform role. A platform identity is never disposable.',
+      });
+      continue;
+    }
+
+    if (member.data_classification !== 'test' && member.data_classification !== 'demo') {
+      people.push({
+        userId: member.user_id,
+        email: member.email,
+        fullName: member.full_name,
+        outcome: 'retained_production',
+        detail:
+          'The identity is production-classified. Deleting a tenant never decides the fate of a person recorded as real.',
+      });
+      continue;
+    }
+
+    people.push({
+      userId: member.user_id,
+      email: member.email,
+      fullName: member.full_name,
+      outcome: 'disposable',
+      detail:
+        'Created exclusively for this subscriber and has no retained production relationships.',
+    });
+  }
+
+  /*
+   * ── Immediate purge ─────────────────────────────────────────────────────
+   * Deliberately stricter than `deletionPermitted`. Skipping the recovery
+   * window is only defensible when there is provably nothing to recover: no
+   * billing, no payment evidence, no activation, and therefore no accounting
+   * records anywhere. Anything at all in the history means the window applies.
+   */
+  const immediatePurgeBlockers: string[] = [];
+  if (!disposable) {
+    immediatePurgeBlockers.push('Only Demo and Test subscribers may be purged without a recovery window.');
+  }
+  if (activated) {
+    immediatePurgeBlockers.push('The subscription was activated, so accounting records may exist.');
+  }
+  if (liveSubscription) immediatePurgeBlockers.push(`The subscription is ${liveSubscription.status}.`);
+  if (settledInvoices.length > 0) {
+    immediatePurgeBlockers.push(`${settledInvoices.length} invoice(s) are paid or have a proof submitted.`);
+  }
+  if (decidedProofs.length > 0) {
+    immediatePurgeBlockers.push(`${decidedProofs.length} payment proof(s) have been submitted or approved.`);
+  }
+  if (organization.legal_hold) immediatePurgeBlockers.push('A legal hold is in force.');
+  if (platformStaff.length > 0) {
+    immediatePurgeBlockers.push('A member of this organization holds a Ledgora platform role.');
+  }
+  /*
+   * A production identity here does NOT block the tenant's deletion — the
+   * person is simply retained. It blocks the SHORTCUT, because a real person
+   * being detached from a tenant is exactly the kind of thing somebody may want
+   * thirty days to reverse.
+   *
+   * Counted from the IDENTITY's own classification rather than from its retain
+   * reason. A production person who also belongs elsewhere is retained for the
+   * membership reason, not the classification one, and keying off the outcome
+   * would let that case slip through as "no production dependency".
+   */
+  const productionIdentities = members.filter(
+    (m) => m.data_classification !== 'test' && m.data_classification !== 'demo',
+  );
+  if (productionIdentities.length > 0) {
+    immediatePurgeBlockers.push(
+      `${productionIdentities.length} production-classified identity/identities would lose their membership.`,
+    );
+  }
+
+  const immediatePurgeEligible = deletionPermitted && immediatePurgeBlockers.length === 0;
+
   return {
     organizationId,
     legalName: organization.legal_name,
@@ -438,6 +588,9 @@ export async function assessSubscriberDeletion(
         blockingReasons.length === 1 && !disposable
         ? PRODUCTION_RETENTION_MESSAGE
         : PURGE_REFUSED_MESSAGE,
+    people,
+    immediatePurgeEligible,
+    immediatePurgeBlockers,
     assessedAt: new Date().toISOString(),
   };
 }
