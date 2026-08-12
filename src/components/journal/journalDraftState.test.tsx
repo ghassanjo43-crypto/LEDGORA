@@ -244,6 +244,30 @@ describe('journal draft state', () => {
     expect(debitInputs()[1]!.value).toBe('700');
   });
 
+  it('10c · Escape inside the account picker closes only the picker', () => {
+    /*
+     * The entry drawer listens for Escape on `window`. The account picker's
+     * search box is inside that drawer, so an un-stopped Escape closed the
+     * whole entry — losing every line — instead of the dropdown. The picker
+     * now consumes the key.
+     */
+    const closes: number[] = [];
+    render(
+      <ToastProvider>
+        <JournalEntryDrawer open mode={{ kind: 'create' }} onClose={() => closes.push(1)} />
+      </ToastProvider>,
+    );
+    buildBalancedEntry();
+
+    fireEvent.click(document.getElementById('account-0')!);
+    const search = document.querySelector<HTMLInputElement>('input[placeholder^="Search code"]')!;
+    fireEvent.keyDown(search, { key: 'Escape' });
+
+    expect(closes, 'the entry drawer must not be dismissed').toHaveLength(0);
+    expect(footerTotals().difference).toBe('0.00');
+    expect(debitInputs()[0]!.value).toBe('5000000');
+  });
+
   it('11 · Save & close persists exactly the visible amounts', async () => {
     drawer();
     const { land, cash } = buildBalancedEntry();
@@ -336,7 +360,15 @@ describe('draft money handling', () => {
     const [land, cash] = postingAccounts();
     pickAccount(0, land!);
     pickAccount(1, cash!);
-    fireEvent.change(document.getElementById('currency')!, { target: { value: 'EUR' } });
+    // The entry currency is chosen through the shared searchable picker now,
+    // not a native <select> restricted to nine codes.
+    fireEvent.click(screen.getByLabelText('Currency', { selector: 'button' }));
+    fireEvent.change(screen.getByLabelText('Search currencies'), { target: { value: 'EUR' } });
+    fireEvent.click(
+      Array.from(document.querySelectorAll<HTMLButtonElement>('[role="option"] button')).find((o) =>
+        (o.textContent ?? '').includes('EUR'),
+      )!,
+    );
     typeAmount(0, 'debit', '1234.56');
     typeAmount(1, 'credit', '1234.56');
     expect(footerTotals()).toEqual({ debit: '1,234.56', credit: '1,234.56', difference: '0.00' });

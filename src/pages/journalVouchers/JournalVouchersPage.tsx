@@ -21,10 +21,15 @@ import type {
   JournalVoucher, JournalVoucherLine, JournalVoucherStatus, RecurringVoucherTemplate, VoucherTypeConfig,
 } from '@/types/journalVoucher';
 import { generateId, nowIso } from '@/lib/utils';
+import type { Account } from '@/types';
 import { Card, CardBody } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Field, Input, Textarea } from '@/components/ui/Input';
+import { AmountInput } from '@/components/ui/AmountInput';
 import { Select } from '@/components/ui/Select';
+import { AccountSelect } from '@/components/journal/AccountSelect';
+import { CostCenterPicker } from '@/components/cost-centers/CostCenterPicker';
+import { ProjectPicker } from '@/components/projects/ProjectPicker';
 import { Alert } from '@/components/ui/Alert';
 import { Badge } from '@/components/ui/Badge';
 import { Drawer } from '@/components/ui/Drawer';
@@ -266,17 +271,40 @@ function VoucherEditor({ voucher, onChange, baseCurrency, onSave, onSaveAndSubmi
       ) : (
         <>
           {/* ── Excel-like line grid ─────────────────────────────────── */}
+          {/*
+            `overflow-x-auto` + a min-width that accounts for the wider money
+            columns: on a narrow screen the grid SCROLLS rather than compressing
+            the amounts until they are unreadable, which is the trade this
+            change exists to make.
+          */}
           <Card className="overflow-x-auto">
-            <table className="w-full min-w-[900px] text-xs">
+            <table className="w-full min-w-[1040px] text-xs">
               <thead className="bg-slate-50 text-[11px] uppercase text-slate-500 dark:bg-slate-800/50">
                 <tr>
                   <th className="px-2 py-1.5 text-left w-8">#</th>
                   <th className="px-2 py-1.5 text-left min-w-[220px]">Account</th>
-                  <th className="px-2 py-1.5 text-right w-28">Debit</th>
-                  <th className="px-2 py-1.5 text-right w-28">Credit</th>
+                  {/*
+                    Money columns are FIXED and EQUAL at 176px. `1,250,000,000.00`
+                    is sixteen characters and was being cut off at the previous
+                    112px (`w-28`); an amount a reader has to scroll inside is an
+                    amount they will misread. `min-w` as well as `w` so the table's
+                    auto-layout cannot squeeze them back down on a narrow screen —
+                    the container scrolls horizontally instead.
+                  */}
+                  <th className="px-2 py-1.5 text-right w-[176px] min-w-[176px]">Debit</th>
+                  <th className="px-2 py-1.5 text-right w-[176px] min-w-[176px]">Credit</th>
                   <th className="px-2 py-1.5 text-left min-w-[160px]">Description</th>
-                  <th className="px-2 py-1.5 text-left w-32">Cost center</th>
-                  <th className="px-2 py-1.5 text-left w-32">Project</th>
+                  {/*
+                    Dimension columns at 200px. `CC-OPS-AMM · Amman Operations`
+                    and `PRJ-2026-014 · Amman Office Development` are the values
+                    these actually hold; at the previous 128px (`w-32`) both were
+                    truncated to the code and a word, which is exactly enough to
+                    confuse two cost centers in the same department. The trigger
+                    still ellipsises beyond this, and carries a `title` with the
+                    complete code and name.
+                  */}
+                  <th className="px-2 py-1.5 text-left w-[200px] min-w-[200px]">Cost center</th>
+                  <th className="px-2 py-1.5 text-left w-[200px] min-w-[200px]">Project</th>
                   {type?.allowTaxCodes && <th className="px-2 py-1.5 text-left w-24">Tax code</th>}
                   {type?.allowTaxCodes && <th className="px-2 py-1.5 text-right w-24">Tax amt</th>}
                   <th className="px-2 py-1.5 text-left w-28">Reference</th>
@@ -287,12 +315,45 @@ function VoucherEditor({ voucher, onChange, baseCurrency, onSave, onSaveAndSubmi
                 {voucher.lines.map((l, idx) => (
                   <tr key={l.id} className="border-t border-slate-100 align-top dark:border-slate-800">
                     <td className="px-2 py-1 text-slate-400">{l.lineNumber}</td>
-                    <td className="px-2 py-1"><LineAccountPicker accounts={accountOptions} value={l.accountId} onChange={(id) => setLine(l.id, (x) => ({ ...x, accountId: id }))} /></td>
-                    <td className="px-2 py-1"><Input className="text-right" type="number" value={l.debit || ''} onChange={(e) => setLine(l.id, (x) => withDebit(x, Number(e.target.value) || 0))} /></td>
-                    <td className="px-2 py-1"><Input className="text-right" type="number" value={l.credit || ''} onChange={(e) => setLine(l.id, (x) => withCredit(x, Number(e.target.value) || 0))} /></td>
+                    <td className="px-2 py-1">
+                      <LineAccountPicker
+                        accounts={accounts}
+                        value={l.accountId}
+                        onChange={(id) => setLine(l.id, (x) => ({ ...x, accountId: id }))}
+                        // Choosing an account advances to this line's Debit cell,
+                        // which is where the next keystroke belongs.
+                        onAfterSelect={() =>
+                          document.querySelector<HTMLInputElement>(`[data-jv-line="${l.id}"][data-jv-col="debit"]`)?.focus()
+                        }
+                      />
+                    </td>
+                    <td className="px-2 py-1">
+                      <AmountInput
+                        data-testid={`jv-debit-${idx}`}
+                        aria-label={`Line ${l.lineNumber} debit`}
+                        value={l.debit}
+                        onChange={(n) => setLine(l.id, (x) => withDebit(x, n))}
+                        {...{ 'data-jv-line': l.id, 'data-jv-col': 'debit' }}
+                      />
+                    </td>
+                    <td className="px-2 py-1">
+                      <AmountInput
+                        data-testid={`jv-credit-${idx}`}
+                        aria-label={`Line ${l.lineNumber} credit`}
+                        value={l.credit}
+                        onChange={(n) => setLine(l.id, (x) => withCredit(x, n))}
+                        {...{ 'data-jv-line': l.id, 'data-jv-col': 'credit' }}
+                      />
+                    </td>
                     <td className="px-2 py-1"><Input value={l.description} onChange={(e) => setLine(l.id, (x) => ({ ...x, description: e.target.value }))} /></td>
-                    <td className="px-2 py-1"><DimensionPicker kind="costCenter" value={l.costCenterId} onChange={(id) => setLine(l.id, (x) => ({ ...x, costCenterId: id }))} /></td>
-                    <td className="px-2 py-1"><DimensionPicker kind="project" value={l.projectId} onChange={(id) => setLine(l.id, (x) => ({ ...x, projectId: id }))} /></td>
+                    {/*
+                      `setLine(l.id, …)` addresses the line by its stable ID, so
+                      a dimension created from this row can only ever land on
+                      this row — reordering or inserting lines while the create
+                      dialog is open cannot redirect it.
+                    */}
+                    <td className="px-2 py-1"><DimensionPicker kind="costCenter" postingDate={voucher.postingDate} value={l.costCenterId} onChange={(id) => setLine(l.id, (x) => ({ ...x, costCenterId: id }))} /></td>
+                    <td className="px-2 py-1"><DimensionPicker kind="project" postingDate={voucher.postingDate} value={l.projectId} onChange={(id) => setLine(l.id, (x) => ({ ...x, projectId: id }))} /></td>
                     {type?.allowTaxCodes && <td className="px-2 py-1"><Input value={l.taxCode} onChange={(e) => setLine(l.id, (x) => ({ ...x, taxCode: e.target.value }))} /></td>}
                     {type?.allowTaxCodes && <td className="px-2 py-1"><Input className="text-right" type="number" value={l.taxAmount || ''} onChange={(e) => setLine(l.id, (x) => ({ ...x, taxAmount: Number(e.target.value) || 0 }))} /></td>}
                     <td className="px-2 py-1"><Input value={l.reference} onChange={(e) => setLine(l.id, (x) => ({ ...x, reference: e.target.value }))} /></td>
@@ -335,30 +396,71 @@ function VoucherEditor({ voucher, onChange, baseCurrency, onSave, onSaveAndSubmi
   );
 }
 
-/** Searchable account picker (datalist-backed for keyboard-friendly search). */
-function LineAccountPicker({ accounts, value, onChange }: { accounts: Array<{ value: string; label: string }>; value: string; onChange: (id: string) => void }) {
+/**
+ * The account cell of a voucher line.
+ *
+ * A thin adapter over {@link AccountSelect} — the searchable picker the General
+ * Journal, invoices, bills, payments, receipts and credit notes all already
+ * use. This page was the one surface still on a native `<select>`, which meant
+ * finding "1251 Cash on hand" in a chart of a hundred accounts was a scroll,
+ * not a search. There is no second account list here: the same
+ * `useStore.accounts` and the same `isPostingAccount` filter inside the shared
+ * component decide what is offered, so the picker can never offer an account
+ * that posting would reject.
+ */
+function LineAccountPicker({
+  accounts,
+  value,
+  onChange,
+  onAfterSelect,
+}: {
+  accounts: Account[];
+  value: string;
+  onChange: (id: string) => void;
+  onAfterSelect?: () => void;
+}) {
   return (
-    <Select
-      options={accounts}
+    <AccountSelect
+      accounts={accounts}
       value={value}
-      onChange={(e) => onChange(e.target.value)}
+      onChange={(account) => onChange(account.id)}
+      // Excel-like grid: land on the cell, start typing.
+      openOnFocus
+      onAfterSelect={onAfterSelect}
     />
   );
 }
 
-function DimensionPicker({ kind, value, onChange }: { kind: 'costCenter' | 'project'; value: string; onChange: (id: string) => void }) {
-  const options = useDimensionOptions(kind);
-  return <Select options={options} value={value} onChange={(e) => onChange(e.target.value)} />;
-}
-
-function useDimensionOptions(kind: 'costCenter' | 'project'): Array<{ value: string; label: string }> {
+/**
+ * The cost-center / project cell of a voucher line.
+ *
+ * A thin adapter over the canonical {@link CostCenterPicker} and
+ * {@link ProjectPicker} — the searchable, portalled pickers the General Journal
+ * line grid already uses. This page was still on native `<select>`s, so finding
+ * a cost center meant scrolling a flat list with no search and no way to open a
+ * missing one without abandoning the voucher.
+ *
+ * There is no second dimension model here: both pickers read their own canonical
+ * store and write through it.
+ */
+function DimensionPicker({
+  kind,
+  value,
+  onChange,
+  postingDate,
+}: {
+  kind: 'costCenter' | 'project';
+  value: string;
+  onChange: (id: string) => void;
+  postingDate?: string;
+}) {
   const costCenters = useCostCenterStore((s) => s.costCenters);
   const projects = useProjectStore((s) => s.projects);
-  return useMemo(
-    () => kind === 'costCenter'
-      ? [{ value: '', label: '—' }, ...costCenters.map((c) => ({ value: c.id, label: `${c.code} — ${c.name}` }))]
-      : [{ value: '', label: '—' }, ...projects.map((p) => ({ value: p.id, label: p.name }))],
-    [kind, costCenters, projects],
+
+  return kind === 'costCenter' ? (
+    <CostCenterPicker costCenters={costCenters} value={value} onChange={onChange} postingDate={postingDate} />
+  ) : (
+    <ProjectPicker projects={projects} value={value} onChange={onChange} postingDate={postingDate} />
   );
 }
 

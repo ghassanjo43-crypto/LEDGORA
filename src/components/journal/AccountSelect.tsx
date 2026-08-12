@@ -18,6 +18,23 @@ interface AccountSelectProps {
   hasError?: boolean;
   disabled?: boolean;
   id?: string;
+  /**
+   * Open as soon as the trigger receives focus, so a spreadsheet-style grid
+   * behaves like a spreadsheet: land on the cell and start typing.
+   *
+   * Off by default. The dropdown moves focus into its own search box, and
+   * closing returns focus to the trigger — which, with this on, would
+   * immediately reopen it. That loop is broken by a one-shot suppression flag
+   * set whenever the picker closes itself; opt-in keeps that machinery out of
+   * the surfaces that do not need it.
+   */
+  openOnFocus?: boolean;
+  /**
+   * Called after an account is chosen, INSTEAD of returning focus to the
+   * trigger. A grid uses it to advance to the next cell the way Tab would, so
+   * choosing an account does not strand the user on the field they just filled.
+   */
+  onAfterSelect?: () => void;
 }
 
 /**
@@ -39,11 +56,26 @@ export function AccountSelect({
   hasError,
   disabled,
   id,
+  openOnFocus = false,
+  onAfterSelect,
 }: AccountSelectProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [highlight, setHighlight] = useState(0);
   const [position, setPosition] = useState<PopoverPosition | null>(null);
+  /**
+   * Set when the picker closes itself and cleared by the next focus event.
+   * Without it, `openOnFocus` + "return focus to the trigger on close" is an
+   * open/close loop the user cannot escape.
+   */
+  const suppressFocusOpen = useRef(false);
+  /** A character typed on the closed trigger, used to seed the search. */
+  const pendingQuery = useRef<string | null>(null);
+  /**
+   * Set on mousedown when the FOCUS this press is about to deliver is what will
+   * open the panel. See the note on the trigger's `onMouseDown`.
+   */
+  const swallowNextClick = useRef(false);
 
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -104,9 +136,13 @@ export function AccountSelect({
   // and reset the transient query/highlight when opening.
   useEffect(() => {
     if (!open) return;
-    setQuery('');
+    // A character typed on the closed trigger becomes the opening search, so
+    // "click the field and start typing" loses nothing to the transition.
+    const seed = pendingQuery.current ?? '';
+    pendingQuery.current = null;
+    setQuery(seed);
     // Highlight the currently-selected account, if any, else the first result.
-    const selIdx = selectable.findIndex((a) => a.id === value);
+    const selIdx = seed ? 0 : selectable.findIndex((a) => a.id === value);
     setHighlight(selIdx >= 0 ? selIdx : 0);
     const t = window.setTimeout(() => inputRef.current?.focus(), 0);
     const onPointerDown = (e: MouseEvent): void => {
@@ -131,15 +167,57 @@ export function AccountSelect({
 
   const closeAndFocusTrigger = (): void => {
     setOpen(false);
+    // The refocus below would otherwise re-trigger `openOnFocus` immediately.
+    suppressFocusOpen.current = true;
     triggerRef.current?.focus();
   };
 
   const choose = (account: Account): void => {
     onChange(account);
+    if (onAfterSelect) {
+      setOpen(false);
+      suppressFocusOpen.current = true;
+      // Let the caller decide where the keyboard goes next — in a grid that is
+      // the following cell, not the field just filled in.
+      onAfterSelect();
+      return;
+    }
     closeAndFocusTrigger();
   };
 
+  /**
+   * Typing on the CLOSED trigger opens the picker and starts the search with
+   * that character. A single printable key only: modifiers, navigation and
+   * shortcuts must keep working normally.
+   */
+  const onTriggerKeyDown = (e: React.KeyboardEvent): void => {
+    if (open) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      setOpen(true);
+      return;
+    }
+    if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      pendingQuery.current = e.key;
+      setOpen(true);
+    }
+  };
+
+  /** Keys the picker consumes entirely — see the note in `onKeyDown`. */
+  const CONSUMED = new Set(['Escape', 'ArrowDown', 'ArrowUp', 'PageDown', 'PageUp', 'Home', 'End', 'Enter']);
+
   const onKeyDown = (e: React.KeyboardEvent): void => {
+    /*
+     * A key this picker acts on must not ALSO reach the surface behind it.
+     * The host drawers — the journal entry drawer and the voucher drawer —
+     * listen for Escape on `window` to close themselves, so an un-stopped
+     * Escape here dismissed the whole document the user was editing instead of
+     * the dropdown, taking every unsaved line with it. Alt+A (add line) and
+     * Ctrl+Enter (post) are the same hazard while the search box has focus.
+     */
+    if (CONSUMED.has(e.key)) e.stopPropagation();
+
     if (e.key === 'Escape') {
       e.preventDefault();
       closeAndFocusTrigger();
@@ -181,7 +259,48 @@ export function AccountSelect({
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={open ? listboxId : undefined}
-        onClick={() => setOpen((o) => !o)}
+        /*
+         * ── One gesture, one state transition ──────────────────────────────
+         *
+         * A real mouse press on a button produces, in order:
+         *
+         *     pointerdown → mousedown → FOCUS → mouseup → CLICK
+         *
+         * With `openOnFocus`, the focus step opens the panel — and the click
+         * that completes the SAME press used to run the toggle below and close
+         * it again. The panel appeared and vanished in one gesture: the blink.
+         *
+         * So the press is classified here, while the panel's state still tells
+         * us which step will do the opening:
+         *
+         *   closed at mousedown → the coming focus opens it, and this press's
+         *                         click must be swallowed;
+         *   open at mousedown   → focus changes nothing, so the click is a
+         *                         genuine second interaction and must close it.
+         *
+         * This is a fact about event order, not a race, so it needs no timeout.
+         */
+        onMouseDown={() => {
+          swallowNextClick.current = openOnFocus && !open;
+        }}
+        onClick={() => {
+          if (swallowNextClick.current) {
+            swallowNextClick.current = false;
+            return;
+          }
+          setOpen((o) => !o);
+        }}
+        onKeyDown={onTriggerKeyDown}
+        onFocus={() => {
+          if (!openOnFocus) return;
+          // One-shot: a focus caused by the picker closing must not reopen it.
+          if (suppressFocusOpen.current) {
+            suppressFocusOpen.current = false;
+            swallowNextClick.current = false;
+            return;
+          }
+          setOpen(true);
+        }}
         className={cn(
           'focus-ring flex w-full items-center justify-between gap-2 rounded-lg border bg-white px-2.5 py-1.5 text-left text-sm text-slate-900 transition-colors disabled:cursor-not-allowed disabled:opacity-60 dark:bg-slate-900 dark:text-slate-100',
           hasError
@@ -209,6 +328,10 @@ export function AccountSelect({
         createPortal(
           <div
             ref={panelRef}
+            data-testid="account-picker-panel"
+            // Mirrors the entity / project / cost-center panels, so placement is
+            // inspectable the same way across all four pickers.
+            data-placement={position.placement}
             style={{
               position: 'fixed',
               top: position.top,

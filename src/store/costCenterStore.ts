@@ -6,8 +6,23 @@ import { moveCostCenter as moveInTree } from '@/lib/costCenterHierarchy';
 import { validateCostCenterForActivation } from '@/lib/costCenterValidation';
 import { SEED_COST_CENTERS, SEED_REQUIREMENT_RULES, PRIMARY_ENTITY_ID } from '@/data/costCenterSeed';
 import { generateId, nowIso } from '@/lib/utils';
+import type { OrganizationRole } from '@/types/roles';
+import { assertCostCenterPermission } from '@/lib/costCenterPermissions';
+import { getCurrentUser } from '@/store/authStore';
+import { isPlatformAdminFullAccess } from '@/store/platformFullAccess';
 
 const ACTOR = 'Finance Manager';
+
+/** Effective organization role. Same resolution as every other module store. */
+function currentRole(): OrganizationRole {
+  if (isPlatformAdminFullAccess()) return 'admin';
+  return getCurrentUser()?.role ?? 'owner';
+}
+
+/** Whether the current role may open new cost centers. UI affordances only. */
+export function canCreateCostCenter(): boolean {
+  return assertCostCenterPermission(currentRole(), 'cost_centers.create').ok;
+}
 
 export interface CostCenterActionResult {
   ok: boolean;
@@ -76,6 +91,9 @@ export const useCostCenterStore = create<CostCenterState>()(
       centersForEntity: (entityId) => get().costCenters.filter((c) => c.entityId === entityId),
 
       createCostCenter: (patch) => {
+        // The gate lives on the WRITE, so it holds however the action is reached.
+        const permitted = assertCostCenterPermission(currentRole(), 'cost_centers.create');
+        if (!permitted.ok) return { ok: false, error: permitted.error };
         const cc = { ...defaultCostCenter(patch?.entityId ?? PRIMARY_ENTITY_ID), ...patch };
         set({ costCenters: recomputePaths([...get().costCenters, cc]) });
         return { ok: true, id: cc.id };

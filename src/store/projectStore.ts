@@ -5,8 +5,27 @@ import type { Project, ProjectAuditEvent, ProjectChangeOrder, ProjectMilestone, 
 import { validateProjectForActivation } from '@/lib/projectValidation';
 import { SEED_PROJECTS, SEED_PROJECT_REQUIREMENT_RULES, PRIMARY_ENTITY_ID } from '@/data/projectSeed';
 import { generateId, nowIso } from '@/lib/utils';
+import type { OrganizationRole } from '@/types/roles';
+import { assertProjectPermission } from '@/lib/projectPermissions';
+import { getCurrentUser } from '@/store/authStore';
+import { isPlatformAdminFullAccess } from '@/store/platformFullAccess';
 
 const ACTOR = 'Finance Manager';
+
+/**
+ * Effective organization role for permission checks. Identical to the
+ * resolution used by `fixedAssetStore`, `journalStore` and `useEntityStore`, so
+ * one role means one thing across the workspace.
+ */
+function currentRole(): OrganizationRole {
+  if (isPlatformAdminFullAccess()) return 'admin';
+  return getCurrentUser()?.role ?? 'owner';
+}
+
+/** Whether the current role may open new projects. For UI affordances only. */
+export function canCreateProject(): boolean {
+  return assertProjectPermission(currentRole(), 'projects.create').ok;
+}
 
 export interface ProjectActionResult {
   ok: boolean;
@@ -61,6 +80,9 @@ export const useProjectStore = create<ProjectState>()(
       getProject: (id) => get().projects.find((p) => p.id === id),
 
       createProject: (patch) => {
+        // The gate lives on the WRITE, so it holds however the action is reached.
+        const permitted = assertProjectPermission(currentRole(), 'projects.create');
+        if (!permitted.ok) return { ok: false, error: permitted.error };
         const project = { ...defaultProject(patch?.entityId ?? PRIMARY_ENTITY_ID), ...patch };
         set({ projects: [...get().projects, project] });
         return { ok: true, id: project.id };

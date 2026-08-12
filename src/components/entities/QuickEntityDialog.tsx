@@ -144,7 +144,15 @@ export function QuickEntityDialog({ open, initialName = '', onCancel, onCreated 
      * than merely later in the DOM.
      */
     <div
-      className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto p-4 pt-24"
+      /*
+       * z-[1100] matches the project and cost-center dialogs and sits above the
+       * z-[1000] picker panels. This is DEFENCE IN DEPTH, not the fix: the
+       * picker that opens this dialog now unmounts its panel first, so there is
+       * nothing left to stack against. The layer ordering exists so that a
+       * future caller which opens this dialog over some other portalled surface
+       * still lands on top.
+       */
+      className="fixed inset-0 z-[1100] flex items-start justify-center overflow-y-auto p-4 pt-24"
       role="dialog"
       aria-modal="true"
       aria-label="Add new entity"

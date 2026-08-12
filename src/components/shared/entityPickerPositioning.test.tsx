@@ -58,6 +58,7 @@ function stubRect(el: Element, rect: { top: number; left?: number; width?: numbe
     }) as DOMRect;
 }
 
+/** The entity picker's own panel, ignoring any other portalled picker. */
 const panel = () => document.querySelector<HTMLElement>('[data-testid="entity-picker-panel"]');
 
 /** Every scrollable ancestor between the panel and the document root. */
@@ -222,11 +223,18 @@ describe('EntityPicker inside the journal entry drawer', () => {
     );
   }
 
-  /** The entity trigger on a 0-based journal line. */
+  /**
+   * The entity trigger on a 0-based journal line.
+   *
+   * Identified by what it SAYS, not by its index among comboboxes: a line also
+   * renders account, cost-center and project comboboxes, and any of those
+   * counts can change without this test being about them.
+   */
   function entityTrigger(line: number): HTMLElement {
-    const triggers = Array.from(document.querySelectorAll<HTMLElement>('[role="combobox"]'));
-    // Each line renders an account combobox then an entity combobox.
-    return triggers[line * 2 + 1]!;
+    const triggers = Array.from(document.querySelectorAll<HTMLElement>('[role="combobox"]')).filter((el) =>
+      (el.textContent ?? '').trim().startsWith('No entity'),
+    );
+    return triggers[line]!;
   }
 
   it('the FIRST journal line opens below and escapes the drawer’s scroll container', () => {

@@ -18,7 +18,8 @@ import {
   PAYMENT_TERMS_OPTIONS_WITH_DEFAULT,
   SUPPLIER_CATEGORY_OPTIONS,
 } from '@/data/entityOptions';
-import { CURRENCY_OPTIONS } from '@/data/ifrsOptions';
+import { CurrencyPicker } from '@/components/currencies/CurrencyPicker';
+import { useCurrencyStore } from '@/store/currencyStore';
 import { Drawer } from '@/components/ui/Drawer';
 import { Button } from '@/components/ui/Button';
 import { Field, Input, Textarea } from '@/components/ui/Input';
@@ -72,6 +73,8 @@ export function EntityFormDrawer({ open, mode, onClose }: EntityFormDrawerProps)
     resolver: zodResolver(entityFormSchema),
     defaultValues,
   });
+
+  const currencies = useCurrencyStore((s) => s.currencies);
 
   useEffect(() => {
     if (open) reset(defaultValues);
@@ -206,7 +209,19 @@ export function EntityFormDrawer({ open, mode, onClose }: EntityFormDrawerProps)
           <Select id="paymentTerms" options={PAYMENT_TERMS_OPTIONS} {...register('paymentTerms')} />
         </Field>
         <Field label="Default currency" required error={errors.defaultCurrency?.message} htmlFor="currency">
-          <Select id="currency" options={CURRENCY_OPTIONS} hasError={!!errors.defaultCurrency} {...register('defaultCurrency')} />
+          <Controller
+            control={control}
+            name="defaultCurrency"
+            render={({ field }) => (
+              <CurrencyPicker
+                value={field.value}
+                currencies={currencies}
+                onChange={field.onChange}
+                placeholder="Search by code, name or country…"
+                aria-label="Default currency"
+              />
+            )}
+          />
         </Field>
 
         <SectionTitle>Banking</SectionTitle>

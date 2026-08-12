@@ -29,7 +29,8 @@ import {
 } from '@/store/journalStore';
 import { useStore } from '@/store/useStore';
 import { useEntityStore } from '@/store/useEntityStore';
-import { CURRENCY_OPTIONS } from '@/data/ifrsOptions';
+import { CurrencyPicker } from '@/components/currencies/CurrencyPicker';
+import { useCurrencyStore } from '@/store/currencyStore';
 import { Drawer } from '@/components/ui/Drawer';
 import { Button } from '@/components/ui/Button';
 import { Field, Input } from '@/components/ui/Input';
@@ -83,6 +84,7 @@ export function JournalEntryDrawer({ open, mode, onClose }: JournalEntryDrawerPr
   const accounts = useStore((s) => s.accounts);
   const baseCurrency = useStore((s) => s.settings.baseCurrency);
   const businessEntities = useEntityStore((s) => s.entities);
+  const currencies = useCurrencyStore((s) => s.currencies);
   const { notify } = useToast();
 
   const accountsById = useMemo(
@@ -539,7 +541,19 @@ export function JournalEntryDrawer({ open, mode, onClose }: JournalEntryDrawerPr
               />
             </Field>
             <Field label="Currency" required error={errors.currency?.message} htmlFor="currency">
-              <Select id="currency" options={CURRENCY_OPTIONS} hasError={!!errors.currency} {...register('currency')} />
+              <Controller
+                control={control}
+                name="currency"
+                render={({ field }) => (
+                  <CurrencyPicker
+                    value={field.value}
+                    currencies={currencies}
+                    onChange={field.onChange}
+                    placeholder="Search by code, name or country…"
+                    aria-label="Currency"
+                  />
+                )}
+              />
             </Field>
             <Field label="Exchange rate" required error={errors.exchangeRate?.message} htmlFor="exchangeRate">
               <Input id="exchangeRate" type="number" step="0.0001" min={0} hasError={!!errors.exchangeRate} {...register('exchangeRate')} />

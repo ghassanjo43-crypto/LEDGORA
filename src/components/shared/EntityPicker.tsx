@@ -179,12 +179,37 @@ export function EntityPicker({
     window.setTimeout(() => triggerRef.current?.focus(), 0);
   };
 
-  const openCreate = (): void => setCreating(true);
+  /**
+   * Hand over to the create dialog.
+   *
+   * ── The picker CLOSES first, and that is the whole point ────────────────────
+   * The dropdown is rendered through a portal on `document.body`, so leaving
+   * `open` true while the dialog mounts left a live panel in the document: it
+   * stacked over the modal, swallowed clicks meant for the form, and kept the
+   * DOM focus on a search box the user could no longer see. Raising the
+   * dialog's z-index would only have hidden the panel — it would still have
+   * been mounted, still focusable and still first in the hit-test in places the
+   * modal does not cover.
+   *
+   * So this is a state transition, not a stacking tweak: the panel unmounts
+   * because `open` becomes false, and the dialog then opens onto a document
+   * with no picker in it.
+   *
+   * `query` is deliberately NOT cleared — it is the name the user typed and is
+   * about to create, and the dialog seeds its Name field from it. The search
+   * INPUT disappears with the panel, so nothing keeps focus.
+   */
+  const openCreate = (): void => {
+    setOpen(false);
+    setHighlight(0);
+    setCreating(true);
+  };
 
   /**
    * The newly created entity is selected on THIS picker's line — the line the
    * user opened the dialog from — and nothing else about the host document is
-   * touched.
+   * touched. The dropdown is NOT reopened: the user asked for an entity and now
+   * has one.
    */
   const handleCreated = (entity: BusinessEntity): void => {
     setCreating(false);
@@ -383,10 +408,16 @@ export function EntityPicker({
         open={creating}
         initialName={query}
         onCancel={() => {
-          // Cancelling changes nothing: not the selection, not the search, and
-          // nothing in the document behind.
+          /*
+           * Cancelling changes nothing: not the selection, not the document
+           * behind. The picker stays CLOSED — it was closed to open this dialog,
+           * and springing the dropdown back open would be the application
+           * deciding the user still wants to browse. Focus returns to the
+           * trigger (the search box no longer exists), which is both the
+           * logical control and where a subsequent keystroke should land.
+           */
           setCreating(false);
-          window.setTimeout(() => inputRef.current?.focus(), 0);
+          triggerRef.current?.focus({ preventScroll: true });
         }}
         onCreated={handleCreated}
       />
