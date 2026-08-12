@@ -12,10 +12,13 @@
  */
 import { useState } from 'react';
 import { useOrganizationStore } from '@/store/organizationStore';
+import { useCurrencyStore } from '@/store/currencyStore';
+import { CurrencyPicker } from '@/components/currencies/CurrencyPicker';
+import { suggestedCurrencyForCountry } from '@/lib/functionalCurrency';
 import { useRouterStore } from '@/store/routerStore';
 import { CenteredCard, Stepper } from '@/components/onboarding/OnboardingChrome';
 import { COUNTRY_OPTIONS, FY_START_OPTIONS } from '@/lib/onboardingData';
-import { INDUSTRY_OPTIONS, CURRENCY_OPTIONS } from '@/data/ifrsOptions';
+import { INDUSTRY_OPTIONS, } from '@/data/ifrsOptions';
 import { ROUTES } from '@/lib/accessControl';
 import { Field, Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
@@ -25,7 +28,6 @@ import { subscriptionApi } from '@/services/api/authApi';
 import { ApiError, isApiConfigured } from '@/services/api/client';
 
 const industryOptions = INDUSTRY_OPTIONS.map((o) => ({ value: o.value, label: o.label }));
-const currencyOptions = CURRENCY_OPTIONS.map((o) => ({ value: o.value, label: o.label }));
 
 export function OnboardingOrganizationPage() {
   const createOrganization = useOrganizationStore((s) => s.createOrganization);
@@ -34,6 +36,7 @@ export function OnboardingOrganizationPage() {
   const navigate = useRouterStore((s) => s.navigate);
   const planCode = useRouterStore((s) => s.query.plan);
   const [submitting, setSubmitting] = useState(false);
+  const currencies = useCurrencyStore((s) => s.currencies);
 
   const [form, setForm] = useState({
     legalName: '',
@@ -42,7 +45,8 @@ export function OnboardingOrganizationPage() {
     registrationNumber: '',
     taxNumber: '',
     industry: 'general',
-    baseCurrency: 'USD',
+    // No default: the functional currency is a decision, not a fallback.
+    baseCurrency: '',
     fiscalYearStart: '01-01',
     booksStartDate: `${new Date().getFullYear()}-01-01`,
   });
@@ -50,7 +54,19 @@ export function OnboardingOrganizationPage() {
   const [formError, setFormError] = useState<string | null>(null);
 
   const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
-    setForm((f) => ({ ...f, [k]: e.target.value }));
+    setForm((f) => {
+      const next = { ...f, [k]: e.target.value };
+      /*
+       * Choosing a country SUGGESTS the currency companies there usually keep
+       * their books in — and only while the field is still untouched, so it can
+       * never overwrite a deliberate choice. A Jordanian company reporting in
+       * USD is legitimate.
+       */
+      if (k === 'country' && !f.baseCurrency) {
+        next.baseCurrency = suggestedCurrencyForCountry(e.target.value);
+      }
+      return next;
+    });
 
   const nextRoute = (): string =>
     planCode ? `${ROUTES.onboardingSubscription}?plan=${planCode}` : ROUTES.onboardingSubscription;
@@ -61,7 +77,7 @@ export function OnboardingOrganizationPage() {
     if (!form.legalName.trim()) fieldErrors.legalName = 'Legal name is required.';
     if (!form.country) fieldErrors.country = 'Select a country.';
     if (!form.industry) fieldErrors.industry = 'Select an industry.';
-    if (!form.baseCurrency) fieldErrors.baseCurrency = 'Select a base currency.';
+    if (!form.baseCurrency) fieldErrors.baseCurrency = 'Select the base / functional currency.';
     if (!form.fiscalYearStart) fieldErrors.fiscalYearStart = 'Select a financial-year start.';
     return fieldErrors;
   };
@@ -168,8 +184,19 @@ export function OnboardingOrganizationPage() {
           </Field>
         </div>
         <div className="grid gap-4 sm:grid-cols-3">
-          <Field label="Base currency" required error={errors.baseCurrency}>
-            <Select options={currencyOptions} value={form.baseCurrency} onChange={set('baseCurrency')} hasError={!!errors.baseCurrency} />
+          <Field
+            label="Base / functional currency"
+            required
+            error={errors.baseCurrency}
+            hint="The currency this company's books and financial statements are kept in."
+          >
+            <CurrencyPicker
+              value={form.baseCurrency}
+              onChange={(code) => setForm((f) => ({ ...f, baseCurrency: code }))}
+              currencies={currencies}
+              placeholder="Search by code, name or country…"
+              aria-label="Base / functional currency"
+            />
           </Field>
           <Field label="Financial year start" required error={errors.fiscalYearStart}>
             <Select options={FY_START_OPTIONS} value={form.fiscalYearStart} onChange={set('fiscalYearStart')} hasError={!!errors.fiscalYearStart} />

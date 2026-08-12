@@ -6,7 +6,6 @@ import { LogoImage } from '@/components/invoices/LogoImage';
 import { useStore } from '@/store/useStore';
 import { useCompanyStore } from '@/store/companyStore';
 import {
-  CURRENCY_OPTIONS,
   INDUSTRY_OPTIONS,
   ORGANIZATION_TYPE_OPTIONS,
   ACCOUNTING_BASIS_OPTIONS,
@@ -16,6 +15,8 @@ import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Field, Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
+import { CurrencyPicker } from '@/components/currencies/CurrencyPicker';
+import { useCurrencyStore } from '@/store/currencyStore';
 import { Toggle } from '@/components/ui/Toggle';
 import { Alert } from '@/components/ui/Alert';
 import { Tabs } from '@/components/ui/Tabs';
@@ -57,6 +58,7 @@ const PRESENTATION_MODES: {
 
 export function SettingsPanel() {
   const settings = useStore((s) => s.settings);
+  const currencies = useCurrencyStore((s) => s.currencies);
   const updateSettings = useStore((s) => s.updateSettings);
   const resetToDefault = useStore((s) => s.resetToDefault);
   const { notify } = useToast();
@@ -164,7 +166,13 @@ export function SettingsPanel() {
             <CardHeader title="Accounting & reporting" description="How and when the books are kept and reported." />
             <CardBody className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <Field label="Base currency" required htmlFor="currency" hint="All ledgers and reports are kept in this currency.">
-                <Select id="currency" options={CURRENCY_OPTIONS} value={draft.baseCurrency} onChange={(e) => set('baseCurrency', e.target.value)} />
+                <CurrencyPicker
+                  value={draft.baseCurrency}
+                  currencies={currencies}
+                  onChange={(code) => set('baseCurrency', code)}
+                  placeholder="Search by code, name or country…"
+                  aria-label="Base currency"
+                />
               </Field>
               <Field label="Fiscal year start" htmlFor="fy">
                 <Select id="fy" options={MONTH_OPTIONS} value={draft.fiscalYearStart} onChange={(e) => set('fiscalYearStart', e.target.value)} />

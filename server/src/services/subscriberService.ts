@@ -62,7 +62,8 @@ export interface CreateSubscriberInput {
   organizationLegalName: string;
   tradingName?: string;
   country: string;
-  baseCurrency?: string;
+  /** ISO 4217 alphabetic code. Required — see the route schema. */
+  baseCurrency: string;
   /**
    * Is this real customer data?
    *
@@ -228,6 +229,21 @@ export async function createSubscriber(
       emailVerified: false,
       // Both onboarding routes end in the customer choosing their own password.
       mustChangePassword: true,
+      /*
+       * The identity inherits the tenant's classification, because this person
+       * is being brought into existence solely to populate this tenant. Set at
+       * INSERT, never patched afterwards: production is one-way in the database,
+       * so an identity created production could never be corrected to
+       * disposable.
+       *
+       * This is safe here and ONLY here. `createSubscriber` refuses an email
+       * that already exists (see the clash check above), so the user is new by
+       * construction — there is no path through this function that reclassifies
+       * somebody who already had an account. Adding an existing person to a
+       * disposable tenant goes through the membership/invitation services, which
+       * never touch `users.data_classification`.
+       */
+      dataClassification: input.dataClassification ?? 'production',
     });
 
     if (passwordExpiresAt) {
@@ -245,7 +261,9 @@ export async function createSubscriber(
         legal_name: input.organizationLegalName.trim(),
         trading_name: input.tradingName?.trim() || null,
         country: input.country,
-        base_currency: input.baseCurrency ?? 'USD',
+        // No fallback: the route requires it, so an absent value here would be
+        // a programming error rather than something to paper over with USD.
+        base_currency: input.baseCurrency.trim().toUpperCase(),
         data_classification: input.dataClassification ?? 'production',
         classified_by: context.actorUserId,
         /*

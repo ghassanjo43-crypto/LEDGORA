@@ -218,17 +218,20 @@ export const INDUSTRY_OPTIONS: Option<string>[] = [
   { value: 'financial_services', label: 'Financial Services' },
 ];
 
-export const CURRENCY_OPTIONS: Option<string>[] = [
-  { value: 'USD', label: 'USD — US Dollar' },
-  { value: 'EUR', label: 'EUR — Euro' },
-  { value: 'GBP', label: 'GBP — British Pound' },
-  { value: 'AED', label: 'AED — UAE Dirham' },
-  { value: 'SAR', label: 'SAR — Saudi Riyal' },
-  { value: 'JOD', label: 'JOD — Jordanian Dinar' },
-  { value: 'EGP', label: 'EGP — Egyptian Pound' },
-  { value: 'JPY', label: 'JPY — Japanese Yen' },
-  { value: 'INR', label: 'INR — Indian Rupee' },
-];
+/**
+ * The nine-currency list that used to live here has been REMOVED, not shrunk.
+ *
+ * It was the reason a company could only keep its books in one of nine
+ * currencies: every Base Currency field on every screen selected from it, so
+ * expanding the canonical catalogue to the full active ISO 4217 set changed
+ * nothing a user could see. Deleting it is what makes that impossible to
+ * repeat — there is no shortcut left to reach for.
+ *
+ * The single source of currency data is `data/currencyCatalog.ts`, surfaced
+ * through `store/currencyStore` and chosen with `components/currencies/
+ * CurrencyPicker`. `currencyCatalogueIsCanonical.test.ts` fails if any
+ * hard-coded currency list reappears.
+ */
 
 /* ───────────────────────────── Company setup ────────────────────────────── */
 

@@ -60,6 +60,7 @@ async function subscriber(admin: SessionCookies): Promise<{ organizationId: stri
       email: 'owner@newco.test',
       organizationLegalName: 'NewCo Trading LLC',
       country: 'AE',
+      baseCurrency: 'AED',
       planId: await planId(),
       onboarding: 'temporary',
       paymentConfirmed: true,

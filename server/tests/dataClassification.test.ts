@@ -226,6 +226,7 @@ describe('changing a classification through the console', () => {
         email: `${legalName.replace(/\W/g, '').toLowerCase()}@dev.test`,
         organizationLegalName: legalName,
         country: 'AE',
+        baseCurrency: 'AED',
         planId: plans[0].id,
         onboarding: 'invite',
         dataClassification: classification,
@@ -472,6 +473,7 @@ describe('classifying an unreviewed subscriber', () => {
         email: 'console-made@dev.test',
         organizationLegalName: 'Console Made Ltd',
         country: 'AE',
+        baseCurrency: 'AED',
         planId: plans[0].id,
         onboarding: 'invite',
         dataClassification: 'production',
@@ -656,6 +658,263 @@ describe('classifying an unreviewed subscriber', () => {
 
     expect(downgrade.statusCode).toBe(409);
     expect((await reviewStateOf(organizationId)).data_classification).toBe('production');
+  });
+});
+
+/* ══ Identity classification and the disposable lifecycle ══════════════════ */
+
+/**
+ * The defect these pin down: a Demo subscriber's brand-new owner was created
+ * `production` (the `users` column default), so deleting the tenant retained the
+ * very identity that existed only to populate it — and the tenant itself was
+ * held for a 30-day recovery window it had nothing to recover.
+ */
+describe('a new subscriber’s identity classification', () => {
+  async function createdAt(
+    cookies: SessionCookies,
+    classification: 'production' | 'test' | 'demo',
+    email: string,
+    legalName: string,
+  ): Promise<{ organizationId: string; userId: string }> {
+    const plans = (await ctx.app.inject({ method: 'GET', url: '/api/plans/public' })).json().plans;
+    const response = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/admin/subscribers',
+      headers: authHeaders(cookies),
+      payload: {
+        fullName: 'Owner Person',
+        email,
+        organizationLegalName: legalName,
+        country: 'AE',
+        baseCurrency: 'AED',
+        planId: plans[0].id,
+        onboarding: 'invite',
+        dataClassification: classification,
+      },
+    });
+    expect(response.statusCode, JSON.stringify(response.json())).toBe(201);
+    const body = response.json().subscriber;
+    return { organizationId: body.organizationId, userId: body.userId };
+  }
+
+  const identityOf = (userId: string) =>
+    ctx.db
+      .selectFrom('users')
+      .select(['data_classification', 'email'])
+      .where('id', '=', userId)
+      .executeTakeFirstOrThrow();
+
+  it('creates a disposable identity for a new Demo subscriber', async () => {
+    const admin = await operator();
+    const { userId } = await createdAt(admin.cookies, 'demo', 'mmm@mmm.com', 'Demo Tenant Ltd');
+    expect((await identityOf(userId)).data_classification).toBe('demo');
+  });
+
+  it('creates a disposable identity for a new Test subscriber', async () => {
+    const admin = await operator();
+    const { userId } = await createdAt(admin.cookies, 'test', 'qa@dev.test', 'QA Tenant Ltd');
+    expect((await identityOf(userId)).data_classification).toBe('test');
+  });
+
+  it('creates a production identity for a new Production subscriber', async () => {
+    const admin = await operator();
+    const { userId } = await createdAt(admin.cookies, 'production', 'real@customer.test', 'Real Ltd');
+    expect((await identityOf(userId)).data_classification).toBe('production');
+  });
+
+  it('reports the disposable owner as deletable, and the tenant as immediately purgeable', async () => {
+    const admin = await operator();
+    const { organizationId, userId } = await createdAt(
+      admin.cookies,
+      'demo',
+      'owner@demo.test',
+      'Immediate Demo Ltd',
+    );
+
+    const impact = await assessSubscriberDeletion(ctx.db, organizationId);
+
+    expect(impact.disposable).toBe(true);
+    expect(impact.deletionPermitted).toBe(true);
+    // No billing, no activation, no evidence: nothing for a window to protect.
+    expect(impact.immediatePurgeEligible, impact.immediatePurgeBlockers.join(' ')).toBe(true);
+    expect(impact.immediatePurgeBlockers).toEqual([]);
+
+    const owner = impact.people.find((p) => p.userId === userId);
+    expect(owner?.outcome).toBe('disposable');
+    expect(owner?.detail).toMatch(/created exclusively for this subscriber/i);
+  });
+
+  it('keeps a production tenant on the retention path however clean it is', async () => {
+    const admin = await operator();
+    const { organizationId } = await createdAt(
+      admin.cookies,
+      'production',
+      'clean@customer.test',
+      'Clean Production Ltd',
+    );
+
+    const impact = await assessSubscriberDeletion(ctx.db, organizationId);
+    expect(impact.deletionPermitted).toBe(false);
+    expect(impact.immediatePurgeEligible).toBe(false);
+    expect(impact.immediatePurgeBlockers.join(' ')).toMatch(/only demo and test/i);
+  });
+
+  it('blocks immediate purge for a disposable tenant under a legal hold', async () => {
+    const admin = await operator();
+    const { organizationId } = await createdAt(admin.cookies, 'demo', 'held@demo.test', 'Held Demo Ltd');
+
+    await ctx.db
+      .updateTable('organizations')
+      .set({ legal_hold: true, legal_hold_reason: 'Dispute' })
+      .where('id', '=', organizationId)
+      .execute();
+
+    const impact = await assessSubscriberDeletion(ctx.db, organizationId);
+    expect(impact.deletionPermitted).toBe(false);
+    expect(impact.immediatePurgeEligible).toBe(false);
+    expect(impact.immediatePurgeBlockers.join(' ')).toMatch(/legal hold/i);
+  });
+
+  it('blocks immediate purge for a disposable tenant that took a payment', async () => {
+    const admin = await operator();
+    const { organizationId } = await createdAt(admin.cookies, 'demo', 'paid@demo.test', 'Paid Demo Ltd');
+
+    const subscription = await ctx.db
+      .selectFrom('subscriptions')
+      .select('id')
+      .where('organization_id', '=', organizationId)
+      .executeTakeFirstOrThrow();
+
+    const now = new Date();
+    await ctx.db
+      .insertInto('subscription_invoices')
+      .values({
+        invoice_number: 'SUB-DEMO-1',
+        organization_id: organizationId,
+        subscription_id: subscription.id,
+        currency: 'AED',
+        subtotal: '49.00',
+        total: '49.00',
+        status: 'paid',
+        payment_reference: 'LG-DEMO-0001',
+        issued_at: now,
+        due_at: now,
+        paid_at: now,
+        created_at: now,
+        updated_at: now,
+      })
+      .execute();
+
+    const impact = await assessSubscriberDeletion(ctx.db, organizationId);
+    /*
+     * Still DELETABLE — the classification waives retention blockers, which is
+     * the point of classifying it. But not deletable WITHOUT a window: money
+     * changed hands, so somebody may want time to reverse the decision.
+     */
+    expect(impact.deletionPermitted).toBe(true);
+    expect(impact.immediatePurgeEligible).toBe(false);
+    expect(impact.immediatePurgeBlockers.join(' ')).toMatch(/paid or have a proof/i);
+  });
+
+  it('never makes an existing person disposable by adding them to a Demo tenant', async () => {
+    const admin = await operator();
+    const real = await createdAt(admin.cookies, 'production', 'shared@real.test', 'Real Customer Ltd');
+    const demo = await createdAt(admin.cookies, 'demo', 'demo-owner@demo.test', 'Shared Demo Ltd');
+
+    // The production person also joins the demo tenant.
+    await ctx.db
+      .insertInto('organization_memberships')
+      .values({ organization_id: demo.organizationId, user_id: real.userId, role: 'member', status: 'active' })
+      .execute();
+
+    expect((await identityOf(real.userId)).data_classification).toBe('production');
+
+    const impact = await assessSubscriberDeletion(ctx.db, demo.organizationId);
+
+    // Mixed tenant: the impact report distinguishes the two people.
+    const shared = impact.people.find((p) => p.userId === real.userId);
+    const owner = impact.people.find((p) => p.userId === demo.userId);
+    expect(shared?.outcome).toBe('retained_other_membership');
+    expect(owner?.outcome).toBe('disposable');
+
+    // A real person losing a membership is not something to do without a window.
+    expect(impact.immediatePurgeEligible).toBe(false);
+  });
+
+  it('never makes a platform operator disposable', async () => {
+    const admin = await operator();
+    const demo = await createdAt(admin.cookies, 'demo', 'staffed@demo.test', 'Staffed Demo Ltd');
+
+    await ctx.db
+      .insertInto('organization_memberships')
+      .values({ organization_id: demo.organizationId, user_id: admin.userId, role: 'member', status: 'active' })
+      .execute();
+
+    const impact = await assessSubscriberDeletion(ctx.db, demo.organizationId);
+    const staff = impact.people.find((p) => p.userId === admin.userId);
+    expect(staff?.outcome).toBe('retained_platform_role');
+    expect(impact.deletionPermitted).toBe(false);
+    expect(impact.blockingReasons.some((r) => r.code === 'platform_role_member')).toBe(true);
+  });
+
+  it('cannot downgrade a production identity through the API', async () => {
+    const admin = await operator();
+    const { userId } = await createdAt(admin.cookies, 'production', 'protected@real.test', 'Protected Ltd');
+
+    /*
+     * There is no endpoint that reclassifies an identity, and the database
+     * refuses the move directly — the same one-way trigger that guards
+     * organizations guards users.
+     */
+    await expect(
+      ctx.db.updateTable('users').set({ data_classification: 'demo' }).where('id', '=', userId).execute(),
+    ).rejects.toThrow();
+
+    expect((await identityOf(userId)).data_classification).toBe('production');
+  });
+});
+
+describe('requesting deletion of a clean disposable tenant', () => {
+  it('schedules no recovery window, and purges without waiting', async () => {
+    const admin = await operator();
+    const plans = (await ctx.app.inject({ method: 'GET', url: '/api/plans/public' })).json().plans;
+    const created = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/admin/subscribers',
+      headers: authHeaders(admin.cookies),
+      payload: {
+        fullName: 'Owner Person',
+        email: 'nowait@demo.test',
+        organizationLegalName: 'No Wait Demo Ltd',
+        country: 'AE',
+        baseCurrency: 'AED',
+        planId: plans[0].id,
+        onboarding: 'invite',
+        dataClassification: 'demo',
+      },
+    });
+    const organizationId = created.json().subscriber.organizationId;
+
+    const response = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/admin/subscribers/${organizationId}/request-deletion`,
+      headers: authHeaders(admin.cookies),
+      payload: {
+        reason: 'Removing a demo tenant created for a walkthrough.',
+        confirmation: 'No Wait Demo Ltd',
+        password: TEST_PASSWORD,
+      },
+    });
+
+    expect(response.statusCode, JSON.stringify(response.json())).toBe(200);
+
+    const scheduled = new Date(response.json().scheduledPurgeAfter).getTime();
+    // Immediately eligible, not 30 days out.
+    expect(scheduled).toBeLessThanOrEqual(Date.now() + 5_000);
+
+    // And the cooling-off blocker does not stand in the way of the purge.
+    const impact = await assessSubscriberDeletion(ctx.db, organizationId);
+    expect(impact.blockingReasons.some((r) => r.code === 'cooling_off')).toBe(false);
   });
 });
 

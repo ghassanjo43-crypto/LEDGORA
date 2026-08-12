@@ -63,6 +63,7 @@ async function subscriber(
       email: options.email,
       organizationLegalName: options.legalName,
       country: 'AE',
+      baseCurrency: 'AED',
       planId: await plan(),
       onboarding: 'invite',
       // Confirming payment is what activates the tenant.
@@ -269,12 +270,37 @@ describe('identity rules', () => {
 
   it('retains a production-classified identity even in a test tenant', async () => {
     const admin = await operator();
-    const { organizationId, ownerUserId } = await subscriber(admin.cookies, {
-      email: 'realperson@dev.test',
+    const { organizationId } = await subscriber(admin.cookies, {
+      email: 'sandbox-owner@dev.test',
       legalName: 'Mixed Ltd',
     });
 
-    // Users default to production; the owner above is a real identity.
+    /*
+     * A REAL person, created as the owner of a production subscriber, who is
+     * then also given a seat in the test tenant.
+     *
+     * Constructed explicitly rather than relying on the users table default: a
+     * test tenant's own owner is now created disposable (that is the point of
+     * classifying the tenant), so the default no longer produces the production
+     * identity this test is about.
+     */
+    const real = await subscriber(admin.cookies, {
+      email: 'realperson@dev.test',
+      legalName: 'Real Customer Ltd',
+      classification: 'production',
+    });
+    const ownerUserId = real.ownerUserId;
+
+    await ctx.db
+      .deleteFrom('organization_memberships')
+      .where('organization_id', '=', real.organizationId)
+      .where('user_id', '=', ownerUserId)
+      .execute();
+    await ctx.db
+      .insertInto('organization_memberships')
+      .values({ organization_id: organizationId, user_id: ownerUserId, role: 'member', status: 'active' })
+      .execute();
+
     const preview = await freshPreview([organizationId]);
     const disposition = preview.candidates[0]!.identities.find((i) => i.userId === ownerUserId)!;
     expect(disposition.outcome).toBe('retained_production');
@@ -956,10 +982,44 @@ describe('the member directory', () => {
 
     expect(owner).toBeDefined();
     /*
-     * The tenant is test-classified but its owner was created as an ordinary
-     * person, so the identity stays production and survives the tenant. The
-     * directory must say so rather than echoing the organization.
+     * Created as part of a test tenant, so this identity is disposable too —
+     * it exists only to populate that tenant.
      */
-    expect(owner.dataClassification).toBe('production');
+    expect(owner.dataClassification).toBe('test');
+
+    /*
+     * And the independence the directory exists to show: a REAL person given a
+     * seat in the same test tenant keeps their production classification. The
+     * column describes the person, never the organization they sit in.
+     */
+    const real = await subscriber(admin.cookies, {
+      email: 'real-visitor@dev.test',
+      legalName: 'Real Visitor Ltd',
+      classification: 'production',
+    });
+    await ctx.db
+      .insertInto('organization_memberships')
+      .values({
+        organization_id: disposable.organizationId,
+        user_id: real.ownerUserId,
+        role: 'member',
+        status: 'active',
+      })
+      .execute();
+
+    /*
+     * Searched rather than scoped to the demo tenant: the directory shows one
+     * row per PERSON, keyed to their primary organization, so a visitor whose
+     * own tenant is elsewhere is listed under that one.
+     */
+    const mixed = await ctx.app.inject({
+      method: 'GET',
+      url: '/api/admin/members?search=real-visitor',
+      headers: authHeaders(admin.cookies),
+    });
+    const visitor = mixed
+      .json()
+      .members.find((m: { userId: string }) => m.userId === real.ownerUserId);
+    expect(visitor.dataClassification).toBe('production');
   });
 });

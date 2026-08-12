@@ -72,6 +72,7 @@ async function subscriber(
       email: overrides.email ?? 'owner@newco.test',
       organizationLegalName: overrides.legalName ?? 'NewCo Trading LLC',
       country: 'AE',
+      baseCurrency: 'AED',
       planId: await planId(overrides.plan ?? 'enterprise'),
       onboarding: 'temporary',
       paymentConfirmed: true,

@@ -1,3 +1,4 @@
+import { guardFunctionalCurrencyChange, normalizeFunctionalCurrency } from '@/lib/functionalCurrency';
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { businessJSONStorage } from '@/lib/workspaceStorage';
@@ -89,7 +90,8 @@ interface COAState {
   setAllCollapsed: (collapsed: boolean) => void;
 
   // Settings
-  updateSettings: (patch: Partial<CompanySettings>) => void;
+  /** Refuses a functional-currency change once anything is posted. */
+  updateSettings: (patch: Partial<CompanySettings>) => ActionResult;
 
   // Account CRUD
   addAccount: (values: AccountFormValues, parentId: string | null) => ActionResult;
@@ -174,8 +176,31 @@ export const useStore = create<COAState>()(
           return { collapsedIds: next };
         }),
 
-      updateSettings: (patch) =>
-        set((s) => ({ settings: { ...s.settings, ...patch } })),
+      /**
+       * Settings write path.
+       *
+       * `baseCurrency` is the organization's FUNCTIONAL currency — what every
+       * statement is expressed in — so it is guarded here rather than only in
+       * the form that offers it. Once anything is posted, relabelling the
+       * currency would assert that historical figures were always denominated
+       * in the new one; the change then belongs to the Currency Master's
+       * controlled migration. Every other field is unaffected: a rejected
+       * currency change does not discard the rest of the patch, it refuses the
+       * whole write so the caller can report it.
+       */
+      updateSettings: (patch) => {
+        const current = get().settings;
+        if (patch.baseCurrency !== undefined) {
+          const guard = guardFunctionalCurrencyChange({
+            from: current.baseCurrency,
+            to: patch.baseCurrency,
+          });
+          if (!guard.ok) return { ok: false, error: guard.error };
+          patch = { ...patch, baseCurrency: normalizeFunctionalCurrency(patch.baseCurrency) };
+        }
+        set((s) => ({ settings: { ...s.settings, ...patch } }));
+        return { ok: true };
+      },
 
       addAccount: (values, parentId) => {
         const { accounts } = get();

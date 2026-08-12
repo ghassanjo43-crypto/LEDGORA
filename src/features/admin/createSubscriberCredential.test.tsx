@@ -149,7 +149,26 @@ async function createSubscriber(mode: 'temporary' | 'invite'): Promise<void> {
   fireEvent.change(screen.getByPlaceholderText('nadia@company.com'), { target: { value: 'nadia@newco.test' } });
   fireEvent.change(screen.getByPlaceholderText('NewCo Trading LLC'), { target: { value: 'NewCo Trading LLC' } });
   fireEvent.change(screen.getByLabelText('Onboarding method'), { target: { value: mode } });
+  selectFunctionalCurrency('AED');
   fireEvent.click(screen.getByTestId('create-subscriber-submit'));
+}
+
+/**
+ * Choose the base / functional currency.
+ *
+ * Required since company creation started capturing it, and deliberately NOT
+ * defaulted: stamping every new tenant with USD is how an organization ends up
+ * keeping its books in a currency nobody picked. So the form cannot be
+ * submitted until this is chosen, and every path through it says which.
+ */
+function selectFunctionalCurrency(code: string): void {
+  fireEvent.click(screen.getByLabelText('Base / functional currency', { selector: 'button' }));
+  fireEvent.change(screen.getByLabelText('Search currencies'), { target: { value: code } });
+  const option = Array.from(document.querySelectorAll<HTMLButtonElement>('[role="option"] button')).find((o) =>
+    (o.textContent ?? '').includes(code),
+  );
+  if (!option) throw new Error(`no currency option for ${code}`);
+  fireEvent.click(option);
 }
 
 function signedInAsOperator(): void {
@@ -249,6 +268,7 @@ describe('the subscriber type selector', () => {
 
     // A disposable account cannot be created without the acknowledgement.
     fireEvent.click(within(screen.getByTestId('disposable-acknowledgement')).getByRole('checkbox'));
+    selectFunctionalCurrency('AED');
     fireEvent.click(screen.getByTestId('create-subscriber-submit'));
     await screen.findByTestId('credential-value');
 

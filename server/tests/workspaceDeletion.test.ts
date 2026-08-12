@@ -72,6 +72,7 @@ async function activatedSubscriber(
       email,
       organizationLegalName: legalName,
       country: 'AE',
+      baseCurrency: 'AED',
       planId: await plan(),
       onboarding: 'invite',
       paymentConfirmed: true,

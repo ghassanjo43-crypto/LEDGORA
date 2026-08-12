@@ -80,7 +80,18 @@ const createSchema = z.object({
   organizationLegalName: z.string().trim().min(1, 'Organization legal name is required.').max(200),
   tradingName: z.string().trim().max(200).optional(),
   country: z.string().trim().min(2, 'Country is required.').max(60),
-  baseCurrency: z.string().trim().length(3).optional(),
+  /**
+   * The organization's FUNCTIONAL currency — what its books and statements are
+   * kept in. Required, and never defaulted: silently stamping every new tenant
+   * USD is how an organization ends up with a ledger denominated in a currency
+   * nobody chose. Validated as an ISO 4217 alphabetic code; the client offers
+   * the canonical catalogue.
+   */
+  baseCurrency: z
+    .string()
+    .trim()
+    .toUpperCase()
+    .regex(/^[A-Z]{3}$/u, 'Select the base / functional currency.'),
   planId: z.string().uuid('Choose a base package.'),
   /**
    * Account type. Absent means `production` — the safe default — so a client

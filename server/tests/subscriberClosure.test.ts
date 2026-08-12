@@ -72,6 +72,7 @@ async function subscriber(
       email: options.email ?? 'owner@newco.test',
       organizationLegalName: legalName,
       country: 'AE',
+      baseCurrency: 'AED',
       planId: await planId(),
       /*
        * This suite is about the closure WORKFLOW, and only test/demo data can
@@ -270,7 +271,12 @@ describe('eligibility is enforced at request time', () => {
 describe('the pending-deletion period', () => {
   it('archives and schedules without destroying anything', async () => {
     const admin = await operator();
-    const { organizationId } = await subscriber(admin.cookies);
+    /*
+     * ACTIVATED, so a recovery window genuinely applies. A clean, never-activated
+     * disposable tenant is now purgeable immediately — it has nothing for a
+     * window to protect — and this test is about the window itself.
+     */
+    const { organizationId } = await subscriber(admin.cookies, { activate: true });
 
     const before = {
       members: await ctx.db.selectFrom('organization_memberships').selectAll().execute(),
@@ -382,7 +388,12 @@ describe('the pending-deletion period', () => {
 
   it('reports the closure status the action menu needs', async () => {
     const admin = await operator();
-    const { organizationId } = await subscriber(admin.cookies);
+    /*
+     * ACTIVATED, so a recovery window genuinely applies. A clean, never-activated
+     * disposable tenant is now purgeable immediately — it has nothing for a
+     * window to protect — and this test is about the window itself.
+     */
+    const { organizationId } = await subscriber(admin.cookies, { activate: true });
     await requestDeletion(admin.cookies, organizationId);
 
     const response = await ctx.app.inject({
@@ -420,7 +431,12 @@ describe('processing due deletions', () => {
 
   it('does nothing before the recovery window elapses', async () => {
     const admin = await operator();
-    const { organizationId } = await subscriber(admin.cookies);
+    /*
+     * ACTIVATED, so a recovery window genuinely applies. A clean, never-activated
+     * disposable tenant is now purgeable immediately — it has nothing for a
+     * window to protect — and this test is about the window itself.
+     */
+    const { organizationId } = await subscriber(admin.cookies, { activate: true });
     await requestDeletion(admin.cookies, organizationId);
 
     const result = await processDueDeletions(ctx.db, adminContext(admin.userId));

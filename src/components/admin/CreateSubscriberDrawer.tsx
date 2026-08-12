@@ -22,10 +22,13 @@ import { useEffect, useMemo, useState } from 'react';
 import { Drawer } from '@/components/ui/Drawer';
 import { Button } from '@/components/ui/Button';
 import { Field, Input, Textarea } from '@/components/ui/Input';
+import { CurrencyPicker } from '@/components/currencies/CurrencyPicker';
 import { Select } from '@/components/ui/Select';
 import { Alert } from '@/components/ui/Alert';
 import { Badge } from '@/components/ui/Badge';
 import { Toggle } from '@/components/ui/Toggle';
+import { useCurrencyStore } from '@/store/currencyStore';
+import { suggestedCurrencyForCountry } from '@/lib/functionalCurrency';
 import { COUNTRY_OPTIONS } from '@/lib/onboardingData';
 import { subscriptionApi, type PublicPlan } from '@/services/api/authApi';
 import { adminSubscriberApi, type CreateSubscriberResponse } from '@/services/api/adminConsoleApi';
@@ -83,7 +86,8 @@ const EMPTY: FormState = {
   organizationLegalName: '',
   tradingName: '',
   country: 'AE',
-  baseCurrency: 'USD',
+  // No default: a functional currency is chosen, never assumed.
+  baseCurrency: '',
   planId: '',
   modules: [],
   subscriptionStatus: 'pending_payment',
@@ -174,6 +178,7 @@ export interface CreateSubscriberDrawerProps {
 
 export function CreateSubscriberDrawer({ open, onClose, onCreated }: CreateSubscriberDrawerProps) {
   const [form, setForm] = useState<FormState>(EMPTY);
+  const currencies = useCurrencyStore((state) => state.currencies);
   const [plans, setPlans] = useState<PublicPlan[]>([]);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
@@ -219,7 +224,18 @@ export function CreateSubscriberDrawer({ open, onClose, onCreated }: CreateSubsc
   const selectedPlan = useMemo(() => plans.find((p) => p.id === form.planId), [plans, form.planId]);
 
   const set = <K extends keyof FormState>(key: K, value: FormState[K]): void => {
-    setForm((current) => ({ ...current, [key]: value }));
+    setForm((current) => {
+      const next = { ...current, [key]: value };
+      /*
+       * Picking a country SUGGESTS the currency companies there usually keep
+       * their books in, and only while the field is untouched — a suggestion
+       * must never overwrite a deliberate choice.
+       */
+      if (key === 'country' && !current.baseCurrency) {
+        next.baseCurrency = suggestedCurrencyForCountry(String(value));
+      }
+      return next;
+    });
     setFieldErrors((current) => {
       if (!current[key as string]) return current;
       const next = { ...current };
@@ -261,6 +277,7 @@ export function CreateSubscriberDrawer({ open, onClose, onCreated }: CreateSubsc
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(form.email.trim())) problems.email = 'Enter a valid email address.';
     if (!form.organizationLegalName.trim()) problems.organizationLegalName = 'Organization legal name is required.';
     if (!form.country) problems.country = 'Country is required.';
+    if (!form.baseCurrency) problems.baseCurrency = 'Select the base / functional currency.';
     if (!form.planId) problems.planId = 'Choose a base package.';
     if (Object.keys(problems).length > 0) {
       setFieldErrors(problems);
@@ -406,11 +423,18 @@ export function CreateSubscriberDrawer({ open, onClose, onCreated }: CreateSubsc
                 aria-label="Country"
               />
             </Field>
-            <Field label="Base currency">
-              <Input
+            <Field
+              label="Base / functional currency"
+              required
+              error={fieldErrors.baseCurrency}
+              hint="The currency this company's books and financial statements are kept in."
+            >
+              <CurrencyPicker
                 value={form.baseCurrency}
-                onChange={(event) => set('baseCurrency', event.target.value.toUpperCase().slice(0, 3))}
-                maxLength={3}
+                onChange={(code) => set('baseCurrency', code)}
+                currencies={currencies}
+                placeholder="Search by code, name or country…"
+                aria-label="Base / functional currency"
               />
             </Field>
           </div>

@@ -129,6 +129,7 @@ async function createSubscriberViaApi(
       email: overrides.email ?? 'nadia@newco.test',
       organizationLegalName: overrides.organizationLegalName ?? 'NewCo Trading LLC',
       country: 'AE',
+      baseCurrency: 'AED',
       planId: overrides.planId ?? catalogue[0]!.id,
       onboarding: overrides.onboarding ?? 'temporary',
       paymentConfirmed: overrides.paymentConfirmed ?? true,
@@ -287,6 +288,7 @@ describe('creating a subscriber', () => {
           email: 'rollback@newco.test',
           organizationLegalName: 'Rollback Holdings',
           country: 'AE',
+          baseCurrency: 'AED',
           planId: catalogue[0]!.id,
           entityAllowance: 2 ** 40, // out of range for an int4 column
           onboarding: 'temporary',
@@ -566,6 +568,7 @@ describe('the one-time credential contract', () => {
         email: 'nocache@newco.test',
         organizationLegalName: 'Nocache Ltd',
         country: 'AE',
+        baseCurrency: 'AED',
         planId: catalogue[0]!.id,
         onboarding: 'temporary',
       },
@@ -1361,6 +1364,7 @@ describe('authorization', () => {
         email: 'forged@acme.test',
         organizationLegalName: 'Forged Ltd',
         country: 'AE',
+        baseCurrency: 'AED',
         planId: (await plans())[0]!.id,
       },
     });

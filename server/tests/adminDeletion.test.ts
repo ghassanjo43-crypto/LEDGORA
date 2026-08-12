@@ -81,6 +81,7 @@ async function createSubscriber(
       email,
       organizationLegalName: legalName,
       country: 'AE',
+      baseCurrency: 'AED',
       planId: await plan(),
       onboarding: 'invite',
       // Confirming payment is what activates — and what makes a purge impossible

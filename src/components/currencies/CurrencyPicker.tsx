@@ -42,7 +42,13 @@ export function CurrencyPicker({ value, onChange, currencies, allowed, includeIn
         c.code.toLowerCase().includes(q) ||
         c.name.toLowerCase().includes(q) ||
         (c.localizedName ?? '').toLowerCase().includes(q) ||
-        c.symbol.toLowerCase().includes(q),
+        c.symbol.toLowerCase().includes(q) ||
+        // Country / territory, where the catalogue carries it. Most country
+        // queries already match through the NAME ("Jordan" is a prefix of
+        // "Jordanian Dinar"); this adds the cases where it does not, such as
+        // searching "Germany" for the Euro.
+        (c.region ?? '').toLowerCase().includes(q) ||
+        (c.countryCodes ?? []).some((cc) => cc.toLowerCase() === q),
       )
       .sort((a, b) => a.code.localeCompare(b.code));
   }, [currencies, allowed, includeInactive, query, value]);

@@ -82,11 +82,19 @@ describe('precision configuration', () => {
 
 describe('custom currency creation', () => {
   it('creates a custom fiat currency', () => {
+    /*
+     * Deliberately a code ISO 4217 does not use. This case previously used ZWG,
+     * which the standard catalogue did not carry at the time — but ZWG is a
+     * genuine ISO currency (Zimbabwe Gold) and is now in the catalogue, so the
+     * store rightly refuses to mint it as a "custom" one. The scenario under
+     * test is a currency of the organization's own devising, so it needs a code
+     * the standard will never claim.
+     */
     const r = useCurrencyStore.getState().createCustomCurrency({
-      code: 'ZWG', name: 'Zimbabwe Gold', symbol: 'ZiG', currencyType: 'fiat', decimalPlaces: 2,
+      code: 'ACME1', name: 'Acme Trading Unit', symbol: 'A$', currencyType: 'fiat', decimalPlaces: 2,
     });
-    expect(r.ok).toBe(true);
-    const cur = useCurrencyStore.getState().getCurrency('ZWG')!;
+    expect(r.ok, r.error).toBe(true);
+    const cur = useCurrencyStore.getState().getCurrency('ACME1')!;
     expect(cur.isIso).toBe(false);
     expect(monetaryDecimalsOf(cur)).toBe(2);
   });

@@ -99,6 +99,7 @@ describe('the complete user administration workflow', () => {
         email: 'owner@newco.test',
         organizationLegalName: 'NewCo Trading LLC',
         country: 'AE',
+        baseCurrency: 'AED',
         // `core` sells accounting, invoicing and reports — deliberately NOT
         // manufacturing, so the entitlement boundary has something to refuse.
         planId: await planId('core'),

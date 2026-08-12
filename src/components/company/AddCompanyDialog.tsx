@@ -2,7 +2,9 @@ import { useEffect, useState } from 'react';
 import { Building2 } from 'lucide-react';
 import { useCompanyStore } from '@/store/companyStore';
 import { useStore } from '@/store/useStore';
-import { CURRENCY_OPTIONS, ORGANIZATION_TYPE_OPTIONS } from '@/data/ifrsOptions';
+import { ORGANIZATION_TYPE_OPTIONS } from '@/data/ifrsOptions';
+import { CurrencyPicker } from '@/components/currencies/CurrencyPicker';
+import { useCurrencyStore } from '@/store/currencyStore';
 import { Button } from '@/components/ui/Button';
 import { Field, Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
@@ -15,6 +17,7 @@ import { useToast } from '@/components/ui/Toast';
  */
 export function AddCompanyDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const addCompany = useCompanyStore((s) => s.addCompany);
+  const currencies = useCurrencyStore((s) => s.currencies);
   const setActiveView = useStore((s) => s.setActiveView);
   const { notify } = useToast();
 
@@ -83,7 +86,13 @@ export function AddCompanyDialog({ open, onClose }: { open: boolean; onClose: ()
           </Field>
           <div className="grid grid-cols-2 gap-4">
             <Field label="Base currency" htmlFor="newCompanyCurrency">
-              <Select id="newCompanyCurrency" options={CURRENCY_OPTIONS} value={currency} onChange={(e) => setCurrency(e.target.value)} />
+              <CurrencyPicker
+                value={currency}
+                currencies={currencies}
+                onChange={setCurrency}
+                placeholder="Search by code, name or country…"
+                aria-label="Base currency"
+              />
             </Field>
             <Field label="Organisation type" htmlFor="newCompanyOrg">
               <Select id="newCompanyOrg" options={ORGANIZATION_TYPE_OPTIONS} value={orgType} onChange={(e) => setOrgType(e.target.value)} />
