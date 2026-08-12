@@ -1,19 +1,22 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useForm, useFieldArray, Controller } from 'react-hook-form';
+import { useForm, useFieldArray, useWatch, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Plus, Trash2, Check, TriangleAlert, Send, ChevronDown, ArrowUp, ArrowDown, Minus } from 'lucide-react';
 import type { Account, BusinessEntity } from '@/types';
 import {
   journalFormSchema,
-  getWarnings,
-  computeTotals,
-  balanceStatus,
   isBlankJournalLine,
-  validateJournalForPosting,
   type JournalFormValues,
-  type ValidatableLine,
   type BalanceStatus,
 } from '@/lib/journalValidation';
+import { deriveJournalDraft, draftSignature, toDecimalAmount } from '@/lib/journalDraft';
+import {
+  CONCURRENT_EDIT_MESSAGE,
+  REASON_REQUIRED_MESSAGE,
+  entryVersion,
+  validateReason,
+} from '@/lib/journalAmendment';
+import { decCmp } from '@/lib/decimal';
 import { formatMoney } from '@/lib/journalSelectors';
 import { TRANSACTION_TYPE_OPTIONS } from '@/lib/journalMeta';
 import {
@@ -45,7 +48,14 @@ import { EntityPicker } from '@/components/shared/EntityPicker';
 
 export type JournalFormMode =
   | { kind: 'create' }
-  | { kind: 'edit'; entryId: string };
+  | { kind: 'edit'; entryId: string }
+  /**
+   * Correcting a POSTED entry. `amend` rewrites it as a new version; `replace`
+   * reverses it and writes a corrected replacement. Which one applies is
+   * decided by the store's assessment, never by the caller — see
+   * `GeneralJournal.openEditor`.
+   */
+  | { kind: 'amend'; entryId: string; strategy: 'amend' | 'replace' };
 
 interface JournalEntryDrawerProps {
   open: boolean;
@@ -67,6 +77,8 @@ export function JournalEntryDrawer({ open, mode, onClose }: JournalEntryDrawerPr
   const entries = useJournalStore((s) => s.entries);
   const addEntry = useJournalStore((s) => s.addEntry);
   const updateEntry = useJournalStore((s) => s.updateEntry);
+  const amendPostedEntry = useJournalStore((s) => s.amendPostedEntry);
+  const reverseAndReplace = useJournalStore((s) => s.reverseAndReplace);
   const postEntry = useJournalStore((s) => s.postEntry);
   const accounts = useStore((s) => s.accounts);
   const baseCurrency = useStore((s) => s.settings.baseCurrency);
@@ -82,11 +94,28 @@ export function JournalEntryDrawer({ open, mode, onClose }: JournalEntryDrawerPr
     [businessEntities],
   );
 
-  const editing =
-    mode?.kind === 'edit' ? entries.find((e) => e.id === mode.entryId) : undefined;
+  const targetId = mode && mode.kind !== 'create' ? mode.entryId : undefined;
+  const editing = targetId ? entries.find((e) => e.id === targetId) : undefined;
+
+  /** Correcting a posted entry: a reason is mandatory and history is written. */
+  const amending = mode?.kind === 'amend';
+  const strategy = mode?.kind === 'amend' ? mode.strategy : undefined;
+
+  /**
+   * The concurrency token, captured ONCE when the editor opens.
+   *
+   * Deliberately not re-read from the store on later renders: it has to record
+   * the version this user actually looked at. Refreshing it would make the
+   * check pass against a change they never saw, which is precisely the silent
+   * overwrite optimistic concurrency exists to prevent.
+   */
+  const [openedVersion, setOpenedVersion] = useState<number | undefined>(undefined);
+  const [reason, setReason] = useState('');
+  const [reasonError, setReasonError] = useState<string | null>(null);
+  const [conflict, setConflict] = useState<{ currentVersion: number } | null>(null);
 
   const defaultValues = useMemo<JournalFormValues>(() => {
-    if (mode?.kind === 'edit' && editing) return entryToFormValues(editing);
+    if (editing) return entryToFormValues(editing);
     return makeDefaultJournalValues(nextEntryNumber(entries), baseCurrency);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, editing?.id, baseCurrency]);
@@ -125,41 +154,46 @@ export function JournalEntryDrawer({ open, mode, onClose }: JournalEntryDrawerPr
       setSavedId(null);
       setShowDiscard(false);
       setPostAttempted(false);
+      setReason('');
+      setReasonError(null);
+      setConflict(null);
+      // The version this user is looking at, frozen for the life of the editor.
+      setOpenedVersion(editing ? entryVersion(editing) : undefined);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, defaultValues, reset]);
 
   /** The id being edited: an explicit edit entry, or a just-created draft. */
-  const editId = mode?.kind === 'edit' ? mode.entryId : savedId;
+  const editId = targetId ?? savedId;
 
-  const watchedLines = watch('lines');
-  const description = watch('description');
-  const entryDate = watch('entryDate');
+  /*
+   * ── The canonical draft ───────────────────────────────────────────────────
+   *
+   * `useWatch` — not `watch` — is the subscription that re-renders this
+   * component when any line field changes, including the amount inputs, which
+   * are registered directly rather than through a Controller.
+   *
+   * The values it returns are owned by React Hook Form and may be handed back
+   * as the SAME array, mutated in place. So nothing below keys a memo on their
+   * identity: `draftSignature` renders the draft to a string and that string is
+   * the cache key. This is the fix for the defect — totals and validation
+   * cannot lag behind the inputs, because a changed value IS a changed key.
+   */
+  const watchedLines = useWatch({ control, name: 'lines' }) as JournalFormValues['lines'] | undefined;
+  const description = useWatch({ control, name: 'description' }) ?? '';
+  const entryDate = useWatch({ control, name: 'entryDate' }) ?? '';
 
-  const liveLines: ValidatableLine[] = useMemo(
-    () =>
-      (watchedLines ?? []).map((line, idx) => ({
-        lineNumber: idx + 1,
-        accountId: line.accountId ?? '',
-        debit: Number(line.debit) || 0,
-        credit: Number(line.credit) || 0,
-        taxAmount: Number(line.taxAmount) || 0,
-        entityId: line.entityId ?? '',
-      })),
-    [watchedLines],
+  const rawDraft = { description, entryDate, lines: watchedLines ?? [] };
+  const signature = draftSignature(rawDraft);
+
+  const draft = useMemo(
+    () => deriveJournalDraft(rawDraft, accountsById, entitiesById),
+    // Keyed on the VALUE signature, never on the array reference.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [signature, accountsById, entitiesById],
   );
 
-  const totals = useMemo(() => computeTotals(liveLines), [liveLines]);
-  // Posting errors are computed over ACTIVE (non-blank) lines only.
-  const postingErrors = useMemo(
-    () => validateJournalForPosting({ description, entryDate, lines: watchedLines ?? [] }, accountsById),
-    [description, entryDate, watchedLines, accountsById],
-  );
-  const warnings = useMemo(
-    () => getWarnings({ lines: liveLines }, accountsById, entitiesById),
-    [liveLines, accountsById, entitiesById],
-  );
-  const status = balanceStatus(totals);
-  const canPost = postingErrors.length === 0;
+  const { totals, status, postingErrors, warnings, canPost } = draft;
 
   /** Line numbers (1-based) carrying account / amount errors, for field highlighting. */
   const accountErrorLines = useMemo(
@@ -212,18 +246,57 @@ export function JournalEntryDrawer({ open, mode, onClose }: JournalEntryDrawerPr
     return { ...values, lines: active.length > 0 ? active : values.lines.slice(0, 1) };
   };
 
-  /** Persist the form, UPDATING an existing/just-created draft or inserting one. */
+  /**
+   * Persist the form.
+   *
+   * Three destinations, and the caller never picks between the last two: the
+   * STRATEGY came from the store's own assessment when the editor opened, and
+   * the store re-assesses again on the way in. A drawer that decided for itself
+   * could be looking at a dependency snapshot minutes out of date.
+   */
   const persistDraft = (values: JournalFormValues): JournalActionResult => {
     const cleaned = stripBlankLines(values);
-    const result = editId ? updateEntry(editId, cleaned) : addEntry(cleaned);
+
+    let result: JournalActionResult;
+    if (amending && editId) {
+      const trimmed = reason.trim();
+      const check = validateReason(trimmed);
+      if (!check.ok) {
+        setReasonError(check.error ?? REASON_REQUIRED_MESSAGE);
+        return { ok: false, error: check.error };
+      }
+      setReasonError(null);
+      const options = { reason: trimmed, expectedVersion: openedVersion };
+      result =
+        strategy === 'replace'
+          ? reverseAndReplace(editId, cleaned, options)
+          : amendPostedEntry(editId, cleaned, options);
+    } else if (editId) {
+      result = updateEntry(editId, cleaned, { expectedVersion: openedVersion });
+    } else {
+      result = addEntry(cleaned);
+    }
+
     if (result.ok && result.id && !editId) setSavedId(result.id);
-    if (!result.ok) notify(result.error ?? 'Could not save the journal entry.', 'error');
+    if (!result.ok) {
+      // A concurrency refusal gets its own banner rather than a toast that
+      // scrolls away — the user has to decide what to do about it.
+      if (result.conflict) setConflict({ currentVersion: result.conflict.currentVersion });
+      else notify(result.error ?? 'Could not save the journal entry.', 'error');
+    }
     return result;
   };
 
   const onSaveAndClose = (values: JournalFormValues): void => {
     if (persistDraft(values).ok) {
-      notify('Draft journal entry saved.', 'success');
+      notify(
+        amending
+          ? strategy === 'replace'
+            ? 'Entry reversed and a corrected replacement posted.'
+            : 'Correction applied. The previous version is kept in the history.'
+          : 'Draft journal entry saved.',
+        'success',
+      );
       onClose();
     }
   };
@@ -280,10 +353,17 @@ export function JournalEntryDrawer({ open, mode, onClose }: JournalEntryDrawerPr
     else onClose();
   };
 
+  /**
+   * Entering an amount on one side clears the other.
+   *
+   * This is the existing UX for "a line cannot hold both a debit and a credit",
+   * and it writes through `setValue` — the same canonical form state every
+   * derived value reads — so the totals move with the clear, not after it.
+   */
   const handleAmount = (index: number, side: 'debit' | 'credit', value: string): void => {
-    if (Number(value) > 0) {
+    if (decCmp(toDecimalAmount(value), '0') > 0) {
       const other = side === 'debit' ? 'credit' : 'debit';
-      setValue(`lines.${index}.${other}`, 0);
+      setValue(`lines.${index}.${other}`, 0, { shouldDirty: true, shouldTouch: true });
     }
   };
 
@@ -319,17 +399,25 @@ export function JournalEntryDrawer({ open, mode, onClose }: JournalEntryDrawerPr
       open={open}
       onClose={requestClose}
       widthClassName="max-w-5xl"
-      title={mode?.kind === 'edit' ? 'Edit draft journal entry' : 'New journal entry'}
+      title={
+        amending
+          ? strategy === 'replace'
+            ? 'Reverse & edit journal entry'
+            : 'Correct posted journal entry'
+          : mode?.kind === 'edit'
+            ? 'Edit draft journal entry'
+            : 'New journal entry'
+      }
       description={
-        mode?.kind === 'edit'
-          ? `${editing?.entryNumber} — ${editing?.description || 'Draft'}`
+        editing
+          ? `${editing.entryNumber} — ${editing.description || (amending ? 'Posted' : 'Draft')}`
           : `${entryNumber} — record a balanced double-entry transaction`
       }
       footer={
         <StickyTotals
-          totalDebit={totals.totalDebit}
-          totalCredit={totals.totalCredit}
-          difference={totals.difference}
+          totalDebit={totals.totalDebitNumber}
+          totalCredit={totals.totalCreditNumber}
+          difference={totals.differenceNumber}
           status={status}
           canPost={canPost}
           saving={isSubmitting}
@@ -342,6 +430,84 @@ export function JournalEntryDrawer({ open, mode, onClose }: JournalEntryDrawerPr
       }
     >
       <form onSubmit={handleSubmit(onSaveAndClose)} className="space-y-6">
+        {/*
+          The concurrency refusal. Shown in place rather than as a toast: the
+          user's edits are still on screen and still theirs to keep, and the
+          decision about whose version survives is a human one.
+        */}
+        {conflict && (
+          <section
+            role="alert"
+            className="rounded-lg border border-amber-300 bg-amber-50 p-3 dark:border-amber-500/40 dark:bg-amber-500/10"
+          >
+            <p className="flex items-center gap-1.5 text-xs font-semibold text-amber-800 dark:text-amber-300">
+              <TriangleAlert className="h-4 w-4" /> {CONCURRENT_EDIT_MESSAGE}
+            </p>
+            <p className="mt-1 text-xs text-amber-700 dark:text-amber-300/90">
+              You opened version {openedVersion}. The saved entry is now version {conflict.currentVersion}. Your changes
+              have not been discarded — nothing was written.
+            </p>
+            <div className="mt-2 flex gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  // Load the latest and start again from it. The user's own
+                  // edits are visible until they press this, so nothing is lost
+                  // without them choosing it.
+                  const latest = useJournalStore.getState().entries.find((e) => e.id === editId);
+                  if (latest) {
+                    reset(entryToFormValues(latest));
+                    setOpenedVersion(entryVersion(latest));
+                  }
+                  setConflict(null);
+                }}
+              >
+                Review latest version
+              </Button>
+            </div>
+          </section>
+        )}
+
+        {/*
+          The mandatory reason. Present only when the entry is posted, because
+          that is when a correction rewrites something somebody already relied
+          on and the audit trail has to be able to say why.
+        */}
+        {amending && (
+          <section className="rounded-lg border border-brand-200 bg-brand-50/60 p-3 dark:border-brand-500/30 dark:bg-brand-500/10">
+            <p className="text-xs font-semibold text-brand-800 dark:text-brand-200">
+              {strategy === 'replace'
+                ? `Reversing ${editing?.entryNumber} and posting a corrected replacement`
+                : `Correcting posted entry ${editing?.entryNumber} (version ${openedVersion})`}
+            </p>
+            <p className="mt-0.5 text-xs text-brand-700/90 dark:text-brand-300/90">
+              {strategy === 'replace'
+                ? 'The original stays exactly as posted. A reversal and a replacement are written and linked to it.'
+                : 'The current version is kept in full in the entry’s history.'}
+            </p>
+            <Field
+              label="Reason for the correction"
+              required
+              className="mt-2"
+              error={reasonError ?? undefined}
+              htmlFor="amendment-reason"
+            >
+              <Input
+                id="amendment-reason"
+                placeholder="e.g. Corrected cash account"
+                hasError={!!reasonError}
+                value={reason}
+                onChange={(e) => {
+                  setReason(e.target.value);
+                  if (reasonError) setReasonError(null);
+                }}
+              />
+            </Field>
+          </section>
+        )}
+
         {/* Header */}
         <section className="space-y-3">
           <SectionTitle>Entry details</SectionTitle>

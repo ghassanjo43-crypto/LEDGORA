@@ -97,6 +97,46 @@ export const entityFormSchema = z
 
 export type EntityFormValues = z.infer<typeof entityFormSchema>;
 
+/* ───────────────────────── Quick create (inline dialog) ──────────────────── */
+
+/**
+ * The minimum canonical fields needed to bring a counterparty into existence
+ * without leaving the document being written.
+ *
+ * ── Why a subset, and why derived rather than restated ──────────────────────
+ * `entityFormSchema` describes the full directory record — banking, addresses,
+ * invoice delivery, per-role defaults. Demanding all of that mid-journal-entry
+ * is the reason people give up and type a name into a memo field instead. So
+ * quick-create asks for the identifying fields only.
+ *
+ * Every one of them is `.pick`ed FROM the canonical schema rather than declared
+ * again, so the field names, lengths and rules cannot drift from the directory
+ * form. There is no second entity model here: the remaining fields are filled
+ * from `makeDefaultEntityValues`, and the record that lands in the store is an
+ * ordinary `EntityFormValues` the directory can open and complete later.
+ *
+ * `email` is the one deliberate relaxation. The directory form requires one;
+ * an accountant recording a cash purchase from a new supplier frequently does
+ * not have it, and the persisted model already tolerates `''` (the directory's
+ * own `validateEntities` only checks an email that is present). Requiring it
+ * here would push people back to not creating the entity at all — the exact
+ * outcome this feature exists to prevent.
+ */
+export const quickEntityFormSchema = entityFormSchema
+  .pick({
+    entityCode: true,
+    legalName: true,
+    entityType: true,
+    contactPerson: true,
+    phone: true,
+    taxRegistrationNumber: true,
+  })
+  .extend({
+    email: z.union([z.literal(''), z.string().trim().email('Enter a valid email address').max(160)]),
+  });
+
+export type QuickEntityFormValues = z.infer<typeof quickEntityFormSchema>;
+
 /** Schema for a persisted entity (used to validate imported JSON/CSV). */
 export const businessEntitySchema = entityFormSchema.extend({
   id: z.string().min(1),

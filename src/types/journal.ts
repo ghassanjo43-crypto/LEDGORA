@@ -126,6 +126,100 @@ export interface JournalEntry {
 
   /** Optional approval state; when absent the UI derives a status. */
   approvalStatus?: JournalApprovalStatus;
+
+  /* ── Concurrency & amendment history ──────────────────────────────────── */
+  /**
+   * Optimistic concurrency token, incremented by every mutating action.
+   *
+   * OPTIONAL because entries persisted before versioning existed have none;
+   * `entryVersion()` treats their absence as version 1 rather than rejecting
+   * them, so an existing workspace keeps working. Never compare this field
+   * directly — go through `entryVersion()`.
+   */
+  version?: number;
+  /** Append-only history. Never rewritten, never pruned. */
+  amendments?: JournalAmendmentRecord[];
+  /** Set on an ORIGINAL that was reversed and replaced. */
+  replacementEntryId?: string;
+  /** Set on a REPLACEMENT, naming the original it corrects. */
+  replacedEntryId?: string;
+  /**
+   * The document that generated this journal, when another module owns it.
+   * Its presence is what makes journal-level editing inappropriate: the
+   * correction belongs to the source, or the journal and its source disagree.
+   */
+  sourceModule?: string;
+  sourceDocumentId?: string;
+  sourceDocumentLabel?: string;
+}
+
+/* ────────────────────────── Amendment & audit history ───────────────────── */
+
+/** What happened to the entry at a given version. */
+export type JournalAmendmentKind =
+  | 'created'
+  | 'posted'
+  | 'amended'
+  | 'reversed'
+  | 'replaced'
+  | 'replacement'
+  | 'voided';
+
+/** One field that changed between two versions, rendered for the audit panel. */
+export interface JournalFieldChange {
+  /** Dotted path, e.g. `lines.1.accountId`. */
+  field: string;
+  /** Human label, e.g. `Line 2 · Account`. */
+  label: string;
+  /** Display value before, already formatted. */
+  before: string;
+  /** Display value after, already formatted. */
+  after: string;
+}
+
+/**
+ * One immutable entry in the journal's history.
+ *
+ * Append-only by construction: nothing in the store rewrites or removes a
+ * record once written. The original posting survives every later correction,
+ * which is the whole point — an amendment that erased what it replaced would
+ * destroy the evidence the amendment exists to explain.
+ */
+export interface JournalAmendmentRecord {
+  id: string;
+  /** The version this record PRODUCED. Version 1 is the original. */
+  version: number;
+  kind: JournalAmendmentKind;
+  /** ISO timestamp. */
+  at: string;
+  /** Who did it. */
+  actor: string;
+  /** Mandatory for `amended` / `reversed` / `replacement`; '' for `created`. */
+  reason: string;
+  changes: JournalFieldChange[];
+  /** The other side of a reversal / replacement link. */
+  relatedEntryId?: string;
+  relatedEntryNumber?: string;
+  /**
+   * A full copy of the entry as it stood BEFORE this change. Present on
+   * `amended` records so the audit trail can show the superseded version
+   * itself, not merely a description of it.
+   */
+  snapshot?: JournalEntrySnapshot;
+}
+
+/** The restorable shape of a superseded version. */
+export interface JournalEntrySnapshot {
+  entryDate: string;
+  reference: string;
+  description: string;
+  currency: string;
+  exchangeRate: number;
+  notes: string;
+  createdBy: string;
+  totalDebit: number;
+  totalCredit: number;
+  lines: JournalLine[];
 }
 
 /** Structured filters for the General Journal table. */

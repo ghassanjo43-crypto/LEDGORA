@@ -5,6 +5,10 @@ import type { BusinessEntity, EntityType } from '@/types';
 import type { EntityFormValues } from '@/lib/entityValidation';
 import { SEED_ENTITIES } from '@/data/seedEntities';
 import { generateId, nowIso } from '@/lib/utils';
+import type { OrganizationRole } from '@/types/roles';
+import { assertEntityPermission, type EntityPermission } from '@/lib/entityPermissions';
+import { getCurrentUser } from '@/store/authStore';
+import { isPlatformAdminFullAccess } from '@/store/platformFullAccess';
 
 export interface EntityActionResult {
   ok: boolean;
@@ -70,6 +74,50 @@ interface EntityState {
   resetToDefault: () => void;
 }
 
+/**
+ * Effective organization role for permission checks.
+ *
+ * Identical to the resolution used by `fixedAssetStore` and `journalVoucherStore`
+ * so one role means one thing across the workspace: a verified platform
+ * administrator in full-access operator mode acts with admin grants, and a
+ * workspace with no signed-in member record (local demo) defaults to owner.
+ */
+function currentRole(): OrganizationRole {
+  if (isPlatformAdminFullAccess()) return 'admin';
+  return getCurrentUser()?.role ?? 'owner';
+}
+
+/** Permission gate on the WRITE, not merely on the button that offers it. */
+function guard(permission: EntityPermission): EntityActionResult | null {
+  const result = assertEntityPermission(currentRole(), permission);
+  return result.ok ? null : { ok: false, error: result.error };
+}
+
+/** Whether the current role may create counterparties. For UI affordances. */
+export function canCreateEntity(): boolean {
+  return assertEntityPermission(currentRole(), 'entity.create').ok;
+}
+
+/**
+ * A unique, human-readable code derived from the name.
+ *
+ * `entityCode` is required and unique, and the quick-create form inside the
+ * journal deliberately does not ask an accountant to invent one mid-entry. The
+ * suggestion is checked against the directory and suffixed until it is free, so
+ * quick-create can never fail on a code the user never saw.
+ */
+export function suggestEntityCode(entities: readonly BusinessEntity[], legalName: string): string {
+  const letters = legalName.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const stem = (letters.slice(0, 6) || 'ENT').padEnd(3, 'X');
+  const taken = new Set(entities.map((e) => e.entityCode.trim().toLowerCase()));
+  if (!taken.has(stem.toLowerCase())) return stem;
+  for (let n = 2; n < 1000; n += 1) {
+    const candidate = `${stem}-${n}`;
+    if (!taken.has(candidate.toLowerCase())) return candidate;
+  }
+  return `${stem}-${Date.now()}`;
+}
+
 function checkUniqueness(
   entities: BusinessEntity[],
   values: Pick<EntityFormValues, 'entityCode' | 'taxRegistrationNumber'>,
@@ -92,6 +140,8 @@ export const useEntityStore = create<EntityState>()(
       entities: SEED_ENTITIES,
 
       addEntity: (values) => {
+        const denied = guard('entity.create');
+        if (denied) return denied;
         const { entities } = get();
         const conflict = checkUniqueness(entities, values);
         if (conflict) return { ok: false, error: conflict };

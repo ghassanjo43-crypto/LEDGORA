@@ -38,6 +38,8 @@ import { JournalBulkActions } from './JournalBulkActions';
 import { ColumnVisibilityMenu } from './ColumnVisibilityMenu';
 import { JournalDetailsPanel } from './JournalDetailsPanel';
 import { JournalEntryDrawer, type JournalFormMode } from './JournalEntryDrawer';
+import { AmendmentGateDialog } from './AmendmentGateDialog';
+import type { AmendmentAssessment } from '@/lib/journalAmendment';
 import { PostedProtectionDialog } from './PostedProtectionDialog';
 
 type PendingAction =
@@ -79,6 +81,8 @@ export function GeneralJournal() {
   const [panelOpen, setPanelOpen] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [formMode, setFormMode] = useState<JournalFormMode | null>(null);
+  /** The assessment being explained before an editor opens (or refusing to). */
+  const [amendmentGate, setAmendmentGate] = useState<AmendmentAssessment | null>(null);
   const [pending, setPending] = useState<PendingAction | null>(null);
   const [protectId, setProtectId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -212,10 +216,38 @@ export function GeneralJournal() {
 
   const focusedDraftPostable = !!focusedEntry && isPendingApproval(focusedEntry, accountsById);
 
+  /**
+   * "Edit" on any entry, draft or posted.
+   *
+   * The verdict comes from the store's assessment, not from the entry's status:
+   * a posted entry is not automatically off limits, and a draft is not
+   * automatically editable (a closed period governs the date, not the
+   * lifecycle). The user picks "Edit"; the system works out what that means and
+   * says so plainly when the answer is "not here".
+   */
+  function openEditor(id: string): void {
+    const assessment = useJournalStore.getState().assessAmendment(id);
+    if (!assessment) return;
+
+    switch (assessment.mode) {
+      case 'direct_edit':
+        setFormMode({ kind: 'edit', entryId: id });
+        return;
+      case 'amend_in_place':
+        setFormMode({ kind: 'amend', entryId: id, strategy: 'amend' });
+        return;
+      case 'reverse_and_replace':
+      case 'blocked':
+        // Both need explaining before anything opens, and the dialog is what
+        // offers "Reverse & edit" when that is the available route.
+        setAmendmentGate(assessment);
+    }
+  }
+
   const panelProps = {
     entry: focusedEntry,
     accountsById,
-    onEdit: (id: string) => setFormMode({ kind: 'edit', entryId: id }),
+    onEdit: openEditor,
     onPost: (id: string) => setPending({ type: 'post', id }),
     onReverse: (id: string) => setProtectId(id),
     onDuplicate: handleDuplicate,
@@ -325,6 +357,15 @@ export function GeneralJournal() {
       )}
 
       <JournalEntryDrawer open={formMode !== null} mode={formMode} onClose={() => setFormMode(null)} />
+
+      <AmendmentGateDialog
+        assessment={amendmentGate}
+        onCancel={() => setAmendmentGate(null)}
+        onReverseAndEdit={(entryId) => {
+          setAmendmentGate(null);
+          setFormMode({ kind: 'amend', entryId, strategy: 'replace' });
+        }}
+      />
 
       <ConfirmDialog
         open={pending !== null}
