@@ -255,6 +255,53 @@ const RESET_PLAN: readonly PlanEntry[] = [
     label: 'Deletion tombstones',
     why: 'Evidence about development fixtures. Cleared by explicit local-reset policy — the production path never does this.',
   },
+  /* ── Accounting books (Phase A) ────────────────────────────────────────
+   * Children first: audit and versions, then lines, then entries, then the
+   * accounts and periods they reference. A local reset clears them outright —
+   * every organization is development data by definition here.
+   */
+  {
+    table: 'accounting_audit_events',
+    action: 'scoped_delete',
+    order: 31,
+    label: 'Accounting audit events',
+    why: 'Evidence about development books; nothing outlives the reset that created it.',
+  },
+  {
+    table: 'journal_entry_versions',
+    action: 'scoped_delete',
+    order: 32,
+    label: 'Journal version history',
+    why: 'Superseded snapshots of entries that are about to stop existing.',
+  },
+  {
+    table: 'journal_lines',
+    action: 'scoped_delete',
+    order: 33,
+    label: 'Journal lines',
+    why: 'Deleted before their entries and before the accounts they point at.',
+  },
+  {
+    table: 'journal_entries',
+    action: 'scoped_delete',
+    order: 34,
+    label: 'Journal entries',
+    why: 'The development ledger itself.',
+  },
+  {
+    table: 'accounts',
+    action: 'scoped_delete',
+    order: 35,
+    label: 'Chart of accounts',
+    why: 'Removed after the journal lines that reference it.',
+  },
+  {
+    table: 'accounting_periods',
+    action: 'scoped_delete',
+    order: 36,
+    label: 'Accounting periods',
+    why: 'The tenant open/closed calendar.',
+  },
   {
     table: 'payment_proofs',
     action: 'scoped_delete',

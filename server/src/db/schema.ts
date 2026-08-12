@@ -585,6 +585,138 @@ export interface Database {
   subscriber_deletion_tombstones: SubscriberDeletionTombstonesTable;
   file_cleanup_queue: FileCleanupQueueTable;
   cleanup_operations: CleanupOperationsTable;
+
+  /* Phase A — accounting books. */
+  accounting_periods: AccountingPeriodsTable;
+  accounts: AccountsTable;
+  journal_entries: JournalEntriesTable;
+  journal_lines: JournalLinesTable;
+  journal_entry_versions: JournalEntryVersionsTable;
+  accounting_audit_events: AccountingAuditEventsTable;
+}
+
+
+/* ══ Phase A — accounting books ═══════════════════════════════════════════════
+ *
+ * Money is `string` on the way out of PostgreSQL, not `number`: node-postgres
+ * hands NUMERIC back as a string precisely so an exact decimal is not silently
+ * pushed through a float, and this schema keeps that promise all the way to the
+ * service layer.
+ */
+
+export interface AccountingPeriodsTable {
+  id: Generated<string>;
+  organization_id: string;
+  fiscal_year: number;
+  period_number: number;
+  start_date: string;
+  end_date: string;
+  /** open | soft_closed | locked */
+  status: Generated<string>;
+  locked_at: Timestamp | null;
+  locked_by: string | null;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+}
+
+export interface AccountsTable {
+  id: Generated<string>;
+  organization_id: string;
+  account_code: string;
+  account_name: string;
+  /** asset | liability | equity | income | expense */
+  account_type: string;
+  account_subtype: string | null;
+  /** debit | credit */
+  normal_balance: string;
+  parent_account_id: string | null;
+  restricted_currency: string | null;
+  is_postable: Generated<boolean>;
+  active: Generated<boolean>;
+  system_account: Generated<boolean>;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+}
+
+export interface JournalEntriesTable {
+  id: Generated<string>;
+  organization_id: string;
+  journal_number: string;
+  journal_type: Generated<string>;
+  transaction_date: string;
+  posting_date: string;
+  /** draft | posted | reversed | voided */
+  status: Generated<string>;
+  reference: Generated<string>;
+  description: Generated<string>;
+  notes: Generated<string>;
+  transaction_currency: string;
+  functional_currency: string;
+  exchange_rate: Generated<string>;
+  source_type: string | null;
+  source_id: string | null;
+  original_entry_id: string | null;
+  reversal_entry_id: string | null;
+  replacement_entry_id: string | null;
+  /** Optimistic concurrency token. */
+  version: Generated<number>;
+  created_by: string | null;
+  updated_by: string | null;
+  posted_by: string | null;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+  posted_at: Timestamp | null;
+}
+
+export interface JournalLinesTable {
+  id: Generated<string>;
+  organization_id: string;
+  journal_entry_id: string;
+  line_number: number;
+  account_id: string;
+  entity_id: string | null;
+  project_id: string | null;
+  cost_center_id: string | null;
+  memo: Generated<string>;
+  debit_transaction: Generated<string>;
+  credit_transaction: Generated<string>;
+  debit_functional: Generated<string>;
+  credit_functional: Generated<string>;
+  exchange_rate: Generated<string>;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+}
+
+/** An immutable snapshot of an entry as it stood BEFORE a change. */
+export interface JournalEntryVersionsTable {
+  id: Generated<string>;
+  organization_id: string;
+  journal_entry_id: string;
+  version: number;
+  change_kind: string;
+  reason: Generated<string>;
+  snapshot: ColumnType<Record<string, unknown>, string, string>;
+  changes: ColumnType<unknown[], string | undefined, string>;
+  actor_user_id: string | null;
+  actor_name: Generated<string>;
+  at: Timestamp;
+}
+
+/** Append-only accounting audit. Deliberately separate from `audit_logs`. */
+export interface AccountingAuditEventsTable {
+  id: Generated<string>;
+  organization_id: string;
+  action: string;
+  record_type: string;
+  record_id: string | null;
+  actor_user_id: string | null;
+  actor_name: Generated<string>;
+  reason: Generated<string>;
+  previous_version: number | null;
+  resulting_version: number | null;
+  detail: ColumnType<Record<string, unknown>, string | undefined, string>;
+  request_id: string | null;
+  at: Timestamp;
 }
 
 export type User = Selectable<UsersTable>;

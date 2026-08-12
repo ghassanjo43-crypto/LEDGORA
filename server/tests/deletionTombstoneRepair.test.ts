@@ -76,14 +76,31 @@ async function appliedMigrations(): Promise<string[]> {
  * migration never runs again, which is precisely why editing `009` in place
  * could not have fixed anything.
  */
-async function breakTable(options: { unrecordMigration: boolean }): Promise<void> {
-  await sql`
-    ALTER TABLE subscriber_deletion_tombstones
-      DROP COLUMN IF EXISTS database_deletion_status,
-      DROP COLUMN IF EXISTS workspace_deletion_status
-  `.execute(ctx.db);
+async function breakTable(options: { unrecordMigration: boolean; keepColumns?: boolean }): Promise<void> {
+  if (!options.keepColumns) {
+    await sql`
+      ALTER TABLE subscriber_deletion_tombstones
+        DROP COLUMN IF EXISTS database_deletion_status,
+        DROP COLUMN IF EXISTS workspace_deletion_status
+    `.execute(ctx.db);
+  }
   if (options.unrecordMigration) {
-    await sql`DELETE FROM kysely_migration WHERE name = ${MIGRATION}`.execute(ctx.db);
+    /*
+     * Un-record 012 AND everything after it. Kysely refuses to migrate a
+     * database whose recorded history has a hole in the middle ("corrupted
+     * migrations"), so removing 012 alone stopped reproducing the legacy state
+     * the moment a 013 existed. Deleting the tail keeps this test about the
+     * repair rather than about how many migrations came later.
+     */
+    await sql`DELETE FROM kysely_migration WHERE name >= ${MIGRATION}`.execute(ctx.db);
+    /*
+     * Un-recording the tail is not enough on its own: the LATER migrations
+     * already built their tables, so re-running them would fail on "relation
+     * already exists". Their objects are dropped here so the replay is a true
+     * replay rather than a collision.
+     */
+    await sql`DROP TABLE IF EXISTS accounting_audit_events, journal_entry_versions,
+              journal_lines, journal_entries, accounts, accounting_periods CASCADE`.execute(ctx.db);
   }
 }
 
@@ -247,7 +264,7 @@ describe('migration 012 against a database that is already correct', () => {
      * hand-run `db:migrate` would on a database that never had the drift.
      * `ADD COLUMN IF NOT EXISTS` is what has to hold here.
      */
-    await sql`DELETE FROM kysely_migration WHERE name = ${MIGRATION}`.execute(ctx.db);
+    await breakTable({ unrecordMigration: true, keepColumns: true });
     assertMigrationsSucceeded(await migrateToLatest(ctx.db));
 
     const columns = await tombstoneColumns();
@@ -351,10 +368,11 @@ describe('a tombstone that cannot be written', () => {
 
     /*
      * Break the table and leave it broken — this is the failure the operator
-     * actually hit, reproduced exactly. `012` is un-recorded but never run, so
-     * the insert reaches a table without the column.
+     * actually hit, reproduced exactly. Only the COLUMNS are dropped: the
+     * migration record is left alone because nothing is replayed here, and
+     * un-recording it would take the later migrations' tables with it.
      */
-    await breakTable({ unrecordMigration: true });
+    await breakTable({ unrecordMigration: false });
 
     const result = await purge(organizationId, admin.userId);
 

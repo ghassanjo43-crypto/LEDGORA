@@ -20,6 +20,7 @@
  * does hold is destroyed, and the thing it does not hold is named explicitly so
  * nobody later mistakes silence for coverage.
  */
+import { TENANT_DEPENDENCIES } from '../src/services/tenantInventory.js';
 import { sql } from 'kysely';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
@@ -116,47 +117,47 @@ async function rowsReferencing(table: string, organizationId: string): Promise<n
 const EVIDENCE_TABLES = new Set(['subscriber_deletion_tombstones', 'file_cleanup_queue']);
 
 describe('what the server actually stores for a tenant', () => {
-  it('has no accounting tables at all — the books are not in this database', async () => {
+  it('the accounting books that ARE server-side are covered by the purge', async () => {
+    /*
+     * This test used to assert the opposite: that NO accounting table existed,
+     * as a tripwire for the day the books moved server-side. Phase A moved
+     * them, so the tripwire fired and its intent survives in inverted form —
+     * every accounting table that now exists must have a recorded disposition
+     * in the tenant inventory, or a tenant purge would leave a ledger behind.
+     */
     const tables = await sql<{ table_name: string }>`
       SELECT table_name FROM information_schema.tables
       WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
       ORDER BY table_name
     `.execute(ctx.db);
-
     const names = tables.rows.map((r) => r.table_name);
 
-    /*
-     * If any of these ever appears, the books have moved server-side and the
-     * purge must be extended to cover them. Failing here is the intended way to
-     * find that out — silently leaving a new ledger table undeleted is not.
-     */
     const accountingTables = [
+      'accounts',
+      'accounting_periods',
       'journal_entries',
       'journal_lines',
-      'journal_vouchers',
-      'accounts',
-      'chart_of_accounts',
-      'customers',
-      'suppliers',
-      'business_invoices',
-      'bills',
-      'payments',
-      'receipts',
-      'credit_notes',
-      'inventory_items',
-      'stock_movements',
-      'fixed_assets',
-      'projects',
-      'cost_centers',
+      'journal_entry_versions',
+      'accounting_audit_events',
     ];
-
     for (const table of accountingTables) {
-      expect(names, `${table} exists server-side; the purge must be extended to cover it`).not.toContain(
-        table,
-      );
+      expect(names, `${table} is part of the Phase A foundation`).toContain(table);
     }
 
-    // The migration set is exactly the platform surface, nothing more.
+    // Every one of them has an explicit decision recorded.
+    const decided = new Set(TENANT_DEPENDENCIES.map((d) => d.table as string));
+    for (const table of accountingTables) {
+      expect(decided, `${table} needs a disposition in tenantInventory`).toContain(table);
+    }
+
+    /*
+     * The modules that have NOT migrated yet must still be absent, so this keeps
+     * working as a tripwire for the remaining Phase A milestones.
+     */
+    for (const table of ['business_invoices', 'bills', 'receipts', 'credit_notes', 'stock_movements']) {
+      expect(names, `${table} arrives in a later milestone; extend the purge when it does`).not.toContain(table);
+    }
+
     expect(names).toContain('organizations');
     expect(names).toContain('subscription_invoices');
   });
@@ -537,8 +538,15 @@ describe('destroying an activated tenant', () => {
      * had access to.
      */
     const keys = candidate.counts.map((c) => c.key);
-    expect(keys).not.toContain('journal_entries');
+    /*
+     * Phase A changed what is true here. Journal entries ARE now server-side,
+     * so counting them is a fact rather than the confident lie it would have
+     * been before — the preview counts them. What must still never appear is a
+     * count for the modules whose records remain in the browser.
+     */
+    expect(keys).toContain('journal_entries');
     expect(keys).not.toContain('accounting_records');
+    expect(keys).not.toContain('business_invoices');
 
     // Instead the tenant is flagged, and the flag says the data is out of reach.
     expect(candidate.everActivated).toBe(true);

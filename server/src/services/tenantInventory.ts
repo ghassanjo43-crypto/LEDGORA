@@ -179,6 +179,73 @@ export const TENANT_DEPENDENCIES: readonly TenantDependency[] = [
     crossTenantReachable: false,
     rationale: 'One tenant’s billing relationship.',
   },
+  /* ── Accounting books (Phase A) ────────────────────────────────────────
+   * Tenant-owned by construction and destroyed with the tenant. Ordered
+   * children-first: audit and versions, then lines, then entries, then the
+   * accounts and periods they point at. The composite foreign keys make the
+   * order load-bearing rather than stylistic.
+   */
+  {
+    table: 'accounting_audit_events',
+    ownershipKey: 'organization_id',
+    kind: 'immutable_audit',
+    disposition: 'delete',
+    order: 41,
+    label: 'Accounting audit events',
+    crossTenantReachable: false,
+    rationale:
+      'Evidence about THIS tenant’s books only. It has no foreign key to the records it describes, so it is removed explicitly rather than by cascade.',
+  },
+  {
+    table: 'journal_entry_versions',
+    ownershipKey: 'organization_id',
+    kind: 'immutable_audit',
+    disposition: 'delete',
+    order: 42,
+    label: 'Journal version history',
+    crossTenantReachable: false,
+    rationale: 'Superseded snapshots of this tenant’s own entries.',
+  },
+  {
+    table: 'journal_lines',
+    ownershipKey: 'organization_id',
+    kind: 'authoritative',
+    disposition: 'delete',
+    order: 43,
+    label: 'Journal lines',
+    crossTenantReachable: false,
+    rationale: 'The postings themselves; meaningless without the entry they belong to.',
+  },
+  {
+    table: 'journal_entries',
+    ownershipKey: 'organization_id',
+    kind: 'authoritative',
+    disposition: 'delete',
+    order: 44,
+    label: 'Journal entries',
+    crossTenantReachable: false,
+    rationale: 'The tenant’s ledger. Deleted only for a disposable tenant, by the classification gate.',
+  },
+  {
+    table: 'accounts',
+    ownershipKey: 'organization_id',
+    kind: 'authoritative',
+    disposition: 'delete',
+    order: 45,
+    label: 'Chart of accounts',
+    crossTenantReachable: false,
+    rationale: 'Deleted after the lines that reference it, which is why it sits later in the order.',
+  },
+  {
+    table: 'accounting_periods',
+    ownershipKey: 'organization_id',
+    kind: 'authoritative',
+    disposition: 'delete',
+    order: 46,
+    label: 'Accounting periods',
+    crossTenantReachable: false,
+    rationale: 'The tenant’s own open/closed calendar.',
+  },
   {
     table: 'organizations',
     ownershipKey: 'id',
@@ -285,6 +352,12 @@ export const DELETION_SEQUENCE = TENANT_DEPENDENCIES.filter((d) => d.disposition
  * separately.
  */
 export const DIRECTLY_OWNED_TABLES = [
+  'accounting_audit_events',
+  'journal_entry_versions',
+  'journal_lines',
+  'journal_entries',
+  'accounts',
+  'accounting_periods',
   'subscription_invoices',
   'subscriber_data_exports',
   'user_permission_overrides',
