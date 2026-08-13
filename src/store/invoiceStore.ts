@@ -23,6 +23,10 @@ import { validateDocumentProjects } from '@/lib/projectDocumentValidation';
 import { createInvoiceTemplateSnapshot } from '@/lib/invoiceTemplates';
 import { useInventoryStore, inventoryEnabled } from '@/store/inventoryStore';
 import { generateId, nowIso } from '@/lib/utils';
+import type { OrganizationRole } from '@/types/roles';
+import { assertTransactionDocumentPermission } from '@/lib/transactionDocumentPermissions';
+import { getCurrentUser } from '@/store/authStore';
+import { isPlatformAdminFullAccess } from '@/store/platformFullAccess';
 import { useStore } from './useStore';
 import { useEntityStore } from './useEntityStore';
 import { useJournalStore } from './journalStore';
@@ -41,6 +45,19 @@ export interface InvoiceActionResult {
   error?: string;
   id?: string;
 }
+
+/**
+ * The role acting, resolved the same way every other document store resolves it.
+ *
+ * A platform administrator working inside a subscriber workspace acts with admin
+ * authority; otherwise it is the signed-in user's organization role, defaulting
+ * to `owner` for the single-user local workspace.
+ */
+function currentRole(): OrganizationRole {
+  if (isPlatformAdminFullAccess()) return 'admin';
+  return getCurrentUser()?.role ?? 'owner';
+}
+
 
 function accountsMap(): Map<string, Account> {
   return new Map(useStore.getState().accounts.map((a) => [a.id, a]));
@@ -159,6 +176,16 @@ export const useInvoiceStore = create<InvoiceState>()(
       },
 
       createDraft: (input) => {
+        /*
+         * The authorization point for starting a invoice.
+         *
+         * Here rather than in the buttons that offer it, so every caller passes
+         * through the same rule — the invoice page, the Dashboard quick-create,
+         * and anything added later. A menu that merely hides itself is an
+         * affordance, not a gate.
+         */
+        const permitted = assertTransactionDocumentPermission(currentRole(), 'invoice.create');
+        if (!permitted.ok) return { ok: false, error: permitted.error };
         const templates = useInvoiceTemplateStore.getState();
         const issueDate = input.issueDate ?? new Date().toISOString().slice(0, 10);
         const customer = input.customerId ? customerById(input.customerId) : undefined;

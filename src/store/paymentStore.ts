@@ -21,6 +21,10 @@ import { createPaymentTemplateSnapshot } from '@/lib/paymentTemplate';
 import { buildPaymentReversalPlan } from '@/lib/paymentReversal';
 import { isSupplierPaymentType, isCustomerRefundType } from '@/lib/paymentLabels';
 import { generateId, nowIso } from '@/lib/utils';
+import type { OrganizationRole } from '@/types/roles';
+import { assertTransactionDocumentPermission } from '@/lib/transactionDocumentPermissions';
+import { getCurrentUser } from '@/store/authStore';
+import { isPlatformAdminFullAccess } from '@/store/platformFullAccess';
 import { useStore } from './useStore';
 import { useEntityStore } from './useEntityStore';
 import { useJournalStore } from './journalStore';
@@ -36,6 +40,19 @@ export interface PaymentActionResult {
   error?: string;
   id?: string;
 }
+
+/**
+ * The role acting, resolved the same way every other document store resolves it.
+ *
+ * A platform administrator working inside a subscriber workspace acts with admin
+ * authority; otherwise it is the signed-in user's organization role, defaulting
+ * to `owner` for the single-user local workspace.
+ */
+function currentRole(): OrganizationRole {
+  if (isPlatformAdminFullAccess()) return 'admin';
+  return getCurrentUser()?.role ?? 'owner';
+}
+
 
 /* ─────────────────────────── Directory lookups ──────────────────────────── */
 
@@ -174,6 +191,16 @@ export const usePaymentStore = create<PaymentState>()(
       },
 
       createDraft: (input) => {
+        /*
+         * The authorization point for starting a payment.
+         *
+         * Here rather than in the buttons that offer it, so every caller passes
+         * through the same rule — the payment page, the Dashboard quick-create,
+         * and anything added later. A menu that merely hides itself is an
+         * affordance, not a gate.
+         */
+        const permitted = assertTransactionDocumentPermission(currentRole(), 'payment.create');
+        if (!permitted.ok) return { ok: false, error: permitted.error };
         const paymentDate = input?.paymentDate ?? new Date().toISOString().slice(0, 10);
         const ts = useInvoiceTemplateStore.getState();
         const resolved = ts.resolve({ entityId: INVOICE_ENTITY_ID, invoiceDate: paymentDate });

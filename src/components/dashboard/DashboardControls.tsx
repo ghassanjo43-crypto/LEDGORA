@@ -24,6 +24,18 @@ import { Drawer } from '@/components/ui/Drawer';
 import { Toggle } from '@/components/ui/Toggle';
 import { Dropdown, MenuItem, MenuLabel, MenuSeparator } from '@/components/ui/Dropdown';
 import { useDashboardPreferences, WIDGET_META } from '@/store/dashboardPreferencesStore';
+import { useToast } from '@/components/ui/Toast';
+import { useHasModule } from '@/store/entitlementHooks';
+import { useInvoiceStore } from '@/store/invoiceStore';
+import { useBillStore } from '@/store/billStore';
+import { usePaymentStore } from '@/store/paymentStore';
+import { useInvoiceEditor } from '@/store/invoiceEditorStore';
+import { useBillEditor } from '@/store/billEditorStore';
+import { usePaymentEditor } from '@/store/paymentEditorStore';
+import { getCurrentUser } from '@/store/authStore';
+import { isPlatformAdminFullAccess } from '@/store/platformFullAccess';
+import { roleCanCreateDocument } from '@/lib/transactionDocumentPermissions';
+import type { OrganizationRole } from '@/types/roles';
 import { timeAgo, cn } from '@/lib/utils';
 
 const PERIOD_OPTIONS: { value: ReportingPeriodId; label: string }[] = [
@@ -38,6 +50,94 @@ const PERIOD_OPTIONS: { value: ReportingPeriodId; label: string }[] = [
   { value: 'custom', label: 'Custom range' },
 ];
 
+/**
+ * Quick-create: start a document here, finish it in its own module.
+ *
+ * ══ What this is, and firmly is not ══════════════════════════════════════════
+ *
+ * An ENTRY POINT. Each action calls the module's own `createDraft` and then asks
+ * that module to open the draft it just made. Numbering, defaults, the company's
+ * functional currency, persistence policy, validation and permissions all stay
+ * where they already live — nothing about how a document is created is decided
+ * here, and adding a rule to this file would mean the Dashboard and the module's
+ * own New button could disagree.
+ *
+ * ══ Why these were "Soon" ════════════════════════════════════════════════════
+ *
+ * The menu was written before Invoices, Bills and Payments existed and was never
+ * revisited. The label was false: all three modules are complete, and the
+ * dropdown was advertising their absence.
+ *
+ * ══ How the destination opens the draft ══════════════════════════════════════
+ *
+ * Through each module's existing cross-view editor-request store — the same
+ * mechanism the Invoices page already uses to open a credit note or a receipt
+ * it has just created. Bills and Payments had one; Invoices did not, so
+ * `invoiceEditorStore` was added in the identical shape rather than inventing a
+ * different mechanism for one of the three.
+ */
+function useQuickCreate(go: (view: ViewKey) => void) {
+  const { notify } = useToast();
+  const createInvoice = useInvoiceStore((s) => s.createDraft);
+  const createBill = useBillStore((s) => s.createDraft);
+  const createPayment = usePaymentStore((s) => s.createDraft);
+  const requestOpenInvoice = useInvoiceEditor((s) => s.requestOpen);
+  const requestOpenBill = useBillEditor((s) => s.requestOpen);
+  const requestOpenPayment = usePaymentEditor((s) => s.requestOpen);
+
+  /*
+   * Entitlement, from the resolver the sidebar already uses. An unentitled
+   * module is HIDDEN — the established Ledgora behaviour for something the
+   * organization's package does not include — never relabelled "Soon", which
+   * would claim the feature does not exist.
+   */
+  const hasSales = useHasModule('sales');
+  const hasPurchases = useHasModule('purchases');
+
+  /*
+   * Permission, from the same resolver the stores enforce on the write. This
+   * decides what to DRAW; the store decides what happens, so hiding the item is
+   * an affordance rather than the gate.
+   */
+  const role: OrganizationRole = isPlatformAdminFullAccess()
+    ? 'admin'
+    : getCurrentUser()?.role ?? 'owner';
+
+  /**
+   * Create, then navigate, then open — and only in that order.
+   *
+   * A failed `createDraft` returns here without navigating, so the user is never
+   * dropped into an empty editor for a record that was refused. The refusal is
+   * reported through the application's ordinary toast.
+   */
+  const start = (
+    create: () => { ok: boolean; error?: string; id?: string },
+    requestOpen: (id: string) => void,
+    view: ViewKey,
+    failure: string,
+  ) => () => {
+    const result = create();
+    if (!result.ok || !result.id) {
+      notify(result.error ?? failure, 'error');
+      return;
+    }
+    requestOpen(result.id);
+    go(view);
+  };
+
+  return {
+    canInvoice: hasSales && roleCanCreateDocument(role, 'invoice'),
+    canBill: hasPurchases && roleCanCreateDocument(role, 'bill'),
+    // A payment is a purchases-side document, and this one is deliberately
+    // standalone: no supplier and no bill allocation, because the user asked
+    // for a payment rather than for a specific bill to be paid.
+    canPayment: hasPurchases && roleCanCreateDocument(role, 'payment'),
+    newInvoice: start(() => createInvoice({}), requestOpenInvoice, 'invoices', 'Could not create the invoice.'),
+    newBill: start(() => createBill(), requestOpenBill, 'bills', 'Could not create the bill.'),
+    recordPayment: start(() => createPayment(), requestOpenPayment, 'payments', 'Could not create the payment.'),
+  };
+}
+
 export function DashboardHeaderActions({
   lastRefreshed,
   onRefresh,
@@ -49,6 +149,7 @@ export function DashboardHeaderActions({
   onCustomize: () => void;
   go: (view: ViewKey) => void;
 }) {
+  const quick = useQuickCreate(go);
   const periodId = useDashboardPreferences((s) => s.periodId);
   const customFrom = useDashboardPreferences((s) => s.customFrom);
   const customTo = useDashboardPreferences((s) => s.customTo);
@@ -118,10 +219,16 @@ export function DashboardHeaderActions({
         <MenuItem icon={BookOpenText} onClick={() => go('journal')}>New journal entry</MenuItem>
         <MenuItem icon={Users} onClick={() => go('customers')}>New customer</MenuItem>
         <MenuItem icon={Truck} onClick={() => go('suppliers')}>New supplier</MenuItem>
-        <MenuSeparator />
-        <MenuItem icon={FileText} disabled>New invoice · Soon</MenuItem>
-        <MenuItem icon={ReceiptText} disabled>New bill · Soon</MenuItem>
-        <MenuItem icon={Banknote} disabled>Record payment · Soon</MenuItem>
+        {(quick.canInvoice || quick.canBill || quick.canPayment) && <MenuSeparator />}
+        {quick.canInvoice && (
+          <MenuItem icon={FileText} onClick={quick.newInvoice}>New invoice</MenuItem>
+        )}
+        {quick.canBill && (
+          <MenuItem icon={ReceiptText} onClick={quick.newBill}>New bill</MenuItem>
+        )}
+        {quick.canPayment && (
+          <MenuItem icon={Banknote} onClick={quick.recordPayment}>Record payment</MenuItem>
+        )}
       </Dropdown>
     </div>
   );

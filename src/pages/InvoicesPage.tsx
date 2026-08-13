@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Plus, ChevronDown, Eye, Printer, Send, Banknote, Ban, Copy, Pencil, Trash2, FileText, ReceiptText, ScrollText } from 'lucide-react';
 import type { Invoice, InvoiceStatus } from '@/types/invoice';
 import { useStore } from '@/store/useStore';
@@ -8,6 +8,7 @@ import { useCreditNoteStore } from '@/store/creditNoteStore';
 import { useCreditNoteEditor } from '@/store/creditNoteEditorStore';
 import { useReceiptStore } from '@/store/receiptStore';
 import { useReceiptEditor } from '@/store/receiptEditorStore';
+import { useInvoiceEditor } from '@/store/invoiceEditorStore';
 import { useStatementStore } from '@/store/statementStore';
 import { formatCurrency } from '@/lib/money';
 import { cn } from '@/lib/utils';
@@ -44,6 +45,7 @@ export function InvoicesPage() {
   const requestOpenCreditNote = useCreditNoteEditor((s) => s.requestOpen);
   const createReceiptForInvoice = useReceiptStore((s) => s.createReceiptForInvoice);
   const requestOpenReceipt = useReceiptEditor((s) => s.requestOpen);
+  const consumeEditorRequest = useInvoiceEditor((s) => s.consume);
   const { notify } = useToast();
 
   const [editorId, setEditorId] = useState<string | null>(null);
@@ -55,6 +57,13 @@ export function InvoicesPage() {
   const [overdueOnly, setOverdueOnly] = useState(false);
   const [unpaidOnly, setUnpaidOnly] = useState(false);
   const [search, setSearch] = useState('');
+
+  /*
+   * A draft another page created and asked to have opened here — the Dashboard
+   * quick-create, today. Consuming clears the request, so arriving at Invoices
+   * again later does not reopen a drawer the user has closed.
+   */
+  useEffect(() => { const r = consumeEditorRequest(); if (r) setEditorId(r); }, [consumeEditorRequest]);
 
   const customerName = (id: string): string => entities.find((e) => e.id === id)?.legalName ?? '—';
   const money = (n: number, cur: string): string => formatCurrency(n, cur);
