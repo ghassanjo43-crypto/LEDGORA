@@ -2,10 +2,18 @@ import { useMemo, useState } from 'react';
 import { Plus, Save, Archive, RotateCcw, Loader2, ShieldCheck } from 'lucide-react';
 import type { SubscriptionPlan } from '@/types/billing';
 import type { LedgoraEdition } from '@/types/entitlements';
-import { useBillingStore } from '@/store/billingStore';
+import {
+  archivePlanRecord,
+  createPlanRecord,
+  restorePlanRecord,
+  savePlanEdit,
+  usePlanCatalogSync,
+  type PlanMutationResult,
+} from '@/store/planCatalogSync';
 import { usePlans, useIsAdmin } from '@/store/billingHooks';
 import { ALL_EDITIONS } from '@/config/editions';
 import { EDITION_INFO } from '@/config/editionCommercialInfo';
+import { Alert } from '@/components/ui/Alert';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
@@ -42,10 +50,28 @@ function toDraft(p: SubscriptionPlan): Draft {
 export function PlanAdminEditor() {
   const plans = usePlans();
   const isAdmin = useIsAdmin();
-  const updatePlan = useBillingStore((s) => s.updatePlan);
-  const archivePlan = useBillingStore((s) => s.archivePlan);
-  const restorePlan = useBillingStore((s) => s.restorePlan);
-  const createPlan = useBillingStore((s) => s.createPlan);
+  /*
+   * The catalogue is the SERVER's when there is one. Mutations go to
+   * `/api/admin/plans` — which the platform enforces with the `manage-plans`
+   * capability — and the rendered list is re-read from the response, so what is
+   * on screen is what was actually stored rather than an optimistic local copy.
+   */
+  const { source, status, error, reload } = usePlanCatalogSync();
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  const run = async (action: () => Promise<PlanMutationResult>): Promise<void> => {
+    const result = await action();
+    setSaveError(result.ok ? null : result.error ?? 'The change was not saved.');
+  };
+
+  /** As `run`, but the row needs the outcome to show its own state. */
+  const runSave = async (
+    action: () => Promise<PlanMutationResult>,
+  ): Promise<{ ok: boolean; error?: string; fieldErrors?: Record<string, string> }> => {
+    const result = await action();
+    setSaveError(result.ok ? null : result.error ?? 'The change was not saved.');
+    return result;
+  };
 
   const sorted = useMemo(() => [...plans].sort((a, b) => a.sortOrder - b.sortOrder), [plans]);
 
@@ -55,7 +81,7 @@ export function PlanAdminEditor() {
 
   const onAdd = (): void => {
     const nextOrder = plans.reduce((m, p) => Math.max(m, p.sortOrder), -1) + 1;
-    createPlan({
+    void run(() => createPlanRecord({
       code: `custom_${nextOrder}`,
       name: 'New package',
       description: '',
@@ -69,21 +95,45 @@ export function PlanAdminEditor() {
       isActive: true,
       isPublic: false,
       sortOrder: nextOrder,
-    });
+    }));
   };
 
   return (
     <div className="space-y-3">
-      <div className="flex justify-end">
+      {/*
+        Say plainly where these packages live. A browser-local catalogue is a
+        real limitation of a build with no account service, and implying an edit
+        is platform-wide when it is not would be the worse failure.
+      */}
+      {source === 'local' && (
+        <Alert variant="warning" title="No account service configured">
+          These packages are stored in this browser only. With a platform backend
+          they are read from and written to the canonical <code>subscription_plans</code>
+          catalogue, and every session sees the same record.
+        </Alert>
+      )}
+      {status === 'error' && (
+        <Alert variant="error" title="Could not read the package catalogue">
+          {error} — the list below may be out of date.
+        </Alert>
+      )}
+      {saveError && <Alert variant="error" title="The change was not saved">{saveError}</Alert>}
+
+      <div className="flex items-center justify-end gap-2">
+        {source === 'server' && (
+          <Button variant="ghost" size="sm" onClick={() => void reload()} disabled={status === 'loading'}>
+            {status === 'loading' ? 'Refreshing…' : 'Refresh'}
+          </Button>
+        )}
         <Button variant="outline" size="sm" onClick={onAdd}><Plus className="h-4 w-4" /> Add package</Button>
       </div>
       {sorted.map((plan) => (
         <PlanRow
           key={plan.id}
           plan={plan}
-          onSave={(draft) => updatePlan(plan.id, draft)}
-          onArchive={() => archivePlan(plan.id)}
-          onRestore={() => restorePlan(plan.id)}
+          onSave={(draft) => runSave(() => savePlanEdit(plan.id, draft))}
+          onArchive={() => void run(() => archivePlanRecord(plan.id))}
+          onRestore={() => void run(() => restorePlanRecord(plan.id))}
         />
       ))}
     </div>
@@ -97,7 +147,12 @@ function PlanRow({
   onRestore,
 }: {
   plan: SubscriptionPlan;
-  onSave: (draft: Draft) => { ok: boolean; error?: string; fieldErrors?: Record<string, string> };
+  /**
+   * Asynchronous because a save now travels to the platform catalogue and the
+   * stored record is read back. The row stays in its "saving" state until the
+   * server has actually answered.
+   */
+  onSave: (draft: Draft) => Promise<{ ok: boolean; error?: string; fieldErrors?: Record<string, string> }>;
   onArchive: () => void;
   onRestore: () => void;
 }) {
@@ -108,10 +163,10 @@ function PlanRow({
 
   const set = <K extends keyof Draft>(key: K, value: Draft[K]): void => setDraft((d) => ({ ...d, [key]: value }));
 
-  const save = (): void => {
+  const save = async (): Promise<void> => {
     setStatus('saving');
     setMessage(null);
-    const res = onSave(draft);
+    const res = await onSave(draft);
     if (!res.ok) {
       setStatus('error');
       setErrors(res.fieldErrors ?? {});

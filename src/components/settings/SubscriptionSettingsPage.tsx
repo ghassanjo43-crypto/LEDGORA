@@ -23,6 +23,7 @@ import {
   useOpenInvoice,
   useRenewalReminder,
 } from '@/store/billingHooks';
+import { useSubscriberPlanCatalog } from '@/store/planCatalogSync';
 import { statusIsActive } from '@/lib/entitlementResolution';
 import { EDITION_INFO } from '@/config/editionCommercialInfo';
 import { Card, CardBody } from '@/components/ui/Card';
@@ -159,6 +160,12 @@ function SubscriptionOverview({
   onOpenInvoice: () => void;
 }) {
   const subscription = useEntitlementStore((s) => s.subscription);
+  /*
+   * The public catalogue, not the administration one: this screen belongs to a
+   * subscriber, and `/api/admin/plans` would 403 for them — which is exactly how
+   * the stale-name defect went unnoticed.
+   */
+  useSubscriberPlanCatalog();
   const activePlan = useActivePlan();
   const reminder = useRenewalReminder();
   const cancelSubscription = useBillingStore((s) => s.cancelSubscription);
@@ -172,18 +179,39 @@ function SubscriptionOverview({
         <CardBody className="space-y-4">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <div className="flex items-center gap-2">
+              {/*
+                The COMMERCIAL package name, from the canonical plan record.
+
+                This showed `EDITION_INFO[edition].name` — the entitlement tier's
+                label — as the package's headline. A package named "Ledgora
+                Manufacturing Plus" on the edition `manufacturing` was therefore
+                renamed to "Ledgora Manufacturing" on the subscriber's own
+                subscription screen, and an administrator's rename never appeared
+                here at all. The edition badge stays, but as what it is: the
+                entitlement tier beside the package, not instead of it.
+              */}
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge tone={info?.tone ?? 'slate'}>{activePlan?.name ?? info?.name ?? 'Ledgora'}</Badge>
                 <EditionBadge />
                 <Badge tone={statusMeta.tone}>
                   {active ? <ShieldCheck className="h-3 w-3" /> : <AlertTriangle className="h-3 w-3" />}
                   {statusMeta.label}
                 </Badge>
               </div>
-              <p className="mt-1.5 max-w-xl text-sm text-slate-500 dark:text-slate-400">{info?.description}</p>
+              {/*
+                The package's own description when it has one. Edition copy is
+                the fallback for a subscription with no plan record attached —
+                never an override of one that exists.
+              */}
+              <p className="mt-1.5 max-w-xl text-sm text-slate-500 dark:text-slate-400">
+                {activePlan?.description || info?.description}
+              </p>
               {activePlan && (
                 <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
                   Current package: <span className="font-medium">{activePlan.name}</span> ·{' '}
-                  {formatCurrency(activePlan.priceMonthly, activePlan.currency)}/month
+                  {formatCurrency(activePlan.priceMonthly, activePlan.currency)}/month ·{' '}
+                  Up to {activePlan.userLimit} users · Up to {activePlan.entityLimit}{' '}
+                  {activePlan.entityLimit === 1 ? 'entity' : 'entities'}
                 </p>
               )}
             </div>

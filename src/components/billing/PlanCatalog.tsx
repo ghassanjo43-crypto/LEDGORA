@@ -3,6 +3,7 @@ import { Check, ArrowUpRight, ArrowDownRight, Loader2 } from 'lucide-react';
 import type { SubscriptionPlan } from '@/types/billing';
 import { useBillingStore, publicPlans } from '@/store/billingStore';
 import { useActivePlan, usePlans } from '@/store/billingHooks';
+import { useSubscriberPlanCatalog } from '@/store/planCatalogSync';
 import { EDITION_INFO } from '@/config/editionCommercialInfo';
 import { EDITION_RANK } from '@/lib/billingCalculations';
 import { Card, CardBody } from '@/components/ui/Card';
@@ -19,6 +20,16 @@ import { Package } from 'lucide-react';
  * the bank-instructions / proof-upload step.
  */
 export function PlanCatalog({ onInvoiceIssued }: { onInvoiceIssued: (invoiceId: string) => void }) {
+  /*
+   * Reads the SAME canonical records the Super Admin edits, through the PUBLIC
+   * endpoint.
+   *
+   * This used to call the admin sync, which reads `/api/admin/plans` — an
+   * endpoint gated on a platform capability no subscriber holds. Every customer
+   * therefore got a 403, the error was swallowed, and the seeded browser-local
+   * names stayed on screen no matter how often the package was renamed.
+   */
+  const catalogState = useSubscriberPlanCatalog();
   const plans = usePlans();
   const activePlan = useActivePlan();
   const requestSubscription = useBillingStore((s) => s.requestSubscription);
@@ -38,6 +49,32 @@ export function PlanCatalog({ onInvoiceIssued }: { onInvoiceIssued: (invoiceId: 
     }
     onInvoiceIssued(res.id);
   };
+
+  /*
+   * Three different facts, three different answers. Collapsing them into one
+   * empty state is how "the platform is unreachable" comes to look like "there
+   * is nothing for sale".
+   */
+  if (catalogState.status === 'loading') {
+    return (
+      <div className="flex items-center gap-2 py-10 text-sm text-slate-500" role="status">
+        <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> Loading packages…
+      </div>
+    );
+  }
+
+  if (catalogState.status === 'error') {
+    // Deliberately NOT a fallback to whatever this browser last held: a stale
+    // price on a purchase screen is worse than an honest failure.
+    return (
+      <EmptyState
+        icon={Package}
+        title="Packages are unavailable"
+        description={`${catalogState.error ?? 'The platform service did not answer.'} Please try again shortly.`}
+        action={<Button variant="outline" size="sm" onClick={() => void catalogState.reload()}>Try again</Button>}
+      />
+    );
+  }
 
   if (catalog.length === 0) {
     return <EmptyState icon={Package} title="No packages available" description="An administrator has not published any packages yet." />;

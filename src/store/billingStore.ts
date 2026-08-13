@@ -420,14 +420,25 @@ export const useBillingStore = create<BillingState>()(
     }),
     {
       name: 'ledgora-billing',
-      version: 2,
+      version: 3,
+      /*
+       * ── `plans` is deliberately NOT persisted ──────────────────────────────
+       *
+       * The package catalogue is PLATFORM data owned by `subscription_plans` on
+       * the server. Persisting it here made every browser an authority on
+       * Ledgora's commercial packages: a stale copy could outlive an
+       * administrator's rename and — worse — be shown to a customer as the price
+       * on a purchase screen.
+       *
+       * Everything else stays. Invoices, payment proofs, the audit trail,
+       * billing settings and `activePlanId` are this tenant's own billing
+       * workflow and are untouched by the change.
+       */
       partialize: (s) => ({
-        plans: s.plans,
         settings: s.settings,
         invoices: s.invoices,
         auditTrail: s.auditTrail,
         activePlanId: s.activePlanId,
-        seeded: s.seeded,
       }),
       /**
        * v2 introduces the per-invoice bank-remittance payment reference and the
@@ -441,7 +452,22 @@ export const useBillingStore = create<BillingState>()(
           invoices?: SubscriptionInvoice[];
           settings?: BillingSettings;
         };
-        if (version >= 2) return state;
+        /*
+         * v3 stops persisting `plans`. A browser upgrading from v1 or v2 still
+         * has the array in its stored blob, so it is DROPPED here — otherwise it
+         * would rehydrate over the server catalogue and reintroduce exactly the
+         * stale-name defect this change exists to remove.
+         *
+         * Targeted on purpose: only `plans` and `seeded` are discarded. Nothing
+         * else is read, rewritten or cleared, so invoices, payment proofs, audit
+         * history and the active subscription survive untouched.
+         */
+        const { plans: legacyPlans, seeded: legacySeeded, ...withoutPlans } =
+          state as typeof state & { plans?: unknown; seeded?: unknown };
+        void legacyPlans;
+        void legacySeeded;
+
+        if (version >= 2) return withoutPlans;
 
         const used = new Set<string>();
         const invoices = (state.invoices ?? []).map((invoice) => {
@@ -464,7 +490,7 @@ export const useBillingStore = create<BillingState>()(
             }
           : state.settings;
 
-        return { ...state, invoices, settings };
+        return { ...withoutPlans, invoices, settings };
       },
     },
   ),
