@@ -668,18 +668,22 @@ describe('decimal exactness', () => {
       .toBe('posted');
   });
 
-  it('translates a foreign-currency entry into the functional currency', async () => {
-    const draft = await journals.createDraft(ctx.db, orgA, {
-      transactionDate: '2026-08-01',
-      transactionCurrency: 'USD',
-      exchangeRate: '0.709',
-      lines: [{ accountId: cash, debit: '100.00' }, { accountId: sales, credit: '100.00' }],
-    });
+  it('records both sides of an ordinary entry at par', async () => {
+    /*
+     * This test used to post USD into a JOD company at 0.709. That is no longer
+     * possible: an ordinary transaction is denominated in the company's own
+     * currency, so both sides are the same figure and the translation is the
+     * identity. See `accountingCurrencyPolicy.test.ts`, which proves the rule
+     * and separately proves that the translation columns still hold a genuine
+     * converted value for records that legitimately carry another currency.
+     */
+    const draft = await draftOf();
     const posted = await journals.postJournal(ctx.db, orgA, draft.id, { expectedVersion: draft.version });
-    expect(posted.transactionCurrency).toBe('USD');
+    expect(posted.transactionCurrency).toBe('JOD');
     expect(posted.functionalCurrency).toBe('JOD');
+    expect(posted.exchangeRate).toBe('1.0000000000');
     expect(posted.lines[0]!.debit).toBe('100.0000000000');
-    expect(posted.lines[0]!.debitFunctional).toBe('70.9000000000');
+    expect(posted.lines[0]!.debitFunctional).toBe('100.0000000000');
   });
 });
 
@@ -764,8 +768,10 @@ describe('malformed input', () => {
   });
 
   it('refuses an exchange rate of zero', async () => {
+    // Now caught by the ordinary-currency rule, which admits only par — a
+    // stricter answer to the same bad input.
     await expect(
       journals.createDraft(ctx.db, orgA, { ...balanced('10.00'), exchangeRate: '0' }),
-    ).rejects.toThrow(/greater than zero/i);
+    ).rejects.toThrow(/exchange rate of 1/i);
   });
 });

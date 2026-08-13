@@ -32,6 +32,10 @@ import { useEntityStore } from './useEntityStore';
 import { useCostCenterStore } from './costCenterStore';
 import { useProjectStore } from './projectStore';
 import { generateId, nowIso } from '@/lib/utils';
+import {
+  ORDINARY_TRANSACTION_EXCHANGE_RATE,
+  transactionCurrencyCode,
+} from '@/lib/transactionCurrency';
 
 /**
  * Attribution for journal records. Normally the signed-in finance user
@@ -169,6 +173,15 @@ interface EntryBase {
   id: string;
   entryNumber: string;
   status: JournalStatus;
+  /**
+   * The currency and rate this entry is ALREADY recorded in.
+   *
+   * Supplied when rewriting an existing entry, omitted when creating one. See
+   * `entryFromForm`: absent means "a new transaction, so the company's own
+   * currency"; present means "history, so leave it exactly as it is".
+   */
+  recordedCurrency?: string;
+  recordedExchangeRate?: number;
   createdAt: string;
   updatedBy: string;
   postedAt: string;
@@ -241,8 +254,18 @@ function entryFromForm(values: JournalFormValues, base: EntryBase): JournalEntry
     description: values.description,
     status: base.status,
     transactionType: values.transactionType,
-    currency: values.currency.toUpperCase(),
-    exchangeRate: Number(values.exchangeRate) || 1,
+    /*
+     * NOT `values.currency`.
+     *
+     * The form no longer offers a currency, but the form VALUES still carry the
+     * field, and a value that comes from the browser is a value someone can
+     * edit. Taking it from the company (for a new entry) or from what is
+     * already recorded (for an existing one) means a tampered payload changes
+     * nothing — the same reason the server derives it rather than trusting the
+     * request.
+     */
+    currency: base.recordedCurrency ?? transactionCurrencyCode(),
+    exchangeRate: base.recordedExchangeRate ?? ORDINARY_TRANSACTION_EXCHANGE_RATE,
     totalDebit: totals.totalDebit,
     totalCredit: totals.totalCredit,
     difference: totals.difference,
@@ -266,7 +289,23 @@ function entryFromForm(values: JournalFormValues, base: EntryBase): JournalEntry
 interface JournalState {
   entries: JournalEntry[];
 
-  addEntry: (values: JournalFormValues) => JournalActionResult;
+  /**
+   * Create a draft entry.
+   *
+   * `inheritCurrency` is the EXPLICIT opt-in for an entry generated from a
+   * source document that already carries a currency — an invoice, a bill, a
+   * credit note, a currency revaluation. Those must mirror their document, or
+   * the journal and the document it accounts for would disagree.
+   *
+   * Every ordinary path omits it, and then the entry takes the company's own
+   * currency at par whatever the form values say. That is the difference the
+   * policy asks for: foreign currency remains a deliberate, named capability of
+   * specific modules rather than a field anyone can fill in.
+   */
+  addEntry: (
+    values: JournalFormValues,
+    options?: { inheritCurrency?: boolean },
+  ) => JournalActionResult;
   updateEntry: (id: string, values: JournalFormValues, options?: AmendOptions) => JournalActionResult;
   /**
    * What may be done to this entry, and why. A pure read — the UI calls it
@@ -332,7 +371,7 @@ export const useJournalStore = create<JournalState>()(
     (set, get) => ({
       entries: SEED_JOURNAL_ENTRIES,
 
-      addEntry: (values) => {
+      addEntry: (values, options) => {
         // Subscription gate: a suspended/expired subscription blocks new
         // posting activity (drafts included, so document flows never leave an
         // orphan draft). Existing data is never touched.
@@ -350,6 +389,9 @@ export const useJournalStore = create<JournalState>()(
           id,
           entryNumber,
           status: 'draft',
+          // Only a source-document posting may carry its own denomination.
+          recordedCurrency: options?.inheritCurrency ? values.currency : undefined,
+          recordedExchangeRate: options?.inheritCurrency ? Number(values.exchangeRate) || 1 : undefined,
           createdAt: nowIso(),
           updatedBy: auditActor(),
           postedAt: '',
@@ -427,6 +469,9 @@ export const useJournalStore = create<JournalState>()(
           id,
           entryNumber: existing.entryNumber,
           status: 'draft',
+          // History, not a new transaction: leave the denomination alone.
+          recordedCurrency: existing.currency,
+          recordedExchangeRate: existing.exchangeRate,
           createdAt: existing.createdAt,
           updatedBy: auditActor(),
           postedAt: '',
@@ -526,6 +571,9 @@ export const useJournalStore = create<JournalState>()(
           id,
           entryNumber: existing.entryNumber,
           status: 'posted',
+          // A correction to a posted entry does not re-denominate it.
+          recordedCurrency: existing.currency,
+          recordedExchangeRate: existing.exchangeRate,
           createdAt: existing.createdAt,
           updatedBy: auditActor(),
           // The ORIGINAL posting timestamp survives: the entry was posted then,

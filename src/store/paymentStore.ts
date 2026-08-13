@@ -26,6 +26,7 @@ import { useEntityStore } from './useEntityStore';
 import { useJournalStore } from './journalStore';
 import { useBillStore } from './billStore';
 import { useInvoiceTemplateStore, INVOICE_ENTITY_ID } from './invoiceTemplateStore';
+import { transactionCurrencyCode } from '@/lib/transactionCurrency';
 
 const ACTOR = 'Finance Manager';
 const WHT_POLICY: PaymentWithholdingPolicy = { recognition: 'payment' };
@@ -173,9 +174,7 @@ export const usePaymentStore = create<PaymentState>()(
       },
 
       createDraft: (input) => {
-        const settings = useStore.getState().settings;
         const paymentDate = input?.paymentDate ?? new Date().toISOString().slice(0, 10);
-        const supplier = supplierById(input?.supplierId);
         const ts = useInvoiceTemplateStore.getState();
         const resolved = ts.resolve({ entityId: INVOICE_ENTITY_ID, invoiceDate: paymentDate });
         const number = get().takePaymentNumber(INVOICE_ENTITY_ID, get().usedNumbers(), paymentDate);
@@ -192,7 +191,16 @@ export const usePaymentStore = create<PaymentState>()(
           supplierId: input?.supplierId,
           customerId: input?.customerId,
           paymentDate,
-          currency: input?.currency ?? supplier?.defaultCurrency ?? settings.baseCurrency,
+          /*
+           * The company's currency, or the SETTLED DOCUMENT's.
+           *
+           * `input.currency` is honoured because settling a bill must mirror
+           * that bill — a payment recorded in a different currency from the
+           * document it clears does not clear it. What has gone is the
+           * supplier's `defaultCurrency`, which silently denominated ordinary
+           * payments in whatever the supplier record happened to say.
+           */
+          currency: input?.currency || transactionCurrencyCode(),
           exchangeRate: 1,
           grossAmount: gross,
           bankFeeAmount: 0,
@@ -320,7 +328,8 @@ export const usePaymentStore = create<PaymentState>()(
         // Post the ONE balanced bank journal through the existing General Journal service.
         const journal = useJournalStore.getState();
         const je = buildPaymentJournalEntry(payment, { accountsById: accountsMap(), config, withholdingPolicy: WHT_POLICY, supplier: supplierById(payment.supplierId), customer: customerById(payment.customerId), createdBy: ACTOR });
-        const added = journal.addEntry(je);
+        // A settlement mirrors the document it settles.
+        const added = journal.addEntry(je, { inheritCurrency: true });
         if (!added.ok || !added.id) return { ok: false, error: added.error ?? 'Could not create the payment journal entry.' };
         const posted = journal.postEntry(added.id);
         if (!posted.ok) return { ok: false, error: posted.error ?? 'Could not post the payment journal entry.' };

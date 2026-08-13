@@ -35,6 +35,10 @@ import { useCurrencyStore } from './currencyStore';
 import { useCostCenterStore } from './costCenterStore';
 import { useProjectStore } from './projectStore';
 import { useInvoiceTemplateStore, INVOICE_ENTITY_ID } from './invoiceTemplateStore';
+import {
+  ORDINARY_TRANSACTION_EXCHANGE_RATE,
+  transactionCurrencyCode,
+} from '@/lib/transactionCurrency';
 
 const ACTOR = 'Finance Manager';
 
@@ -158,7 +162,6 @@ export const useBillStore = create<BillState>()(
 
       createDraft: (input) => {
         const ts = useInvoiceTemplateStore.getState();
-        const settings = useStore.getState().settings;
         const billDate = input?.billDate ?? new Date().toISOString().slice(0, 10);
         const supplier = supplierById(input?.supplierId);
         const resolved = ts.resolve({ entityId: INVOICE_ENTITY_ID });
@@ -170,7 +173,21 @@ export const useBillStore = create<BillState>()(
           billNumber: number, supplierInvoiceNumber: '',
           billType: input?.billType ?? 'expense', status: 'draft',
           billDate, dueDate: input?.dueDate ?? billDate,
-          currency: input?.currency ?? supplier?.defaultCurrency ?? settings.baseCurrency, exchangeRate: 1,
+          /*
+           * The company's currency by default.
+           *
+           * What has gone from this chain is `supplier?.defaultCurrency` — the
+           * seeded suppliers carry USD, so a JOD company raised dollar bills
+           * without anyone choosing to. A supplier's preferred currency is
+           * context for a quote, not authority over the company's books.
+           *
+           * `input.currency` survives for the explicit foreign-currency paths
+           * (imports, and the multi-currency module the currency infrastructure
+           * exists for). No editor passes it: the Bill form has no currency
+           * control at all, and the server refuses a foreign currency outright.
+           */
+          currency: input?.currency || transactionCurrencyCode(),
+          exchangeRate: ORDINARY_TRANSACTION_EXCHANGE_RATE,
           lines: [makeEmptyBillLine(id, 1)],
           subtotal: 0, discountTotal: 0, taxTotal: 0, withholdingTaxTotal: 0, additionalChargesTotal: 0, grandTotal: 0,
           amountPaid: 0, supplierCreditsApplied: 0, balanceDue: 0,
@@ -282,7 +299,7 @@ export const useBillStore = create<BillState>()(
 
         const journal = useJournalStore.getState();
         const je = buildBillJournalEntry(bill, { accountsById: accountsMap(), config, withholdingPolicy: WHT_POLICY, supplier: supplierById(bill.supplierId), createdBy: ACTOR });
-        const added = journal.addEntry(je);
+        const added = journal.addEntry(je, { inheritCurrency: true });
         if (!added.ok || !added.id) return { ok: false, error: added.error ?? 'Could not create the bill journal entry.' };
         const posted = journal.postEntry(added.id);
         if (!posted.ok) return { ok: false, error: posted.error ?? 'Could not post the bill journal entry.' };
@@ -339,7 +356,7 @@ export const useBillStore = create<BillState>()(
         };
         const journal = useJournalStore.getState();
         const je = buildBillPaymentJournalEntry(existing, payment, { accountsById: accountsMap(), config: billPostingConfig(existing.supplierId), withholdingPolicy: WHT_POLICY, supplier: supplierById(existing.supplierId), createdBy: ACTOR });
-        const added = journal.addEntry(je);
+        const added = journal.addEntry(je, { inheritCurrency: true });
         if (!added.ok || !added.id) return { ok: false, error: added.error ?? 'Could not create the payment journal entry.' };
         const posted = journal.postEntry(added.id);
         if (!posted.ok) return { ok: false, error: posted.error ?? 'Could not post the payment.' };
@@ -407,7 +424,7 @@ export const useBillStore = create<BillState>()(
         };
         const journal = useJournalStore.getState();
         const je = buildSupplierCreditJournalEntry(existing, credit, input.creditAccountId, { accountsById: accountsMap(), config: billPostingConfig(existing.supplierId), withholdingPolicy: WHT_POLICY, supplier: supplierById(existing.supplierId), createdBy: ACTOR });
-        const added = journal.addEntry(je);
+        const added = journal.addEntry(je, { inheritCurrency: true });
         if (!added.ok || !added.id) return { ok: false, error: added.error ?? 'Could not create the supplier-credit journal entry.' };
         const postedRes = journal.postEntry(added.id);
         if (!postedRes.ok) return { ok: false, error: postedRes.error ?? 'Could not post the supplier credit.' };

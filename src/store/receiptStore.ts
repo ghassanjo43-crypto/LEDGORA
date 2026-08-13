@@ -23,6 +23,7 @@ import { useEntityStore } from './useEntityStore';
 import { useJournalStore } from './journalStore';
 import { useInvoiceStore } from './invoiceStore';
 import { useInvoiceTemplateStore, INVOICE_ENTITY_ID } from './invoiceTemplateStore';
+import { transactionCurrencyCode } from '@/lib/transactionCurrency';
 
 const ACTOR = 'Finance Manager';
 
@@ -179,7 +180,6 @@ export const useReceiptStore = create<ReceiptState>()(
       },
 
       createDraft: (input) => {
-        const settings = useStore.getState().settings;
         const receiptDate = input?.receiptDate ?? new Date().toISOString().slice(0, 10);
         const customer = customerById(input?.customerId);
         const ts = useInvoiceTemplateStore.getState();
@@ -196,7 +196,9 @@ export const useReceiptStore = create<ReceiptState>()(
           status: 'draft',
           customerId: input?.customerId,
           receiptDate,
-          currency: input?.currency ?? customer?.defaultCurrency ?? settings.baseCurrency,
+          // The company's currency, or the settled invoice's — never the
+          // customer's `defaultCurrency`. See `paymentStore` for the reasoning.
+          currency: input?.currency || transactionCurrencyCode(),
           exchangeRate: 1,
           amount: input?.amount ?? 0,
           baseCurrencyAmount: input?.amount ?? 0,
@@ -304,7 +306,8 @@ export const useReceiptStore = create<ReceiptState>()(
         // Post the balanced cash journal through the existing General Journal service.
         const journal = useJournalStore.getState();
         const je = buildReceiptJournalEntry(receipt, { accountsById: accountsMap(), config, customer: customerById(receipt.customerId), createdBy: ACTOR });
-        const added = journal.addEntry(je);
+        // A settlement mirrors the document it settles.
+        const added = journal.addEntry(je, { inheritCurrency: true });
         if (!added.ok || !added.id) return { ok: false, error: added.error ?? 'Could not create the receipt journal entry.' };
         const posted = journal.postEntry(added.id);
         if (!posted.ok) return { ok: false, error: posted.error ?? 'Could not post the receipt journal entry.' };

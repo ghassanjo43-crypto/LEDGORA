@@ -29,8 +29,8 @@ import {
 } from '@/store/journalStore';
 import { useStore } from '@/store/useStore';
 import { useEntityStore } from '@/store/useEntityStore';
-import { CurrencyPicker } from '@/components/currencies/CurrencyPicker';
-import { useCurrencyStore } from '@/store/currencyStore';
+import { ReadOnlyValue } from '@/components/ui/ReadOnlyValue';
+import { useTransactionCurrency } from '@/lib/transactionCurrency';
 import { Drawer } from '@/components/ui/Drawer';
 import { Button } from '@/components/ui/Button';
 import { Field, Input } from '@/components/ui/Input';
@@ -83,8 +83,9 @@ export function JournalEntryDrawer({ open, mode, onClose }: JournalEntryDrawerPr
   const postEntry = useJournalStore((s) => s.postEntry);
   const accounts = useStore((s) => s.accounts);
   const baseCurrency = useStore((s) => s.settings.baseCurrency);
+  /** The company's own currency — shown beside the amounts, never chosen. */
+  const companyCurrency = useTransactionCurrency();
   const businessEntities = useEntityStore((s) => s.entities);
-  const currencies = useCurrencyStore((s) => s.currencies);
   const { notify } = useToast();
 
   const accountsById = useMemo(
@@ -540,23 +541,18 @@ export function JournalEntryDrawer({ open, mode, onClose }: JournalEntryDrawerPr
                 {...register('description')}
               />
             </Field>
-            <Field label="Currency" required error={errors.currency?.message} htmlFor="currency">
-              <Controller
-                control={control}
-                name="currency"
-                render={({ field }) => (
-                  <CurrencyPicker
-                    value={field.value}
-                    currencies={currencies}
-                    onChange={field.onChange}
-                    placeholder="Search by code, name or country…"
-                    aria-label="Currency"
-                  />
-                )}
-              />
-            </Field>
-            <Field label="Exchange rate" required error={errors.exchangeRate?.message} htmlFor="exchangeRate">
-              <Input id="exchangeRate" type="number" step="0.0001" min={0} hasError={!!errors.exchangeRate} {...register('exchangeRate')} />
+            {/*
+              The company's own currency, shown and not chosen.
+
+              An ordinary journal entry is denominated in the company's
+              functional currency at par, so there is nothing here to decide.
+              The value is read from the company rather than held as form state,
+              which is what stops a saved entry from disagreeing with the
+              company that owns it. The exchange-rate field went with it: at par
+              it could only ever be 1, and an editable 1 is an invitation.
+            */}
+            <Field label="Currency">
+              <ReadOnlyValue data-testid="journal-currency">{companyCurrency.label}</ReadOnlyValue>
             </Field>
             <Field label="Created by" error={errors.createdBy?.message} htmlFor="createdBy">
               <Input id="createdBy" placeholder="Preparer name" {...register('createdBy')} />

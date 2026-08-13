@@ -355,23 +355,35 @@ describe('draft money handling', () => {
     expect(derived.postingErrors.map((i) => i.rule)).not.toContain('unbalanced');
   });
 
-  it('renders a foreign-currency decimal entry in the footer', () => {
+  it('renders a decimal entry in the footer, in the company currency', () => {
+    /*
+     * This test used to CHOOSE EUR through the currency picker. There is no
+     * longer a picker to choose it with: a journal entry is denominated in the
+     * company's own currency, so the drawer shows that currency read-only and
+     * offers no control. See `transactionCurrency.ts`.
+     *
+     * What is still worth proving is the decimal handling the original case was
+     * really about — that a value with fractional units survives into the
+     * footer intact.
+     */
     drawer();
     const [land, cash] = postingAccounts();
     pickAccount(0, land!);
     pickAccount(1, cash!);
-    // The entry currency is chosen through the shared searchable picker now,
-    // not a native <select> restricted to nine codes.
-    fireEvent.click(screen.getByLabelText('Currency', { selector: 'button' }));
-    fireEvent.change(screen.getByLabelText('Search currencies'), { target: { value: 'EUR' } });
-    fireEvent.click(
-      Array.from(document.querySelectorAll<HTMLButtonElement>('[role="option"] button')).find((o) =>
-        (o.textContent ?? '').includes('EUR'),
-      )!,
-    );
     typeAmount(0, 'debit', '1234.56');
     typeAmount(1, 'credit', '1234.56');
     expect(footerTotals()).toEqual({ debit: '1,234.56', credit: '1,234.56', difference: '0.00' });
+  });
+
+  it('offers no way to change the entry currency', () => {
+    drawer();
+    // The company's currency is stated…
+    expect(screen.getByTestId('journal-currency').textContent).toMatch(/^[A-Z]{3}/);
+    // …and there is nothing to change it with. Not a disabled control — none.
+    expect(screen.queryByLabelText('Currency', { selector: 'button' })).toBeNull();
+    expect(screen.queryByLabelText('Search currencies')).toBeNull();
+    expect(screen.queryByLabelText(/exchange rate/i)).toBeNull();
+    expect(document.querySelector('#exchangeRate')).toBeNull();
   });
 
   it('the draft signature changes whenever a value changes', () => {

@@ -385,6 +385,72 @@ describe('durable writes and Free Preview', () => {
   });
 });
 
+/* ══ Transaction currency, over HTTP ═══════════════════════════════════════ */
+
+describe('the company currency cannot be overridden through the API', () => {
+  it('refuses a USD journal from a JOD company, with no interface involved', async () => {
+    /*
+     * The devtools bypass, exactly as it would be attempted: a direct request
+     * carrying a currency the form no longer offers. Removing the dropdown took
+     * away the choice; this is what takes away the capability.
+     */
+    const org = await tenant('Randa');
+    const accountant = await member(org, 'accountant', 'a@randa.test');
+    const { cash, sales } = await chart(accountant);
+
+    const attempt = await call('POST', '/api/accounting/journals', accountant, {
+      ...entry(cash, sales),
+      transactionCurrency: 'USD',
+      exchangeRate: '0.709',
+    });
+    expect(attempt.statusCode).toBe(400);
+    expect(attempt.json().error.message).toMatch(/accounting currency is JOD/i);
+
+    // Nothing was written, so a rejected attempt leaves no half-made record.
+    expect((await call('GET', '/api/accounting/journals', accountant)).json().journals).toHaveLength(0);
+  });
+
+  it('records the company currency at par when nothing is supplied', async () => {
+    const org = await tenant('Randa');
+    const accountant = await member(org, 'accountant', 'a@randa.test');
+    const { cash, sales } = await chart(accountant);
+
+    const created = await call('POST', '/api/accounting/journals', accountant, entry(cash, sales));
+    expect(created.statusCode).toBe(201);
+    const journal = created.json().journal;
+    expect(journal.transactionCurrency).toBe('JOD');
+    expect(journal.functionalCurrency).toBe('JOD');
+    expect(journal.exchangeRate).toBe('1.0000000000');
+  });
+
+  it('refuses an exchange rate the browser invented', async () => {
+    const org = await tenant('Randa');
+    const accountant = await member(org, 'accountant', 'a@randa.test');
+    const { cash, sales } = await chart(accountant);
+
+    const attempt = await call('POST', '/api/accounting/journals', accountant, {
+      ...entry(cash, sales), exchangeRate: '2.5',
+    });
+    expect(attempt.statusCode).toBe(400);
+    expect(attempt.json().error.message).toMatch(/exchange rate of 1/i);
+  });
+
+  it('cannot be changed by editing a draft through the API', async () => {
+    const org = await tenant('Randa');
+    const accountant = await member(org, 'accountant', 'a@randa.test');
+    const { cash, sales } = await chart(accountant);
+    const id = (await call('POST', '/api/accounting/journals', accountant, entry(cash, sales)))
+      .json().journal.id;
+
+    const attempt = await call('PATCH', `/api/accounting/journals/${id}`, accountant, {
+      ...entry(cash, sales), transactionCurrency: 'USD', expectedVersion: 1,
+    });
+    expect(attempt.statusCode).toBe(400);
+    expect((await call('GET', `/api/accounting/journals/${id}`, accountant)).json().journal.transactionCurrency)
+      .toBe('JOD');
+  });
+});
+
 /* ══ The A1 acceptance walkthrough ═════════════════════════════════════════ */
 
 describe('Milestone A1 acceptance', () => {

@@ -11,6 +11,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { useJournalVoucherStore, makeBlankVoucher, makeBlankLine } from '@/store/journalVoucherStore';
 import { useFixedAssetStore } from '@/store/fixedAssetStore';
 import { useStore } from '@/store/useStore';
+import { ReadOnlyValue } from '@/components/ui/ReadOnlyValue';
+import { useTransactionCurrency } from '@/lib/transactionCurrency';
 import { useCostCenterStore } from '@/store/costCenterStore';
 import { useProjectStore } from '@/store/projectStore';
 import { useJournalView } from '@/store/journalViewStore';
@@ -225,6 +227,8 @@ function VoucherEditor({ voucher, onChange, baseCurrency, onSave, onSaveAndSubmi
     [accounts],
   );
   const isAssetKind = type && ['asset_acquisition', 'asset_disposal', 'asset_depreciation', 'asset_impairment'].includes(type.kind);
+  /** The company's own currency — shown beside the amounts, never chosen. */
+  const companyCurrency = useTransactionCurrency();
   const foreign = voucher.currency.toUpperCase() !== baseCurrency.toUpperCase();
   const totals = computeVoucherTotals(voucher.lines, foreign ? voucher.exchangeRate : 1);
   const balanced = Math.abs(totals.difference) < 0.005;
@@ -252,8 +256,15 @@ function VoucherEditor({ voucher, onChange, baseCurrency, onSave, onSaveAndSubmi
         <Field label="Transaction date"><Input type="date" value={voucher.transactionDate} onChange={(e) => onChange({ ...voucher, transactionDate: e.target.value })} /></Field>
         <Field label="Posting date"><Input type="date" value={voucher.postingDate} onChange={(e) => onChange({ ...voucher, postingDate: e.target.value, period: e.target.value.slice(0, 7) })} /></Field>
         <Field label="Document date"><Input type="date" value={voucher.documentDate} onChange={(e) => onChange({ ...voucher, documentDate: e.target.value })} /></Field>
-        <Field label="Currency"><Input value={voucher.currency} onChange={(e) => onChange({ ...voucher, currency: e.target.value.toUpperCase() })} /></Field>
-        <Field label={`Exchange rate → ${baseCurrency}`}><Input type="number" step="0.0001" value={String(voucher.exchangeRate)} onChange={(e) => onChange({ ...voucher, exchangeRate: Number(e.target.value) || 0 })} disabled={!foreign} /></Field>
+        {/*
+          The company's own currency, shown and not chosen. A voucher is an
+          ordinary accounting transaction, so it is denominated in the company's
+          functional currency at par — there is nothing to pick, and the
+          exchange-rate field went with the choice that justified it.
+        */}
+        <Field label="Currency">
+          <ReadOnlyValue data-testid="voucher-currency">{companyCurrency.label}</ReadOnlyValue>
+        </Field>
         <Field label="External reference"><Input value={voucher.externalReference} onChange={(e) => onChange({ ...voucher, externalReference: e.target.value })} /></Field>
         <Field label="Internal reference"><Input value={voucher.internalReference} onChange={(e) => onChange({ ...voucher, internalReference: e.target.value })} /></Field>
         <Field label="Source module" hint="Idempotency guard"><Input value={voucher.sourceModule} onChange={(e) => onChange({ ...voucher, sourceModule: e.target.value })} /></Field>

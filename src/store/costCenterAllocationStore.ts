@@ -103,7 +103,7 @@ export const useCostCenterAllocationStore = create<AllocationState>()(
 
         const journal = useJournalStore.getState();
         const je = buildCostCenterAllocationJournal(run, rule, accountsById(), useStore.getState().settings.baseCurrency);
-        const added = journal.addEntry(je);
+        const added = journal.addEntry(je, { inheritCurrency: true });
         if (!added.ok || !added.id) return { ok: false, error: added.error ?? 'Could not create the allocation journal.' };
         const posted = journal.postEntry(added.id);
         if (!posted.ok) return { ok: false, error: posted.error ?? 'Could not post the allocation journal.' };

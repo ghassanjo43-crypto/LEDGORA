@@ -11,6 +11,12 @@ import { getEligibleInvoicesForReceipt, autoAllocateReceipt } from '@/lib/receip
 import { RECEIPT_TYPE_LABELS, RECEIPT_METHOD_LABELS, isCustomerReceipt } from '@/lib/receiptLabels';
 import { amountToWords } from '@/lib/amountToWords';
 import { formatCurrency } from '@/lib/money';
+import { ReadOnlyValue } from '@/components/ui/ReadOnlyValue';
+import {
+  ORDINARY_TRANSACTION_EXCHANGE_RATE,
+  describeCurrency,
+  useTransactionCurrency,
+} from '@/lib/transactionCurrency';
 import { cn as cx, generateId, nowIso } from '@/lib/utils';
 import { Drawer } from '@/components/ui/Drawer';
 import { Button } from '@/components/ui/Button';
@@ -40,6 +46,8 @@ export function ReceiptEditorDrawer({ open, receiptId, onClose }: Props) {
   const postReceipt = useReceiptStore((s) => s.postReceipt);
   const previewSnapshot = useReceiptStore((s) => s.previewSnapshot);
   const { notify } = useToast();
+  /** The company's own currency — what a NEW receipt is recorded in. */
+  const companyCurrency = useTransactionCurrency();
   const [showPreview, setShowPreview] = useState(false);
 
   const customers = useMemo(() => entities.filter((e) => e.entityType === 'customer' || e.entityType === 'both'), [entities]);
@@ -51,7 +59,8 @@ export function ReceiptEditorDrawer({ open, receiptId, onClose }: Props) {
   const [receiptDate, setReceiptDate] = useState(receipt?.receiptDate ?? '');
   const [method, setMethod] = useState<ReceiptMethod>(receipt?.method ?? 'bank-transfer');
   const [amount, setAmount] = useState(receipt?.amount ?? 0);
-  const [exchangeRate, setExchangeRate] = useState(receipt?.exchangeRate ?? 1);
+  // Derived, not editable: an ordinary receipt is at par in the company's currency.
+  const exchangeRate = receipt?.exchangeRate ?? ORDINARY_TRANSACTION_EXCHANGE_RATE;
   const [bankAccountId, setBankAccountId] = useState(receipt?.bankAccountId ?? receipt?.cashAccountId ?? '');
   const [creditAccountId, setCreditAccountId] = useState(receipt?.creditAccountId ?? '');
   const [transactionReference, setTransactionReference] = useState(receipt?.transactionReference ?? '');
@@ -74,7 +83,6 @@ export function ReceiptEditorDrawer({ open, receiptId, onClose }: Props) {
     setReceiptDate(receipt.receiptDate);
     setMethod(receipt.method);
     setAmount(receipt.amount);
-    setExchangeRate(receipt.exchangeRate);
     setBankAccountId(receipt.bankAccountId ?? receipt.cashAccountId ?? '');
     setCreditAccountId(receipt.creditAccountId ?? '');
     setTransactionReference(receipt.transactionReference ?? '');
@@ -89,7 +97,9 @@ export function ReceiptEditorDrawer({ open, receiptId, onClose }: Props) {
     setAlloc(Object.fromEntries(receipt.allocations.filter((a) => a.invoiceId && !a.reversed).map((a) => [a.invoiceId!, a.amount])));
   }
 
-  const currency = receipt?.currency ?? 'USD';
+  /* The record's own currency, falling back to the COMPANY's — never 'USD'. */
+  const currency = receipt?.currency || companyCurrency.code;
+  const receiptCurrency = describeCurrency(currency);
   const money = (n: number): string => formatCurrency(n, currency);
   const isCustomer = isCustomerReceipt(receiptType);
   const eligible = useMemo(
@@ -197,8 +207,11 @@ export function ReceiptEditorDrawer({ open, receiptId, onClose }: Props) {
             )}
             <Field label="Receipt date" required><Input type="date" value={receiptDate} onChange={(e) => setReceiptDate(e.target.value)} disabled={readOnly} /></Field>
             <Field label="Amount" required><Input type="number" step="0.01" value={amount} onChange={(e) => setAmount(Number(e.target.value))} disabled={readOnly} className="text-right" /></Field>
-            <Field label="Currency"><Input value={currency} disabled readOnly /></Field>
-            <Field label="Exchange rate"><Input type="number" step="0.0001" value={exchangeRate} onChange={(e) => setExchangeRate(Number(e.target.value))} disabled={readOnly} className="text-right" /></Field>
+            {/* Plain text, not a disabled input: this is not a decision. */}
+            <Field label="Currency">
+              <ReadOnlyValue data-testid="receipt-currency">{receiptCurrency.label}</ReadOnlyValue>
+            </Field>
+
             <Field label="Method" required><Select options={METHOD_OPTIONS} value={method} onChange={(e) => setMethod(e.target.value as ReceiptMethod)} disabled={readOnly} /></Field>
             <Field label={method === 'cash' ? 'Cash account' : 'Deposit to (bank)'} required className="sm:col-span-1">
               <AccountSelect value={bankAccountId} accounts={cashAccounts} onChange={(a) => setBankAccountId(a.id)} disabled={readOnly} />

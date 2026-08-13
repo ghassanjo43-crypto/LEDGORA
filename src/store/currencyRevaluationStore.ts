@@ -83,7 +83,7 @@ export const useCurrencyRevaluationStore = create<RevaluationState>()(
 
         const journal = useJournalStore.getState();
         const je = buildRevaluationJournalEntry(run, accountsById());
-        const added = journal.addEntry(je);
+        const added = journal.addEntry(je, { inheritCurrency: true });
         if (!added.ok || !added.id) return { ok: false, error: added.error ?? 'Could not create the revaluation journal.' };
         const posted = journal.postEntry(added.id);
         if (!posted.ok) return { ok: false, error: posted.error ?? 'Could not post the revaluation journal.' };

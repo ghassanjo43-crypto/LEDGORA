@@ -10,6 +10,8 @@ import { calculateCreditNoteLine, calculateCreditNoteTotals } from '@/lib/credit
 import { calculateInvoiceCreditSummary, calculateRemainingCreditableQuantity, makeEmptyCreditLine } from '@/lib/creditNoteCreditable';
 import { CREDIT_NOTE_REASON_LABELS, CREDIT_TYPE_LABELS } from '@/lib/creditNoteLabels';
 import { formatCurrency } from '@/lib/money';
+import { ReadOnlyValue } from '@/components/ui/ReadOnlyValue';
+import { describeCurrency, useTransactionCurrency } from '@/lib/transactionCurrency';
 import { cn as cx } from '@/lib/utils';
 import { Drawer } from '@/components/ui/Drawer';
 import { Button } from '@/components/ui/Button';
@@ -54,6 +56,8 @@ export function CreditNoteEditorDrawer({ open, creditNoteId, onClose, onReplace 
   const templates = useInvoiceTemplateStore();
   const invoice = useInvoiceStore((s) => (cn?.originalInvoiceId ? s.invoices.find((i) => i.id === cn.originalInvoiceId) : undefined));
   const { notify } = useToast();
+  /** The company's own currency, when the note is not tied to an invoice. */
+  const companyCurrency = useTransactionCurrency();
   const [showPreview, setShowPreview] = useState(false);
 
   const [lines, setLines] = useState<CreditNoteLine[]>(cn?.lines ?? []);
@@ -76,7 +80,13 @@ export function CreditNoteEditorDrawer({ open, creditNoteId, onClose, onReplace 
     setOverrideVersionId(cn.templateResolutionSource === 'invoice-override' ? cn.templateVersionId : '');
   }
 
-  const currency = cn?.currency ?? 'USD';
+  /*
+   * A credit note credits a specific invoice, so it mirrors THAT invoice's
+   * currency — including a legacy one, or it would not credit it. The fallback
+   * is the company's currency, never a hard-coded 'USD'.
+   */
+  const currency = cn?.currency || companyCurrency.code;
+  const creditNoteCurrency = describeCurrency(currency);
   const money = (n: number): string => formatCurrency(n, currency);
   const customerName = entities.find((e) => e.id === cn?.customerId)?.legalName ?? '—';
   const totals = useMemo(() => calculateCreditNoteTotals(lines), [lines]);
@@ -176,7 +186,10 @@ export function CreditNoteEditorDrawer({ open, creditNoteId, onClose, onReplace 
           <section className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             <Field label="Customer (locked)"><Input value={customerName} disabled readOnly /></Field>
             <Field label="Original invoice"><Input value={cn.originalInvoiceNumber ?? '—'} disabled readOnly /></Field>
-            <Field label="Currency (locked)"><Input value={currency} disabled readOnly /></Field>
+            {/* Plain text, not a disabled input: this is not a decision. */}
+            <Field label="Currency">
+              <ReadOnlyValue data-testid="credit-note-currency">{creditNoteCurrency.label}</ReadOnlyValue>
+            </Field>
             <Field label="Issue date" required><Input type="date" value={issueDate} onChange={(e) => setIssueDate(e.target.value)} disabled={readOnly} /></Field>
             <Field label="Credit type"><Select options={TYPE_OPTIONS} value={creditType} onChange={(e) => setCreditType(e.target.value as CreditType)} disabled={readOnly} /></Field>
             <Field label="Credit-note format"><Select options={versionOptions} value={overrideVersionId} onChange={(e) => setOverrideVersionId(e.target.value)} disabled={readOnly} /></Field>

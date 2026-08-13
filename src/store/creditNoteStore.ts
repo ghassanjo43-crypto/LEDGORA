@@ -303,7 +303,7 @@ export const useCreditNoteStore = create<CreditNoteState>()(
         // Post the sales-return journal through the existing General Journal service.
         const journal = useJournalStore.getState();
         const je = buildCreditNoteJournalEntry(cn, { accountsById: accountsMap(), config, customer, createdBy: ACTOR });
-        const added = journal.addEntry(je);
+        const added = journal.addEntry(je, { inheritCurrency: true });
         if (!added.ok || !added.id) return { ok: false, error: added.error ?? 'Could not create the credit-note journal entry.' };
         const posted = journal.postEntry(added.id);
         if (!posted.ok) return { ok: false, error: posted.error ?? 'Could not post the credit-note journal entry.' };
@@ -312,7 +312,7 @@ export const useCreditNoteStore = create<CreditNoteState>()(
         let inventoryJournalEntryId: string | undefined;
         const invJe = buildInventoryReturnJournalEntry(cn, { accountsById: accountsMap(), config, customer, createdBy: ACTOR });
         if (invJe) {
-          const invAdded = journal.addEntry(invJe);
+          const invAdded = journal.addEntry(invJe, { inheritCurrency: true });
           if (invAdded.ok && invAdded.id) { journal.postEntry(invAdded.id); inventoryJournalEntryId = invAdded.id; }
         }
         // Record the inbound stock movements (Dr Inventory / Cr COGS at original
@@ -449,7 +449,7 @@ export const useCreditNoteStore = create<CreditNoteState>()(
         };
         const journal = useJournalStore.getState();
         const je = buildCreditNoteRefundJournalEntry(cn, refund, { accountsById: accountsMap(), config: postingConfig(cn.customerId), customer: customerById(cn.customerId), createdBy: ACTOR });
-        const added = journal.addEntry(je);
+        const added = journal.addEntry(je, { inheritCurrency: true });
         if (!added.ok || !added.id) return { ok: false, error: added.error ?? 'Could not create the refund journal entry.' };
         const posted = journal.postEntry(added.id);
         if (!posted.ok) return { ok: false, error: posted.error ?? 'Could not post the refund.' };

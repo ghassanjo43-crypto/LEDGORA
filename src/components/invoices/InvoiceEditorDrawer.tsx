@@ -18,6 +18,8 @@ import { useInvoiceTemplateEditor } from '@/store/invoiceTemplateEditorStore';
 import { InvoicePreviewModal } from '@/components/invoices/InvoicePreviewModal';
 import { calculateInvoiceLine, calculateInvoiceTotals } from '@/lib/invoiceCalculations';
 import { formatCurrency } from '@/lib/money';
+import { ReadOnlyValue } from '@/components/ui/ReadOnlyValue';
+import { describeCurrency, useTransactionCurrency } from '@/lib/transactionCurrency';
 import { cn } from '@/lib/utils';
 import { Drawer } from '@/components/ui/Drawer';
 import { Button } from '@/components/ui/Button';
@@ -60,6 +62,8 @@ export function InvoiceEditorDrawer({ open, invoiceId, onClose }: Props) {
   const templates = useInvoiceTemplateStore();
   const templateEditor = useInvoiceTemplateEditor();
   const { notify } = useToast();
+  /** The company's own currency — what a NEW invoice is raised in. */
+  const companyCurrency = useTransactionCurrency();
   const [showPreview, setShowPreview] = useState(false);
 
   const customers = useMemo(() => entities.filter((e) => e.entityType === 'customer' || e.entityType === 'both'), [entities]);
@@ -98,7 +102,13 @@ export function InvoiceEditorDrawer({ open, invoiceId, onClose }: Props) {
   const resolvedVersion = templates.getVersion(resolved.templateVersionId);
 
   const totals = useMemo(() => calculateInvoiceTotals(lines, 0, invoice?.amountPaid ?? 0), [lines, invoice?.amountPaid]);
-  const currency = invoice?.currency ?? 'USD';
+  /*
+   * The invoice's own currency, falling back to the COMPANY's — never 'USD'.
+   * An invoice is raised in the company's functional currency; the customer's
+   * preferred currency is context for a quote, not authority over the books.
+   */
+  const currency = invoice?.currency || companyCurrency.code;
+  const invoiceCurrency = describeCurrency(currency);
   const money = (n: number): string => formatCurrency(n, currency);
 
   // Published version options for the override picker.
@@ -195,6 +205,15 @@ export function InvoiceEditorDrawer({ open, invoiceId, onClose }: Props) {
           </Field>
           <Field label="Issue date" required><Input type="date" value={issueDate} onChange={(e) => setIssueDate(e.target.value)} disabled={readOnly} /></Field>
           <Field label="Due date" required><Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} disabled={readOnly} /></Field>
+          {/*
+            Shown, not chosen. The invoice form previously displayed no currency
+            at all while quietly defaulting to USD — so a JOD company could raise
+            a dollar invoice with nothing on screen saying so. Stating it plainly
+            is the point: the value is visible, and it is not a decision.
+          */}
+          <Field label="Currency">
+            <ReadOnlyValue data-testid="invoice-currency">{invoiceCurrency.label}</ReadOnlyValue>
+          </Field>
           <Field label="PO reference"><Input value={poRef} onChange={(e) => setPoRef(e.target.value)} disabled={readOnly} placeholder="Customer PO" /></Field>
           <Field label="Invoice format" className="sm:col-span-2">
             <Select options={versionOptions} value={overrideVersionId} onChange={(e) => setOverrideVersionId(e.target.value)} disabled={readOnly} />

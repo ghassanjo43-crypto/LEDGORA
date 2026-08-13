@@ -64,6 +64,15 @@ export interface JournalInput {
   description?: string;
   notes?: string;
   journalType?: string;
+  /**
+   * OPTIONAL AND REDUNDANT — omitting both is the recommended contract.
+   *
+   * An ordinary transaction is always denominated in the company's own currency
+   * at par; these are derived from `organizations.base_currency`, never taken
+   * from the caller. They remain accepted only so an existing client that sends
+   * them keeps working, and a value that DISAGREES with the company is refused
+   * rather than applied. See `resolveOrdinaryCurrency`.
+   */
   transactionCurrency?: string;
   exchangeRate?: string;
   sourceType?: string | null;
@@ -505,7 +514,14 @@ function normaliseDimension(value: string | null | undefined, field: string): st
 
 /* ══ Writing ═══════════════════════════════════════════════════════════════ */
 
-/** The organization's functional currency — the books' own currency. */
+/**
+ * The organization's functional currency — the books' own currency.
+ *
+ * Read from `organizations.base_currency`, which is the ONE authoritative source
+ * for server-backed accounting. Never from a request body, and never from a
+ * browser store: those may mirror this value, but a mirror that disagrees is
+ * simply wrong, and the disagreement must not be able to reach the ledger.
+ */
 async function functionalCurrencyOf(trx: Trx, organizationId: string): Promise<string> {
   const row = await trx
     .selectFrom('organizations')
@@ -514,6 +530,101 @@ async function functionalCurrencyOf(trx: Trx, organizationId: string): Promise<s
     .executeTakeFirst();
   if (!row) throw errors.notFound('Organization');
   return row.base_currency;
+}
+
+/** An ordinary transaction is denominated in the company's own currency, at par. */
+const PAR_RATE: Money.Amount = Money.toAmount('1', 'exchangeRate');
+
+/**
+ * The currency and rate an ordinary accounting transaction MUST carry.
+ *
+ * ══ The policy ═══════════════════════════════════════════════════════════════
+ *
+ * The currency chosen when the company was created is the mandatory currency for
+ * its ordinary transactions. A JOD company writes JOD journals at rate 1. There
+ * is no per-transaction currency choice, and this function is where that stops
+ * being a user-interface convention and becomes a rule.
+ *
+ * ══ Why the request's own values are not used ════════════════════════════════
+ *
+ * Removing the dropdown from the form removes the CHOICE, not the CAPABILITY:
+ * anyone can post `{"transactionCurrency":"USD"}` to this API directly, and a
+ * form-only restriction is exactly the kind of enforcement Phase A exists to
+ * replace. So the values are derived here from `organizations.base_currency`,
+ * inside the same transaction as the write.
+ *
+ * ══ Why a mismatch is REFUSED rather than quietly corrected ══════════════════
+ *
+ * Both satisfy the policy — the entry is JOD either way. Refusing is chosen
+ * because silently rewriting USD to JOD would leave the caller believing it
+ * recorded a foreign-currency transaction and the ledger holding a domestic one,
+ * with nothing anywhere saying they disagreed. A caller that means JOD can send
+ * JOD, or send nothing. A caller that means USD has a real problem, and should
+ * be told rather than have it hidden.
+ *
+ * Omitting both fields is the recommended contract and is always correct.
+ */
+function resolveOrdinaryCurrency(
+  input: Pick<JournalInput, 'transactionCurrency' | 'exchangeRate'>,
+  functionalCurrency: string,
+): { transactionCurrency: string; rate: Money.Amount } {
+  const requested = input.transactionCurrency?.trim().toUpperCase();
+  if (requested && requested !== functionalCurrency.toUpperCase()) {
+    throw errors.validation(
+      `This company's accounting currency is ${functionalCurrency}. An ordinary transaction cannot be recorded in ${requested}. Omit the currency, or change the company's functional currency in Company Settings.`,
+    );
+  }
+
+  // Same currency both sides, so the only meaningful rate is par. A supplied
+  // rate is checked rather than applied: 1.0000 is accepted because it means
+  // the same thing, anything else is a foreign-currency intent this path does
+  // not implement.
+  if (input.exchangeRate !== undefined && input.exchangeRate !== null && input.exchangeRate !== '') {
+    if (!Money.equals(amount(input.exchangeRate, 'exchangeRate'), PAR_RATE)) {
+      throw errors.validation(
+        `An ordinary ${functionalCurrency} transaction is recorded at an exchange rate of 1. A different rate requires foreign-currency accounting, which is not enabled for this organization.`,
+      );
+    }
+  }
+
+  return { transactionCurrency: functionalCurrency.toUpperCase(), rate: PAR_RATE };
+}
+
+/**
+ * The currency and rate an EXISTING entry keeps through an edit.
+ *
+ * Deliberately anchored to what the entry already says rather than to the
+ * organization's current setting. Two reasons:
+ *
+ * An entry's denomination is a historical fact, not a live setting. Re-deriving
+ * it on every edit would mean that changing the company's functional currency
+ * silently restated every draft still open — the exact "blind rewrite" the
+ * policy forbids. Correcting a description must never move the money.
+ *
+ * And it closes the same bypass in the other direction: an edit cannot be used
+ * to slip a different currency onto a record that was created correctly.
+ */
+function keepRecordedCurrency(
+  input: Pick<JournalInput, 'transactionCurrency' | 'exchangeRate'>,
+  existing: Pick<JournalRecord, 'transactionCurrency' | 'exchangeRate'>,
+): { transactionCurrency: string; rate: Money.Amount } {
+  const requested = input.transactionCurrency?.trim().toUpperCase();
+  if (requested && requested !== existing.transactionCurrency.toUpperCase()) {
+    throw errors.validation(
+      `This entry is recorded in ${existing.transactionCurrency} and its currency cannot be changed by editing it. Reverse it and record a new entry instead.`,
+    );
+  }
+
+  const recorded = amount(existing.exchangeRate, 'exchangeRate');
+  if (input.exchangeRate !== undefined && input.exchangeRate !== null && input.exchangeRate !== '') {
+    if (!Money.equals(amount(input.exchangeRate, 'exchangeRate'), recorded)) {
+      throw errors.validation(
+        'The exchange rate recorded on an entry cannot be changed by editing it. Reverse it and record a new entry instead.',
+      );
+    }
+  }
+
+  return { transactionCurrency: existing.transactionCurrency, rate: recorded };
 }
 
 async function insertLines(
@@ -655,12 +766,10 @@ export async function createDraft(
 ): Promise<JournalRecord> {
   const postingDate = resolveDates(input);
 
-  const rate = amount(input.exchangeRate ?? '1', 'exchangeRate');
-  if (!Money.isPositive(rate)) throw errors.validation('exchangeRate must be greater than zero.');
-
   return db.transaction().execute(async (trx) => {
+    // Derived from the organization, inside the same transaction as the write.
     const functionalCurrency = await functionalCurrencyOf(trx, actor.organizationId);
-    const transactionCurrency = (input.transactionCurrency ?? functionalCurrency).toUpperCase();
+    const { transactionCurrency, rate } = resolveOrdinaryCurrency(input, functionalCurrency);
 
     const journalNumber = await allocateJournalNumber(trx, actor.organizationId);
     const created = await trx
@@ -714,8 +823,7 @@ export async function updateDraft(
       throw errors.conflict('Only a draft can be edited directly. Amend or reverse a posted entry instead.');
     }
 
-    const rate = amount(input.exchangeRate ?? existing.exchangeRate, 'exchangeRate');
-    if (!Money.isPositive(rate)) throw errors.validation('exchangeRate must be greater than zero.');
+    const { transactionCurrency, rate } = keepRecordedCurrency(input, existing);
     const postingDate = resolveDates(input);
 
     // Moving a draft's date re-evaluates its period: a draft may not be saved
@@ -730,7 +838,7 @@ export async function updateDraft(
         reference: input.reference ?? '',
         description: input.description ?? '',
         notes: input.notes ?? '',
-        transaction_currency: (input.transactionCurrency ?? existing.transactionCurrency).toUpperCase(),
+        transaction_currency: transactionCurrency,
         exchange_rate: Money.toDecimalString(rate),
         version: existing.version + 1,
         updated_by: actor.userId,
@@ -956,7 +1064,9 @@ export async function amendPostedJournal(
     await assertPeriodAccepts(trx, actor.organizationId, existing.postingDate, 'amend');
     await assertPeriodAccepts(trx, actor.organizationId, postingDate, 'amend');
 
-    const rate = amount(input.exchangeRate ?? existing.exchangeRate, 'exchangeRate');
+    // A POSTED entry's denomination is settled history. An amendment corrects
+    // figures within it; it does not re-denominate them.
+    const { rate } = keepRecordedCurrency(input, existing);
 
     await trx
       .updateTable('journal_entries')
@@ -1019,6 +1129,8 @@ async function insertReversal(
   reason: string,
   postingDate: string,
 ): Promise<JournalRecord> {
+  // Mirrors the original's denomination exactly, including a legacy one. A
+  // reversal that withdrew a USD entry in JOD would not withdraw it.
   const rate = amount(original.exchangeRate, 'exchangeRate');
   const number = await allocateJournalNumber(trx, actor.organizationId);
   const now = new Date();
@@ -1140,7 +1252,17 @@ export async function reverseAndReplace(
 
     await hooks.beforeReplacement?.(trx);
 
-    const rate = amount(input.exchangeRate ?? original.exchangeRate, 'exchangeRate');
+    /*
+     * The replacement is a NEW transaction, so it takes the ordinary-currency
+     * rule rather than inheriting the original's denomination. That matters for
+     * a legacy entry: replacing one recorded in another currency produces a
+     * compliant entry in the company's own currency, and the original stays
+     * exactly as it was posted.
+     */
+    const { transactionCurrency: replacementCurrency, rate } = resolveOrdinaryCurrency(
+      input,
+      original.functionalCurrency,
+    );
     const replacementNumber = await allocateJournalNumber(trx, actor.organizationId);
     const now = new Date();
     const createdReplacement = await trx
@@ -1155,7 +1277,7 @@ export async function reverseAndReplace(
         reference: input.reference ?? original.reference,
         description: input.description ?? `Replacement for ${original.journalNumber}`,
         notes: input.notes ?? reason,
-        transaction_currency: (input.transactionCurrency ?? original.transactionCurrency).toUpperCase(),
+        transaction_currency: replacementCurrency,
         functional_currency: original.functionalCurrency,
         exchange_rate: Money.toDecimalString(rate),
         original_entry_id: original.id,

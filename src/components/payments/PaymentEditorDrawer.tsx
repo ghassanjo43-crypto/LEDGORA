@@ -13,6 +13,12 @@ import {
 } from '@/lib/paymentLabels';
 import { amountToWords } from '@/lib/amountToWords';
 import { formatCurrency } from '@/lib/money';
+import { ReadOnlyValue } from '@/components/ui/ReadOnlyValue';
+import {
+  ORDINARY_TRANSACTION_EXCHANGE_RATE,
+  describeCurrency,
+  useTransactionCurrency,
+} from '@/lib/transactionCurrency';
 import { generateId, nowIso } from '@/lib/utils';
 import { Drawer } from '@/components/ui/Drawer';
 import { Button } from '@/components/ui/Button';
@@ -46,6 +52,8 @@ export function PaymentEditorDrawer({ open, paymentId, onClose }: Props) {
   const postPayment = usePaymentStore((s) => s.postPayment);
   const previewSnapshot = usePaymentStore((s) => s.previewSnapshot);
   const { notify } = useToast();
+  /** The company's own currency — what a NEW payment is recorded in. */
+  const companyCurrency = useTransactionCurrency();
   const [showPreview, setShowPreview] = useState(false);
 
   const suppliers = useMemo(() => entities.filter((e) => e.entityType === 'supplier' || e.entityType === 'both'), [entities]);
@@ -59,7 +67,8 @@ export function PaymentEditorDrawer({ open, paymentId, onClose }: Props) {
   const [paymentDate, setPaymentDate] = useState(payment?.paymentDate ?? '');
   const [method, setMethod] = useState<PaymentMethod>(payment?.method ?? 'bank-transfer');
   const [grossAmount, setGrossAmount] = useState(payment?.grossAmount ?? 0);
-  const [exchangeRate, setExchangeRate] = useState(payment?.exchangeRate ?? 1);
+  // Derived, not editable: an ordinary payment is at par in the company's currency.
+  const exchangeRate = payment?.exchangeRate ?? ORDINARY_TRANSACTION_EXCHANGE_RATE;
   const [bankAccountId, setBankAccountId] = useState(payment?.bankAccountId ?? payment?.cashAccountId ?? '');
   const [debitAccountId, setDebitAccountId] = useState(payment?.debitAccountId ?? '');
   const [transactionReference, setTransactionReference] = useState(payment?.transactionReference ?? '');
@@ -102,7 +111,6 @@ export function PaymentEditorDrawer({ open, paymentId, onClose }: Props) {
     setPaymentDate(payment.paymentDate);
     setMethod(payment.method);
     setGrossAmount(payment.grossAmount);
-    setExchangeRate(payment.exchangeRate);
     setBankAccountId(payment.bankAccountId ?? payment.cashAccountId ?? '');
     setDebitAccountId(payment.debitAccountId ?? '');
     setTransactionReference(payment.transactionReference ?? '');
@@ -120,7 +128,13 @@ export function PaymentEditorDrawer({ open, paymentId, onClose }: Props) {
     setAlloc(Object.fromEntries(payment.allocations.filter((a) => a.billId && !a.reversed).map((a) => [a.billId!, a.amount])));
   }
 
-  const currency = payment?.currency ?? 'USD';
+  /*
+   * The record's own currency, falling back to the COMPANY's — never a
+   * hard-coded 'USD'. That fallback is how a JOD company ends up with a dollar
+   * payment: not by choosing one, but through a default nobody looked at.
+   */
+  const currency = payment?.currency || companyCurrency.code;
+  const paymentCurrency = describeCurrency(currency);
   const money = (n: number): string => formatCurrency(n, currency);
   const isSupplier = isSupplierPaymentType(paymentType);
   const isRefund = isCustomerRefundType(paymentType);
@@ -254,8 +268,15 @@ export function PaymentEditorDrawer({ open, paymentId, onClose }: Props) {
             {!isLoan && !isLease && (
               <Field label={isSupplier ? 'Payment amount' : 'Amount'} required><Input type="number" step="0.01" value={grossAmount} onChange={(e) => setGrossAmount(Number(e.target.value))} disabled={readOnly} className="text-right" /></Field>
             )}
-            <Field label="Currency"><Input value={currency} disabled readOnly /></Field>
-            <Field label="Exchange rate"><Input type="number" step="0.0001" value={exchangeRate} onChange={(e) => setExchangeRate(Number(e.target.value))} disabled={readOnly} className="text-right" /></Field>
+            {/*
+              Plain text rather than a disabled input. A payment settles a bill
+              in the company's own currency at par, so the exchange-rate field
+              went with the choice that justified it — an editable rate on a
+              same-currency payment could only ever misstate it.
+            */}
+            <Field label="Currency">
+              <ReadOnlyValue data-testid="payment-currency">{paymentCurrency.label}</ReadOnlyValue>
+            </Field>
             <Field label="Method" required><Select options={METHOD_OPTIONS} value={method} onChange={(e) => setMethod(e.target.value as PaymentMethod)} disabled={readOnly} /></Field>
             <Field label={method === 'cash' ? 'Cash account' : 'Pay from (bank)'} required><AccountSelect value={bankAccountId} accounts={cashAccounts} onChange={(a) => setBankAccountId(a.id)} disabled={readOnly} /></Field>
             <Field label="Transaction reference"><Input value={transactionReference} onChange={(e) => setTransactionReference(e.target.value)} disabled={readOnly} placeholder="TRX / transfer ref" /></Field>

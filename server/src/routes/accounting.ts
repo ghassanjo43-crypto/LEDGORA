@@ -28,6 +28,18 @@
  * the other direction. Fastify runs a preHandler array in order and the first
  * refusal wins.
  *
+ * ══ Transaction currency ════════════════════════════════════════════════════
+ *
+ * No endpoint here takes a currency choice. An ordinary transaction is
+ * denominated in the company's own currency — `organizations.base_currency` —
+ * at an exchange rate of 1, resolved server-side inside the write transaction.
+ *
+ * `transactionCurrency` and `exchangeRate` are still ACCEPTED in the body for
+ * compatibility, and a value that disagrees with the company is REFUSED with a
+ * 400 rather than applied or silently corrected. Omitting both is the
+ * recommended contract and is always correct. A JOD company cannot be made to
+ * write a USD journal through this API, with or without a user interface.
+ *
  * ══ Free Preview ════════════════════════════════════════════════════════════
  *
  * Nothing in this file checks the subscription. `guards/persistence` is a global

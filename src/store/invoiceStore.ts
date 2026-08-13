@@ -29,6 +29,10 @@ import { useJournalStore } from './journalStore';
 import { useCostCenterStore } from './costCenterStore';
 import { useProjectStore } from './projectStore';
 import { useInvoiceTemplateStore, INVOICE_ENTITY_ID } from './invoiceTemplateStore';
+import {
+  ORDINARY_TRANSACTION_EXCHANGE_RATE,
+  transactionCurrencyCode,
+} from '@/lib/transactionCurrency';
 
 const ACTOR = 'Finance Manager';
 
@@ -156,7 +160,6 @@ export const useInvoiceStore = create<InvoiceState>()(
 
       createDraft: (input) => {
         const templates = useInvoiceTemplateStore.getState();
-        const settings = useStore.getState().settings;
         const issueDate = input.issueDate ?? new Date().toISOString().slice(0, 10);
         const customer = input.customerId ? customerById(input.customerId) : undefined;
 
@@ -178,8 +181,21 @@ export const useInvoiceStore = create<InvoiceState>()(
           status: 'draft',
           issueDate,
           dueDate,
-          currency: input.currency ?? customer?.defaultCurrency ?? settings.baseCurrency,
-          exchangeRate: 1,
+          /*
+           * The company's currency by default.
+           *
+           * What has gone from this chain is `customer?.defaultCurrency` — the
+           * seeded customers carry USD, so a JOD company raised dollar invoices
+           * without anyone choosing to. A customer's preferred currency is
+           * context for a quote, not authority over the company's books.
+           *
+           * `input.currency` survives for the explicit foreign-currency paths
+           * (imports, and the multi-currency module). No editor passes it: the
+           * Invoice form shows the currency read-only, and the server refuses a
+           * foreign currency outright.
+           */
+          currency: input.currency || transactionCurrencyCode(),
+          exchangeRate: ORDINARY_TRANSACTION_EXCHANGE_RATE,
           templateId: resolved.templateId,
           templateVersionId: resolved.templateVersionId,
           templateResolutionSource: resolved.resolutionSource,
@@ -290,7 +306,7 @@ export const useInvoiceStore = create<InvoiceState>()(
           createdBy: ACTOR,
         });
         const rollbackInventory = (): void => { if (inventoryDocId) useInventoryStore.getState().reverseDocument(inventoryDocId); };
-        const added = journal.addEntry(je);
+        const added = journal.addEntry(je, { inheritCurrency: true });
         if (!added.ok || !added.id) { rollbackInventory(); return { ok: false, error: added.error ?? 'Could not create the sales journal entry.' }; }
         const posted = journal.postEntry(added.id);
         if (!posted.ok) { rollbackInventory(); return { ok: false, error: posted.error ?? 'Could not post the sales journal entry.' }; }
@@ -348,7 +364,7 @@ export const useInvoiceStore = create<InvoiceState>()(
         };
         const journal = useJournalStore.getState();
         const je = buildInvoicePaymentJournalEntry(existing, payment, { accountsById: accountsMap(), receivableAccountId: customerById(existing.customerId)?.defaultReceivableAccount || accountByCode('1221')?.id || '', customer: customerById(existing.customerId), createdBy: ACTOR });
-        const added = journal.addEntry(je);
+        const added = journal.addEntry(je, { inheritCurrency: true });
         if (!added.ok || !added.id) return { ok: false, error: added.error ?? 'Could not create the receipt journal entry.' };
         const posted = journal.postEntry(added.id);
         if (!posted.ok) return { ok: false, error: posted.error ?? 'Could not post the receipt.' };

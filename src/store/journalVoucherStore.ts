@@ -55,6 +55,10 @@ import { assertJvPermission, type JournalVoucherPermission } from '@/lib/journal
 import { makeSeedVoucherTypes } from '@/lib/journalVoucherSeed';
 import { useJournalStore } from './journalStore';
 import { useCurrencyStore } from './currencyStore';
+import {
+  ORDINARY_TRANSACTION_EXCHANGE_RATE,
+  transactionCurrencyCode,
+} from '@/lib/transactionCurrency';
 import { useFixedAssetStore } from './fixedAssetStore';
 import { useStore } from './useStore';
 import { useCostCenterStore } from './costCenterStore';
@@ -107,8 +111,16 @@ function nextNumber(prefix: string, existing: string[]): string {
   return `${prefix}-${String(max + 1).padStart(4, '0')}`;
 }
 
+/**
+ * The company's currency — and the ONLY currency an ordinary voucher carries.
+ *
+ * Routed through the shared accessor rather than reading the settings store
+ * with a `|| 'USD'` of its own. That fallback was a second, quieter answer to
+ * the same question, and a JOD company whose settings had not loaded yet would
+ * have written a dollar voucher without anyone choosing one.
+ */
 function baseCurrency(): string {
-  return useStore.getState().settings.baseCurrency || 'USD';
+  return transactionCurrencyCode();
 }
 
 export function makeBlankLine(): JournalVoucherLine {
@@ -748,7 +760,9 @@ export const useJournalVoucherStore = create<JournalVoucherState>()(
             number: nextNumber(type.prefix, get().vouchers.map((v) => v.number)),
             companyId: company,
             transactionDate: input.date, postingDate: input.date, period: input.date.slice(0, 7), documentDate: input.date,
-            currency: input.currency ?? baseCurrency(), exchangeRate: input.exchangeRate ?? 1,
+            // The company's currency, not the caller's: an intercompany pair is
+            // still an ordinary transaction on both sides.
+            currency: baseCurrency(), exchangeRate: ORDINARY_TRANSACTION_EXCHANGE_RATE,
             description, intercompanyRef: input.intercompanyRef,
             // Approval flows for intercompany run through the type config; the
             // pair action itself is the approved, atomic-in-sequence path.

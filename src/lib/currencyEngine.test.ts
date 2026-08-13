@@ -171,7 +171,11 @@ describe('currency revaluation', () => {
         { accountId: acc('1221'), accountCode: '1221', accountName: '', description: '', debit: foreign, credit: 0, entityId: '', entityName: '', costCenter: '', project: '', taxCode: '', taxAmount: 0, memo: '' },
         { accountId: acc('4110'), accountCode: '4110', accountName: '', description: '', debit: 0, credit: foreign, entityId: '', entityName: '', costCenter: '', project: '', taxCode: '', taxAmount: 0, memo: '' },
       ],
-    });
+    },
+    // Simulates a foreign-currency INVOICE posting, which is a source-document
+    // path and so carries its document's denomination. The ordinary journal
+    // path cannot: see `journalStore.addEntry`.
+    { inheritCurrency: true });
     j.postEntry(added.id!);
   }
 

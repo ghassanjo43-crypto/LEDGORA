@@ -10,6 +10,8 @@ import { checkDuplicateSupplierInvoiceNumber } from '@/lib/billTax';
 import { buildBillSettlementSummary } from '@/lib/billSettlement';
 import { BILL_TYPE_LABELS, BILL_PAYMENT_METHOD_LABELS, BILL_STATUS_TONE } from '@/lib/billLabels';
 import { formatCurrency } from '@/lib/money';
+import { ReadOnlyValue } from '@/components/ui/ReadOnlyValue';
+import { describeCurrency, useTransactionCurrency } from '@/lib/transactionCurrency';
 import { cn as cx } from '@/lib/utils';
 import { Drawer } from '@/components/ui/Drawer';
 import { Button } from '@/components/ui/Button';
@@ -53,6 +55,8 @@ export function BillEditorDrawer({ open, billId, onClose }: Props) {
   const postBill = useBillStore((s) => s.postBill);
   const previewSnapshot = useBillStore((s) => s.previewSnapshot);
   const { notify } = useToast();
+  /** The company's own currency — what a NEW bill is recorded in. */
+  const companyCurrency = useTransactionCurrency();
   const [showPreview, setShowPreview] = useState(false);
 
   const suppliers = useMemo(() => entities.filter((e) => e.entityType === 'supplier' || e.entityType === 'both'), [entities]);
@@ -63,8 +67,6 @@ export function BillEditorDrawer({ open, billId, onClose }: Props) {
   const [billType, setBillType] = useState<BillType>(bill?.billType ?? 'expense');
   const [billDate, setBillDate] = useState(bill?.billDate ?? '');
   const [dueDate, setDueDate] = useState(bill?.dueDate ?? '');
-  const [currency, setCurrency] = useState(bill?.currency ?? 'USD');
-  const [exchangeRate, setExchangeRate] = useState(bill?.exchangeRate ?? 1);
   const [poRef, setPoRef] = useState(bill?.purchaseOrderId ?? '');
   const [notes, setNotes] = useState(bill?.notes ?? '');
 
@@ -73,9 +75,21 @@ export function BillEditorDrawer({ open, billId, onClose }: Props) {
     setLoadedId(bill.id);
     setLines(bill.lines.length ? bill.lines : [makeEmptyBillLine(bill.id, 1)]);
     setSupplierId(bill.supplierId); setSupplierInvoiceNumber(bill.supplierInvoiceNumber); setBillType(bill.billType);
-    setBillDate(bill.billDate); setDueDate(bill.dueDate); setCurrency(bill.currency); setExchangeRate(bill.exchangeRate);
+    setBillDate(bill.billDate); setDueDate(bill.dueDate);
     setPoRef(bill.purchaseOrderId ?? ''); setNotes(bill.notes ?? '');
   }
+
+  /*
+   * Derived, never form state.
+   *
+   * A bill is recorded in the company's currency, so there is nothing for the
+   * user to set and nothing to keep in sync. An existing record shows what it
+   * actually says — a historical or imported bill may carry another currency,
+   * and a read-only field must not misreport it — while a new one shows the
+   * company's. Neither is sent back on save; see `collect`.
+   */
+  const currency = bill?.currency || companyCurrency.code;
+  const companyCurrencyForBill = describeCurrency(currency);
 
   const money = (n: number): string => formatCurrency(n, currency);
   const totals = useMemo(() => calculateBillTotals(lines.map((l) => ({ ...l, discountAmount: 0, taxableAmount: 0, taxAmount: 0, lineSubtotal: 0, lineTotal: 0 })), 0), [lines]);
@@ -93,7 +107,9 @@ export function BillEditorDrawer({ open, billId, onClose }: Props) {
   const addLine = (): void => setLines((prev) => [...prev, makeEmptyBillLine(bill.id, prev.length + 1)]);
   const removeLine = (id: string): void => setLines((prev) => (prev.length > 1 ? prev.filter((l) => l.id !== id) : prev));
 
-  const collect = (): Partial<Bill> => ({ supplierId, supplierInvoiceNumber, billType, billDate, dueDate, currency, exchangeRate, purchaseOrderId: poRef || undefined, notes, lines });
+  // `currency` and `exchangeRate` are deliberately absent: an edit must not be
+  // able to re-denominate a bill, so the stored values are simply left alone.
+  const collect = (): Partial<Bill> => ({ supplierId, supplierInvoiceNumber, billType, billDate, dueDate, purchaseOrderId: poRef || undefined, notes, lines });
   const persist = (): boolean => { const res = updateDraft(bill.id, collect()); if (!res.ok) { notify(res.error ?? 'Could not save the bill.', 'error'); return false; } return true; };
 
   const onSave = (): void => { if (persist()) { notify('Bill draft saved.', 'success'); onClose(); } };
@@ -137,8 +153,15 @@ export function BillEditorDrawer({ open, billId, onClose }: Props) {
             <Field label="Bill type"><Select options={TYPE_OPTIONS} value={billType} onChange={(e) => setBillType(e.target.value as BillType)} disabled={readOnly} /></Field>
             <Field label="Bill date" required><Input type="date" value={billDate} onChange={(e) => setBillDate(e.target.value)} disabled={readOnly} /></Field>
             <Field label="Due date" required><Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} disabled={readOnly} /></Field>
-            <Field label="Currency"><Input value={currency} onChange={(e) => setCurrency(e.target.value.toUpperCase())} disabled={readOnly} /></Field>
-            <Field label="Exchange rate"><Input type="number" step="0.0001" value={exchangeRate} onChange={(e) => setExchangeRate(Number(e.target.value))} disabled={readOnly} className="text-right" /></Field>
+            {/*
+              The company's own currency, shown and not chosen. A bill is an
+              ordinary purchase transaction, so it is recorded in the company's
+              functional currency at par — supplier defaults and free-text
+              currency codes could both put a JOD company's books into dollars.
+            */}
+            <Field label="Currency">
+              <ReadOnlyValue data-testid="bill-currency">{companyCurrencyForBill.label}</ReadOnlyValue>
+            </Field>
             <Field label="PO reference"><Input value={poRef} onChange={(e) => setPoRef(e.target.value)} disabled={readOnly} placeholder="Purchase order" /></Field>
           </section>
 
