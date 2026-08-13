@@ -176,6 +176,37 @@ export interface PlanInput {
   sortOrder?: number;
 }
 
+/**
+ * The module list a jsonb column currently holds, as a plain `string[]`.
+ *
+ * `module_entitlements` is `jsonb`, and different drivers hand it back
+ * differently: node-postgres parses it into a JavaScript array, others return
+ * the raw JSON text. Both are normalised here so callers never have to guess.
+ *
+ * Deliberately THROWS on anything else. Quietly returning `[]` for a value this
+ * cannot read would silently strip a package's entitlements — a data-loss bug
+ * dressed up as a default.
+ */
+export function normalizeModules(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    if (value.every((item) => typeof item === 'string')) return value as string[];
+    throw errors.validation('Package entitlements are not a list of module identifiers.');
+  }
+
+  if (typeof value === 'string') {
+    try {
+      const parsed: unknown = JSON.parse(value);
+      if (Array.isArray(parsed) && parsed.every((item) => typeof item === 'string')) {
+        return parsed as string[];
+      }
+    } catch {
+      // Fall through to the single refusal below.
+    }
+  }
+
+  throw errors.validation('Package entitlements are stored in an unreadable form.');
+}
+
 export async function listAllPlans(db: Kysely<Database>): Promise<Array<Record<string, unknown>>> {
   const rows = await db.selectFrom('subscription_plans').selectAll().orderBy('sort_order', 'asc').execute();
   return rows.map((row) => ({
@@ -251,7 +282,25 @@ export async function updatePlan(
       annual_price: patch.annualPrice === undefined ? existing.annual_price : String(patch.annualPrice),
       user_limit: patch.userLimit ?? existing.user_limit,
       entity_limit: patch.entityLimit ?? existing.entity_limit,
-      module_entitlements: patch.modules ? JSON.stringify(patch.modules) : existing.module_entitlements,
+      /*
+       * ── Always written as JSON text ───────────────────────────────────────
+       *
+       * node-postgres parses this jsonb column on the way OUT into a JavaScript
+       * array. Handing that array straight back as a bound parameter made the
+       * driver serialise it as a PostgreSQL ARRAY literal —
+       * `{"accounting","invoicing"}` — which is not JSON, so PostgreSQL rejected
+       * the statement with SQLSTATE 22P02.
+       *
+       * Every column is written on every update, so the broken round trip ran
+       * even when the operator had changed something else entirely: editing a
+       * user limit failed on the untouched module list.
+       *
+       * `!== undefined`, not a truthiness test, so an explicit empty list means
+       * "this package entitles nothing extra" rather than "not supplied".
+       */
+      module_entitlements: JSON.stringify(
+        patch.modules !== undefined ? patch.modules : normalizeModules(existing.module_entitlements),
+      ),
       is_public: patch.isPublic ?? existing.is_public,
       sort_order: patch.sortOrder ?? existing.sort_order,
       updated_at: new Date(),
