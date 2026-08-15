@@ -19,6 +19,12 @@ import { mirrorVerifiedUser, mirrorOrganizationFromBackend, clearLocalSession } 
 export type BackendSessionStatus = 'unknown' | 'loading' | 'ready' | 'unavailable';
 
 interface BackendSessionState {
+  /**
+   * `unknown` → never asked; `loading` → asking for the FIRST time; `ready` /
+   * `unavailable` → the server has answered. Guards that must not paint before
+   * the verdict is in test for the first two — see the note in `refresh` on why
+   * a later re-check deliberately does not return to `loading`.
+   */
   status: BackendSessionStatus;
   user: BackendUser | null;
   platformRoles: BackendPlatformRole[];
@@ -42,7 +48,19 @@ export const useBackendSessionStore = create<BackendSessionState>()((set) => ({
       set({ status: 'unavailable', user: null, platformRoles: [], error: null });
       return;
     }
-    set({ status: 'loading', error: null });
+    /*
+     * Announce `loading` only for the FIRST resolution.
+     *
+     * Every guard that waits for a session verdict (the shell, the platform
+     * console) renders nothing while the status is `unknown` or `loading`. If a
+     * routine re-check regressed the status, each one would blank and REMOUNT
+     * its whole subtree, destroying the component state of whatever was on
+     * screen — which is how the change-password form's success confirmation
+     * disappeared the instant it re-read the session to clear
+     * `mustChangePassword`. Re-checking a session we already have an answer for
+     * is background work, and the last known verdict stays up while it runs.
+     */
+    set((state) => (state.status === 'unknown' ? { status: 'loading', error: null } : { error: null }));
     try {
       const result = await authApi.getSession();
 

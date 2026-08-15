@@ -34,6 +34,7 @@ import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { SubscribersPanel } from '@/components/admin/SubscribersPanel';
 import { DisposableCleanupPanel } from '@/components/admin/DisposableCleanupPanel';
+import { PlatformOverviewPanel } from '@/components/admin/PlatformOverviewPanel';
 import { cleanupApi } from '@/services/api/cleanupApi';
 import { ApplicantsPanel } from '@/components/admin/ApplicantsPanel';
 import { MembersPanel } from '@/components/admin/MembersPanel';
@@ -54,9 +55,10 @@ import { InfrastructureCostDashboard } from '@/components/metering/Infrastructur
 import { MeteringConfigEditor } from '@/components/metering/MeteringConfigEditor';
 import { UsageLedgerPanel } from '@/components/metering/UsageLedgerPanel';
 import { EntitlementAdminPanel } from '@/components/admin/EntitlementAdminPanel';
-import { Building2, ClipboardCheck, Package, Server, ShieldAlert, ShieldCheck, Trash2, UserPlus, Users } from 'lucide-react';
+import { AccountSecurityPanel } from '@/components/account/AccountSecurityPanel';
+import { Building2, ClipboardCheck, KeyRound, LayoutDashboard, Package, Server, ShieldAlert, ShieldCheck, Trash2, UserPlus, Users } from 'lucide-react';
 
-type ConsoleTab = 'applicants' | 'subscribers' | 'members' | 'payments' | 'packages' | 'metering' | 'entitlements' | 'cleanup';
+type ConsoleTab = 'overview' | 'applicants' | 'subscribers' | 'members' | 'payments' | 'packages' | 'metering' | 'entitlements' | 'cleanup' | 'security';
 
 /**
  * What a build with no backend can do. The static demo has no account service, so
@@ -82,8 +84,14 @@ export function SuperAdminConsolePage() {
    * only one containing EVERY registered customer, including prospects who have
    * chosen no package. The static demo build has no such service, so it opens on
    * the browser-backed Subscribers view rather than an empty panel.
+   *
+   * ── Superseded: the console now opens on the platform OVERVIEW ────────────
+   * An operator arriving here is asking "what needs my attention on the platform
+   * today?", and the answer is a summary rather than whichever roster happened
+   * to be first. The overview is also what makes this screen unmistakably
+   * platform administration rather than a bookkeeping dashboard.
    */
-  const [tab, setTab] = useState<ConsoleTab>(configured ? 'applicants' : 'subscribers');
+  const [tab, setTab] = useState<ConsoleTab>('overview');
 
   const [capabilities, setCapabilities] = useState<PlatformCapabilityName[]>(NO_BACKEND_CAPABILITIES);
   const [creating, setCreating] = useState(false);
@@ -226,14 +234,20 @@ export function SuperAdminConsolePage() {
     [reloadSubscribers],
   );
 
+  /*
+   * Grouped into the sections an operator actually thinks in — customers,
+   * billing, platform — rather than one undifferentiated row. Nothing here is a
+   * bookkeeping section: no accounting, sales, purchasing, inventory or tax.
+   */
   const tabs: TabItem<ConsoleTab>[] = useMemo(() => [
-    { id: 'applicants', label: 'Applicants', icon: UserPlus },
-    { id: 'subscribers', label: 'Subscribers', icon: Building2 },
-    { id: 'members', label: 'Members', icon: Users },
-    { id: 'payments', label: 'Payments', icon: ClipboardCheck, count: pending },
-    { id: 'packages', label: 'Packages & pricing', icon: Package },
-    { id: 'metering', label: 'Metering & infra cost', icon: Server },
-    { id: 'entitlements', label: 'Entitlements', icon: ShieldCheck },
+    { id: 'overview', label: 'Overview', icon: LayoutDashboard, group: 'Overview' },
+    { id: 'applicants', label: 'Applicants', icon: UserPlus, group: 'Customers' },
+    { id: 'subscribers', label: 'Subscribers', icon: Building2, group: 'Customers' },
+    { id: 'members', label: 'Members', icon: Users, group: 'Customers' },
+    { id: 'payments', label: 'Payments', icon: ClipboardCheck, count: pending, group: 'Billing' },
+    { id: 'packages', label: 'Packages & pricing', icon: Package, group: 'Billing' },
+    { id: 'entitlements', label: 'Entitlements', icon: ShieldCheck, group: 'Billing' },
+    { id: 'metering', label: 'Metering & infra cost', icon: Server, group: 'Platform' },
     /*
      * Only for an operator who actually holds `subscribers.delete`. The server
      * refuses everyone else regardless; hiding the tab keeps a support user from
@@ -245,6 +259,7 @@ export function SuperAdminConsolePage() {
             id: 'cleanup' as const,
             label: 'Clean up test/demo data',
             icon: Trash2,
+            group: 'Platform',
             /*
              * Outstanding object deletions, counted at console level so they are
              * visible WITHOUT opening the tab. A file left behind by a crashed
@@ -255,6 +270,18 @@ export function SuperAdminConsolePage() {
           },
         ]
       : []),
+    /*
+     * The operator's OWN account. Deliberately the last tab and in its own
+     * group: it is the one thing here that is not cross-tenant administration.
+     *
+     * It lives inside the console rather than linking out to `/account/security`
+     * so that changing a password never bounces a platform operator through the
+     * subscriber application — they have no organization and no subscription,
+     * and that surface is not theirs. The panel posts to the same endpoint every
+     * other persona uses; being a super administrator grants no extra authority
+     * over a password, not even one's own, beyond knowing the current one.
+     */
+    { id: 'security', label: 'My account', icon: KeyRound, group: 'Account' },
   ], [pending, capabilities, outstandingFiles]);
 
   // Never paint the console while the server check is still in flight.
@@ -333,6 +360,12 @@ export function SuperAdminConsolePage() {
 
       <Tabs tabs={tabs} value={tab} onChange={setTab} />
 
+      {tab === 'overview' && (
+        <PlatformOverviewPanel
+          onOpenTab={setTab}
+          canCleanUp={capabilities.includes('subscribers.delete')}
+        />
+      )}
       {tab === 'applicants' && <ApplicantsPanel />}
 
       {tab === 'cleanup' && <DisposableCleanupPanel focusOrganizationId={cleanupFocus} />}
@@ -398,6 +431,17 @@ export function SuperAdminConsolePage() {
 
       {tab === 'entitlements' && (
         <Section title="Entitlements & subscription lifecycle"><EntitlementAdminPanel /></Section>
+      )}
+
+      {tab === 'security' && (
+        <div className="space-y-4">
+          <Alert variant="info" title="Your own operator account">
+            This changes the password of the account you are signed in with, and nothing else. To
+            issue a credential to a subscriber, use the member actions on the Subscribers or
+            Members tab — those are separate, audited administrative acts.
+          </Alert>
+          <AccountSecurityPanel className="max-w-2xl" />
+        </div>
       )}
 
       <CreateSubscriberDrawer

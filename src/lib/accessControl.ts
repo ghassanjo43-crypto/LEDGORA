@@ -51,6 +51,15 @@ export const ROUTES = {
   adminConsole: '/admin/console',
   /** Forced password change (bootstrap administrators, reset credentials). */
   changePassword: '/account/change-password',
+  /**
+   * Self-service account security. Reachable by EVERY authenticated user —
+   * operator, subscriber owner or ordinary member — with no organization,
+   * subscription, module entitlement or bookkeeping permission required. It is
+   * the one surface that is still there when a subscription has lapsed, which
+   * is precisely when somebody most needs to be able to rotate their password
+   * without asking an administrator.
+   */
+  accountSecurity: '/account/security',
 } as const;
 
 /** Coarse surface a path belongs to (drives access decisions). */
@@ -63,7 +72,11 @@ export type Surface =
   | 'support'
   | 'app'
   | 'admin'
-  /** Forced credential change — reachable by any authenticated user. */
+  /**
+   * Account security: the forced credential change AND the self-service
+   * password change. Reachable by any authenticated user, deliberately without
+   * reference to organization, subscription or entitlement state.
+   */
   | 'account';
 
 /** Paths visitors may open with no authenticated session. */
@@ -271,8 +284,15 @@ export function isPathAllowed(ctx: AccessContext, path: string): boolean {
     return platformRoleHasCapability(ctx.platformRole ?? 'none', requiredAdminCapability(path));
   }
 
-  // A forced password change must stay reachable, or the user is trapped: every
-  // other surface redirects back to it.
+  /*
+   * Account security is open to every authenticated user and closed to everyone
+   * else. Two reasons it is checked HERE, above the subscription rules:
+   *  · a forced password change must stay reachable or the user is trapped —
+   *    every other surface redirects back to it;
+   *  · self-service password change must not depend on having a live
+   *    subscription, an organization or any bookkeeping permission. Nobody
+   *    should have to contact an administrator to rotate their own password.
+   */
   if (surface === 'account') return !!ctx.user;
 
   // Nothing else opens until a required password change is done.

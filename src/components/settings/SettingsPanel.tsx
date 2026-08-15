@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Building2, SlidersHorizontal, ShieldAlert, Upload, Trash2, ImageOff } from 'lucide-react';
+import { Building2, SlidersHorizontal, ShieldAlert, Upload, Trash2, ImageOff, KeyRound } from 'lucide-react';
 import type { CompanySettings, PresentationMode } from '@/types';
 import { LOGO_ACCEPT_ATTR, compressImageDataUrl, readFileAsDataUrl, validateLogoFile } from '@/lib/invoiceLogo';
 import { LogoImage } from '@/components/invoices/LogoImage';
@@ -23,9 +23,16 @@ import { Tabs } from '@/components/ui/Tabs';
 import { Icon } from '@/components/ui/icons';
 import { useToast } from '@/components/ui/Toast';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
+import { AccountSecurityPanel } from '@/components/account/AccountSecurityPanel';
 import { cn } from '@/lib/utils';
 
-type SettingsTab = 'company' | 'presentation' | 'system';
+/**
+ * `security` is about the PERSON signed in, not the company the other tabs
+ * configure. It sits here because Settings is where a user looks for it, but it
+ * carries no company draft, no dirty state and no save/cancel footer — see the
+ * footer condition below, which is why it is excluded there as well as `system`.
+ */
+type SettingsTab = 'company' | 'presentation' | 'security' | 'system';
 
 const MONTHS = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -88,6 +95,7 @@ export function SettingsPanel() {
         tabs={[
           { id: 'company', label: 'Company', icon: Building2 },
           { id: 'presentation', label: 'Presentation', icon: SlidersHorizontal },
+          { id: 'security', label: 'Security', icon: KeyRound },
           { id: 'system', label: 'System', icon: ShieldAlert },
         ]}
       />
@@ -232,7 +240,19 @@ export function SettingsPanel() {
       </Card>
       )}
 
-      {tab !== 'system' && (
+      {tab === 'security' && (
+        <div className="space-y-5">
+          <Alert variant="info" title="Your account">
+            These settings apply to you personally, not to the company. Everyone signed in can
+            change their own password here — an owner, an administrator and a member all use the
+            same form, and nobody can change anybody else&apos;s password from it.
+          </Alert>
+          <AccountSecurityPanel />
+        </div>
+      )}
+
+      {/* Company drafts are saved here; the Security and System tabs own no draft. */}
+      {tab !== 'system' && tab !== 'security' && (
         <div className="flex items-center justify-end gap-2">
           {dirty && <span className="text-xs text-amber-600 dark:text-amber-400">Unsaved changes</span>}
           <Button variant="outline" onClick={() => setDraft(settings)} disabled={!dirty}>

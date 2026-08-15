@@ -15,6 +15,7 @@ import {
   ChevronsUpDown,
   Plus,
   Trash2,
+  KeyRound,
 } from 'lucide-react';
 import { useStore } from '@/store/useStore';
 import { useJournalStore } from '@/store/journalStore';
@@ -329,6 +330,13 @@ export function Topbar({
         </div>
         <MenuSeparator />
         <MenuItem icon={UserCog} onClick={() => setActiveView('settings')}>Preferences</MenuItem>
+        {/*
+          Account security, offered to EVERY signed-in user regardless of role,
+          plan or bookkeeping permission. It navigates to the standalone account
+          surface rather than the Settings view: that route survives a lapsed
+          subscription, which is exactly when someone still needs it.
+        */}
+        <MenuItem icon={KeyRound} onClick={() => navigate(ROUTES.accountSecurity)}>Change password</MenuItem>
         <MenuItem icon={Settings} onClick={() => setActiveView('settings')}>Company settings</MenuItem>
         <MenuItem icon={CreditCard} onClick={() => setActiveView('subscription')}>Subscription</MenuItem>
         <MenuSeparator />

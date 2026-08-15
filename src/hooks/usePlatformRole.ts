@@ -65,7 +65,12 @@ export function usePlatformAccess(): PlatformAccessState {
       role,
       verifiedByBackend,
       simulatedLocally: !verifiedByBackend && role !== 'none' && platformAdminToolsAllowed(),
-      // Only "resolving" when a backend actually exists to wait for.
+      /*
+       * Only "resolving" when a backend actually exists to wait for, and only
+       * until it has answered once — `backendSessionStore.refresh` deliberately
+       * does not regress the status for a re-check, so re-reading an already
+       * known session never blanks the console mid-task.
+       */
       resolving: isApiConfigured() && (status === 'unknown' || status === 'loading'),
     };
   }, [role, status, backendRoles]);

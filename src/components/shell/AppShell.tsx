@@ -51,6 +51,7 @@ import { BillingPaymentPage } from '@/pages/onboarding/BillingPaymentPage';
 import { AdminPaymentReviewPage } from '@/pages/onboarding/AdminPaymentReviewPage';
 import { PlatformConsolePage } from '@/pages/admin/PlatformConsolePage';
 import { ChangePasswordPage } from '@/pages/account/ChangePasswordPage';
+import { AccountSecurityPage } from '@/pages/account/AccountSecurityPage';
 import {
   SubscriptionStatusPage,
   SubscriptionSuspendedPage,
@@ -98,6 +99,12 @@ export function AppShell() {
   const backendUser = useBackendSessionStore((s) => s.user);
   const mustChangePassword = backendUser?.mustChangePassword ?? false;
   const apiMode = isApiConfigured();
+  /*
+   * Paint nothing until the server has answered. This stays true only until the
+   * FIRST verdict: `backendSessionStore.refresh` does not regress the status on
+   * a re-check, so re-reading an already-known session cannot blank the whole
+   * application and remount whatever the user was in the middle of.
+   */
   const sessionResolving = apiMode && (backendStatus === 'unknown' || backendStatus === 'loading');
   // The server positively reported "no session" — route to /login, not welcome.
   const sessionVerifiedUnauthenticated = apiMode && backendStatus === 'ready' && backendUser === null;
@@ -248,7 +255,18 @@ function Surface({ path, platformRole }: { path: string; platformRole: string })
   }
   if (surface === 'account') {
     if (!ctx.user) return <Blank />;
-    return <ChangePasswordPage />;
+    /*
+     * Two screens, ONE endpoint behind them — the difference is framing.
+     *
+     * The forced-change screen is shown whenever a change is outstanding, on
+     * whichever `/account/*` path the user arrived at; the routing effect above
+     * has already pinned them here, and offering the voluntary page's "Back"
+     * button would only lead to a surface the server is refusing. Once nothing
+     * is outstanding, every `/account/*` path is the self-service page —
+     * including a bookmarked `/account/change-password`, which must not greet a
+     * returning user with "your account was created with a temporary password".
+     */
+    return ctx.mustChangePassword ? <ChangePasswordPage /> : <AccountSecurityPage />;
   }
   if (!ctx.user && !ctx.demoActive && !PUBLIC_PATHS.includes(path)) return <Blank />;
 

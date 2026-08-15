@@ -66,6 +66,29 @@ export interface BuildAppOptions {
   extraRoutes?: (app: FastifyInstance) => Promise<void> | void;
 }
 
+/**
+ * Request fields the logger must never write out.
+ *
+ * Exported so it is a TESTABLE policy rather than an inline literal nobody can
+ * assert on: "passwords are not written to logs" is a security claim, and a
+ * claim that cannot be checked is a hope. Every endpoint that accepts a secret
+ * in its body must have its field named here.
+ *
+ * `req.body.token` covers the invitation/reset endpoints, which carry a
+ * single-use credential in the body precisely so it stays out of `req.url` —
+ * and therefore out of this log — see routes/auth. `currentPassword` and
+ * `newPassword` are the self-service change-password body.
+ */
+export const LOG_REDACT_PATHS: readonly string[] = [
+  'req.headers.cookie',
+  'req.headers.authorization',
+  'req.body.password',
+  'req.body.newPassword',
+  'req.body.currentPassword',
+  'req.body.token',
+  'req.body.temporaryPassword',
+];
+
 export async function buildApp({
   config,
   db,
@@ -85,18 +108,7 @@ export async function buildApp({
           level: config.isProduction ? 'info' : 'debug',
           // Never let a credential reach the log, even via an echoed header.
           redact: {
-            // `req.body.token` covers the invitation/reset endpoints, which carry
-            // a single-use credential in the body precisely so it stays out of
-            // `req.url` — and therefore out of this log — see routes/auth.
-            paths: [
-              'req.headers.cookie',
-              'req.headers.authorization',
-              'req.body.password',
-              'req.body.newPassword',
-              'req.body.currentPassword',
-              'req.body.token',
-              'req.body.temporaryPassword',
-            ],
+            paths: [...LOG_REDACT_PATHS],
             censor: '[redacted]',
           },
         },
