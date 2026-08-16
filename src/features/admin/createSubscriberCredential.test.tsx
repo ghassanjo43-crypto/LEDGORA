@@ -142,7 +142,21 @@ function mockConsole(options: {
 }
 
 /** Fill the minimum required fields and submit, in the chosen onboarding mode. */
+/**
+ * Open the Subscribers tab, where subscriber creation lives.
+ *
+ * The console opens on the platform OVERVIEW now — an arriving operator asks
+ * "what needs attention?", not "show me the roster" — so every test that
+ * creates a subscriber selects that tab first.
+ */
+async function openSubscribersTab(): Promise<void> {
+  const tab = screen.getAllByRole('tab').find((t) => (t.textContent ?? '').includes('Subscribers'));
+  if (tab) fireEvent.click(tab);
+  await Promise.resolve();
+}
+
 async function createSubscriber(mode: 'temporary' | 'invite'): Promise<void> {
+  await openSubscribersTab();
   fireEvent.click(await screen.findByTestId('console-add-subscriber'));
   await screen.findByLabelText('Base package');
   fireEvent.change(screen.getByPlaceholderText('Nadia Owner'), { target: { value: 'Nadia Owner' } });
@@ -248,6 +262,7 @@ describe('the subscriber type selector', () => {
     mockConsole({ onCreate: () => json(createdSubscriber(TEMPORARY_CREDENTIAL), 201) });
 
     render(<SuperAdminConsolePage />);
+    await openSubscribersTab();
     fireEvent.click(await screen.findByTestId('console-add-subscriber'));
     await screen.findByLabelText('Base package');
 
@@ -283,6 +298,7 @@ describe('the subscriber type selector', () => {
   it('requires the disposable acknowledgement before a Demo account can be created', async () => {
     mockConsole({ onCreate: () => json(createdSubscriber(TEMPORARY_CREDENTIAL), 201) });
     render(<SuperAdminConsolePage />);
+    await openSubscribersTab();
     fireEvent.click(await screen.findByTestId('console-add-subscriber'));
     await screen.findByLabelText('Base package');
 
@@ -309,6 +325,7 @@ describe('the subscriber type selector', () => {
   it('summarises the choice in the review section before submission', async () => {
     mockConsole({ onCreate: () => json(createdSubscriber(TEMPORARY_CREDENTIAL), 201) });
     render(<SuperAdminConsolePage />);
+    await openSubscribersTab();
     fireEvent.click(await screen.findByTestId('console-add-subscriber'));
     await screen.findByLabelText('Base package');
 
@@ -326,6 +343,7 @@ describe('the subscriber type selector', () => {
   it('describes Production as never permanently deletable, not conditionally', async () => {
     mockConsole({ onCreate: () => json(createdSubscriber(TEMPORARY_CREDENTIAL), 201) });
     render(<SuperAdminConsolePage />);
+    await openSubscribersTab();
     fireEvent.click(await screen.findByTestId('console-add-subscriber'));
     await screen.findByLabelText('Base package');
 

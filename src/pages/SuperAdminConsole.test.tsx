@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { render, screen, cleanup } from '@testing-library/react';
+import { fireEvent, render, screen, cleanup } from '@testing-library/react';
 import { SuperAdminConsolePage } from './SuperAdminConsolePage';
 import { NAV_GROUPS } from '@/config/navigation';
 import { useSessionStore } from '@/store/sessionStore';
@@ -29,6 +29,19 @@ describe('super-admin nav gating', () => {
   });
 });
 
+/**
+ * Open the Subscribers tab.
+ *
+ * The console now opens on the platform OVERVIEW — an operator arriving asks
+ * "what needs attention?", not "show me a roster". These tests are about the
+ * roster, so they select it explicitly instead of relying on it being first.
+ */
+async function openSubscribersTab(): Promise<void> {
+  const tab = screen.getAllByRole('tab').find((t) => (t.textContent ?? '').includes('Subscribers'));
+  if (tab) fireEvent.click(tab);
+  await Promise.resolve();
+}
+
 describe('super-admin console access', () => {
   it('blocks a subscriber (non-platform-admin) from the console', () => {
     useSessionStore.setState({ platformRole: 'none', userName: 'Subscriber' });
@@ -36,21 +49,23 @@ describe('super-admin console access', () => {
     expect(screen.getByText(/platform super-administrator only/i)).toBeTruthy();
   });
 
-  it('shows the console with a subscribers list for the platform super-admin', () => {
+  it('shows the console with a subscribers list for the platform super-admin', async () => {
     useSessionStore.setState({ platformRole: 'super-admin', userName: 'Platform Admin' });
     render(<SuperAdminConsolePage />);
     expect(screen.getByText(/acting as the Ledgora platform super-administrator/i)).toBeTruthy();
-    // Subscribers tab is the default view and lists the demo subscriber organization.
+    // The console opens on the platform overview, so the roster is selected.
+    await openSubscribersTab();
     expect(screen.getByText(/Subscribers \(/i)).toBeTruthy();
     const orgName = useOrganizationStore.getState().organization!.legalName;
     expect(screen.getAllByText(orgName).length).toBeGreaterThan(0);
   });
 
-  it('lists a newly-registered subscriber account in the roster', () => {
+  it('lists a newly-registered subscriber account in the roster', async () => {
     // A visitor signs up (as happens through /register) — a separate account.
     useAuthStore.getState().register({ fullName: 'Lala Tester', email: 'lala@lala.com', mobile: '+971500000000', country: 'AE', password: 'Secret123', acceptedTerms: true });
     useSessionStore.setState({ platformRole: 'super-admin', userName: 'Platform Admin' });
     render(<SuperAdminConsolePage />);
+    await openSubscribersTab();
     // Both the demo subscriber AND the new sign-up are listed.
     expect(screen.getByText(/lala@lala\.com/)).toBeTruthy();
     expect(screen.getByText(/Subscribers \(2\)/)).toBeTruthy();

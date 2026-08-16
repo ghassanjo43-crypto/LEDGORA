@@ -160,6 +160,18 @@ afterEach(() => {
   useSessionStore.setState({ platformRole: 'none', userName: 'Visitor' });
 });
 
+/**
+ * Open the Subscribers tab, where the subscriber controls live.
+ *
+ * The console opens on the platform OVERVIEW, so a test about the roster's
+ * controls selects that tab rather than assuming it is first.
+ */
+async function openSubscribersTab(): Promise<void> {
+  const tab = screen.getAllByRole('tab').find((t) => (t.textContent ?? '').includes('Subscribers'));
+  if (tab) fireEvent.click(tab);
+  await Promise.resolve();
+}
+
 /* ══ Platform Administration ═════════════════════════════════════════════ */
 
 describe('Platform Administration', () => {
@@ -170,6 +182,7 @@ describe('Platform Administration', () => {
       [/\/api\/admin\/applicants/, () => json({ applicants: [], pagination: {}, facets: {} })],
     ]);
     render(<SuperAdminConsolePage />);
+    await openSubscribersTab();
 
     await screen.findByTestId('console-add-subscriber');
     // The control is gone entirely — not merely hidden behind a capability.
@@ -184,6 +197,7 @@ describe('Platform Administration', () => {
       [/\/api\/admin\/applicants/, () => json({ applicants: [], pagination: {}, facets: {} })],
     ]);
     render(<SuperAdminConsolePage />);
+    await openSubscribersTab();
     expect(await screen.findByTestId('console-add-subscriber')).toBeTruthy();
   });
 
