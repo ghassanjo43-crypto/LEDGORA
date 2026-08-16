@@ -125,7 +125,23 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
 
   /* ── Current session ──────────────────────────────────────────────────── */
   app.get('/api/auth/session', async (request, reply) => {
-    if (!request.principal) return reply.send({ authenticated: false, user: null });
+    if (!request.principal) {
+      /*
+       * The browser sent a cookie that resolves to nobody — revoked by a
+       * password reset or a "sign out everywhere", expired, or left over from a
+       * database that no longer has the row. Expire it, so the browser stops
+       * presenting a dead credential on every subsequent request.
+       *
+       * Safe because the answer is already "not authenticated": there is no
+       * session to destroy, and `clearSessionCookie` uses the SAME
+       * SameSite/Secure/Partitioned attributes the cookie was set with, which is
+       * what lets a browser match and evict it. Cleanup is a convenience, not a
+       * fix — `POST /api/auth/login` works whether or not it has happened, which
+       * is what the CSRF hook's principal check guarantees.
+       */
+      if (request.cookies?.[SESSION_COOKIE]) reply.clearSessionCookie();
+      return reply.send({ authenticated: false, user: null });
+    }
     const { user, platformRoles } = request.principal;
     // Re-supply the CSRF token so a page that reloaded (and lost its in-memory
     // copy) can make an unsafe request again without a fresh login. The raw

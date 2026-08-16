@@ -98,13 +98,53 @@ async function sessionPlugin(app: FastifyInstance, options: { config: AppConfig 
     if (principal) void touchSession(app.db, principal.sessionId);
   });
 
-  // Double-submit CSRF check for cookie-authenticated state changes.
+  /**
+   * Double-submit CSRF check for cookie-AUTHENTICATED state changes.
+   *
+   * ── The question this hook must ask ──────────────────────────────────────
+   * CSRF protection exists to defend an authenticated session: the danger is
+   * that a browser attaches a credential cookie automatically to a request the
+   * user never intended. So the condition is "does this request carry authority
+   * the browser supplied on its own?" — which is `request.principal`, resolved
+   * by the hook above from the database.
+   *
+   * It is NOT "is there a string in the session cookie". Those two diverge in
+   * precisely the case an administrator creates on purpose: revoking sessions
+   * (a password reset, "sign out everywhere", a disabled account) deletes the
+   * server's record but cannot reach into a remote browser to delete the cookie.
+   * That browser then sends a cookie authenticating nobody — and the old
+   * condition turned the very login meant to recover the account into a
+   * "cookie-authenticated" request, refused with "Missing or invalid CSRF
+   * token." The reset broke the recovery it existed to provide.
+   *
+   * A cookie that resolves to no principal carries no authority, so forging a
+   * request with it achieves nothing: it acts as an anonymous caller and is
+   * stopped by each route's own authentication guard, which is the correct layer
+   * for "who are you?". Skipping the CSRF check for it therefore gives an
+   * attacker nothing they did not already have with no cookie at all.
+   *
+   * Deliberately NOT solved with a route allow-list over `/api/auth/*`: that
+   * would strip protection from change-password and logout, which are exactly
+   * the authenticated endpoints most worth protecting.
+   *
+   * Ordering note: this hook is registered AFTER the principal-resolving hook in
+   * the same plugin body, and Fastify runs `onRequest` hooks in registration
+   * order — so `request.principal` is always resolved by the time we read it.
+   */
   app.addHook('onRequest', async (request: FastifyRequest) => {
     if (!UNSAFE_METHODS.has(request.method)) return;
+
     const sessionToken = request.cookies?.[SESSION_COOKIE];
-    // No cookie session → nothing to forge with (login/register are protected
-    // by CORS + rate limiting instead).
+    // No cookie at all → nothing to forge with (login/register are protected by
+    // CORS + rate limiting instead).
     if (!sessionToken) return;
+
+    /*
+     * A cookie that no longer resolves — revoked, expired, unknown, or belonging
+     * to an account that is no longer active — is not an authenticated session.
+     * Treat it exactly as "no cookie": there is no authority here to protect.
+     */
+    if (!request.principal) return;
 
     const provided = request.headers[CSRF_HEADER];
     const expected = deriveCsrfToken(sessionToken, config.SESSION_SECRET);

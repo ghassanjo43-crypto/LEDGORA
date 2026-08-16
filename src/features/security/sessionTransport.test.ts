@@ -103,6 +103,71 @@ describe('CSRF token lifecycle', () => {
 
     expect(getCsrfToken()).toBe('');
   });
+
+  /*
+   * ── After an administrative password reset ────────────────────────────────
+   * The page has been open since before the reset, so it still holds the CSRF
+   * token of a session the server has since revoked. The user signs in with the
+   * temporary password from that same page. Two things must hold: the stale
+   * token must not prevent the attempt, and the token that replaces it must be
+   * the one the NEW session issued — a request echoing the old token would be
+   * refused by the CSRF hook the moment the new session is live.
+   */
+  it('replaces a stale token with the one the new login issued', async () => {
+    setCsrfToken('token-of-the-revoked-session');
+    const fetchSpy = mockRoutes({
+      '/api/auth/login': () =>
+        json({
+          user: backendUser({ mustChangePassword: true }),
+          mustChangePassword: true,
+          csrfToken: 'token-of-the-new-session',
+        }),
+    });
+
+    await authApi.signIn({ email: 'person@example.test', password: 'Temp-Issued-42-Zx' });
+
+    expect(getCsrfToken()).toBe('token-of-the-new-session');
+    expect(getCsrfToken()).not.toBe('token-of-the-revoked-session');
+
+    // The attempt was made, not suppressed — and the browser's own cookie
+    // handling, not this client, decides what cookie rides along.
+    const call = fetchSpy.mock.calls.find(([url]) => String(url).includes('/api/auth/login'))!;
+    expect((call[1] as RequestInit).credentials).toBe('include');
+  });
+
+  it('sends the NEW token on the next unsafe request, never the revoked one', async () => {
+    setCsrfToken('token-of-the-revoked-session');
+    const fetchSpy = mockRoutes({
+      '/api/auth/login': () =>
+        json({ user: backendUser(), mustChangePassword: true, csrfToken: 'token-of-the-new-session' }),
+      '/api/auth/change-password': () => json({ ok: true, platformRoles: [] }),
+    });
+
+    await authApi.signIn({ email: 'person@example.test', password: 'Temp-Issued-42-Zx' });
+    await authApi.changePassword({
+      currentPassword: 'Temp-Issued-42-Zx',
+      newPassword: 'Harbour-Lantern-44-Zx',
+    });
+
+    const change = fetchSpy.mock.calls.find(([url]) => String(url).includes('/api/auth/change-password'))!;
+    const headers = (change[1] as RequestInit).headers as Record<string, string>;
+    expect(headers['X-CSRF-Token']).toBe('token-of-the-new-session');
+
+    /*
+     * Neither token reached storage. Scanned by VALUE rather than by asserting
+     * storage is empty — signing in legitimately mirrors the user for routing,
+     * so the claim worth making is that no CSRF token is among what it wrote.
+     */
+    const dump: string[] = [];
+    for (const store of [localStorage, sessionStorage]) {
+      for (let i = 0; i < store.length; i += 1) {
+        const key = store.key(i);
+        if (key) dump.push(key, store.getItem(key) ?? '');
+      }
+    }
+    expect(dump.join(' ')).not.toContain('token-of-the-new-session');
+    expect(dump.join(' ')).not.toContain('token-of-the-revoked-session');
+  });
 });
 
 describe('login then verified session preserves the operator role', () => {

@@ -56,6 +56,23 @@ const listQuery = z.object({
 
 const reasonSchema = z.object({ reason: z.string().trim().min(1, 'A reason is required.').max(1000) });
 
+/**
+ * The target of a reset, taken from the URL PATH and validated before it is used.
+ *
+ * Without this, a malformed id travels straight into a `WHERE id = $1` against a
+ * `uuid` column, Postgres rejects the syntax, and a CLIENT error surfaces as a
+ * 500. Nothing leaks — the error handler returns a generic body — but reporting
+ * "the server broke" for "you sent a bad id" is wrong twice over: it tells the
+ * caller nothing actionable, and it buries a real fault among routine noise in
+ * whatever watches the error rate.
+ *
+ * Validating here also makes the refusal ORDER right: a malformed target is
+ * rejected before any database work happens at all.
+ */
+const targetParams = z.object({
+  userId: z.string().uuid('Name the user to reset, by id.'),
+});
+
 const resetSchema = z.object({
   mode: z.enum(['temporary', 'link']),
   /** Leave a deliberately disabled account disabled rather than reactivating it. */
@@ -126,11 +143,12 @@ export async function adminMemberRoutes(app: FastifyInstance): Promise<void> {
     '/api/admin/members/:userId/reset-password',
     { preHandler: requirePlatformCapability('members.reset_password') },
     async (request, reply) => {
+      const { userId } = parse(targetParams, request.params);
       const input = parse(resetSchema, request.body ?? {});
       const result = await adminResetPassword(
         app.db,
         {
-          userId: request.params.userId,
+          userId,
           ...input,
           temporaryPasswordTtlMinutes:
             input.temporaryPasswordTtlMinutes ?? app.config.TEMPORARY_PASSWORD_TTL_MINUTES,

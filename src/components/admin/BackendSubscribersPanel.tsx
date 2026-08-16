@@ -30,6 +30,7 @@ import { useMemberDirectoryStore } from '@/store/memberDirectoryStore';
 import { useRouterStore } from '@/store/routerStore';
 import { ROUTES } from '@/lib/accessControl';
 import {
+  adminMemberApi,
   adminSubscriberApi,
   type AdminSubscriberQuery,
   type AdminSubscriberRow,
@@ -38,6 +39,7 @@ import {
 import { ApiError } from '@/services/api/client';
 import { requestKeyOf, useAdminSubscriberStore } from '@/store/adminConsoleStores';
 import { ReasonPromptDialog } from './ReasonPromptDialog';
+import { CredentialResultDialog, type CredentialResult } from './CredentialResultDialog';
 import { SubscriberClosureDrawer, ARCHIVED_STATUSES, StatusBadge } from './SubscriberClosureDrawer';
 import { SubscriberMembersDrawer } from './SubscriberMembersDrawer';
 import { RequestDeletionDialog } from './RequestDeletionDialog';
@@ -181,6 +183,20 @@ export function BackendSubscribersPanel({
    * change — the migration default is being confirmed for the first time.
    */
   const [classifyTarget, setClassifyTarget] = useState<AdminSubscriberRow | null>(null);
+  /**
+   * The one-time credential produced by an owner password reset, in PLAIN
+   * component state.
+   *
+   * Deliberately not a store and deliberately not persisted: a credential that
+   * survived a reload would outlive the single response allowed to contain it.
+   * It is dropped the moment the dialog is dismissed. Held HERE, beside the
+   * roster, rather than inside any drawer — the reset triggers a refresh, and a
+   * value owned by something that re-renders is a value that can vanish before
+   * it has been read.
+   */
+  const [credential, setCredential] = useState<CredentialResult | null>(null);
+  /** Set when the reset succeeded but no credential came back with it. */
+  const [missingCredential, setMissingCredential] = useState<string | null>(null);
 
   const load = useAdminSubscriberStore((s) => s.load);
   const status = useAdminSubscriberStore((s) => s.status);
@@ -197,6 +213,14 @@ export function BackendSubscribersPanel({
       create: capabilities.includes('subscribers.create'),
       manage: capabilities.includes('subscribers.manage'),
       assign: capabilities.includes('subscriptions.assign'),
+      /*
+       * Issuing a credential is its OWN capability, never implied by
+       * `subscribers.manage`. A billing administrator may archive a tenant and
+       * still have no business handing someone that tenant owner's account, so
+       * the two are asked separately — and the route re-checks regardless, which
+       * is what actually enforces it.
+       */
+      resetPassword: capabilities.includes('members.reset_password'),
     }),
     [capabilities],
   );
@@ -308,6 +332,76 @@ export function BackendSubscribersPanel({
   };
 
   /**
+   * Reset the OWNER's password for one subscriber.
+   *
+   * ── Why this lives on the subscriber row ─────────────────────────────────────
+   * "The customer who owns this account cannot get in" is the single most common
+   * reason an operator touches a subscriber, and until now the only route to it
+   * was to open Members, find the right person among the tenant's staff, and
+   * recognise which of them is the owner. That is an invitation to reset the
+   * wrong person's password. The row already knows exactly who the owner is, so
+   * the action names them.
+   *
+   * ── It acts on the USER, not the organization ────────────────────────────────
+   * The request goes to `/api/admin/members/:userId/reset-password` with
+   * `row.ownerUserId` — the same endpoint, the same capability and the same
+   * service the Members tab uses. There is deliberately no organization-scoped
+   * reset endpoint: a password belongs to a person, and inventing a second route
+   * that resolved "the owner of org X" server-side would be a second way to
+   * decide whose credential is replaced.
+   *
+   * Nothing about the organization, the subscription, the membership or the
+   * owner's role is touched — this changes authentication credentials only.
+   */
+  const resetOwnerPassword = (row: AdminSubscriberRow): void => {
+    const ownerUserId = row.ownerUserId;
+    // Guarded here as well as at the button: an organization with no owner has
+    // nobody whose password could be reset.
+    if (!ownerUserId) return;
+    const ownerName = row.ownerName ?? row.ownerEmail ?? 'the account owner';
+
+    setPending({
+      title: `Reset password for ${ownerName}?`,
+      description: `A new temporary password will be generated for ${ownerName}${
+        row.ownerEmail ? ` (${row.ownerEmail})` : ''
+      }, the owner of ${row.legalName}. It is shown to you once and cannot be retrieved afterwards. Every session they currently hold ends immediately, and they must choose a new password at their next sign-in. Their organization, role and subscription are unchanged.`,
+      confirmLabel: 'Reset owner password',
+      destructive: true,
+      run: async (reason) => {
+        const result = await adminMemberApi.resetPassword(ownerUserId, { mode: 'temporary', reason });
+
+        /*
+         * Capture the credential FIRST, into state, before `runPending` performs
+         * the roster refresh. The dialog is a sibling of everything that
+         * re-renders, so nothing below can unmount it or discard the value.
+         */
+        if (!result.credential) {
+          // The reset happened and the credential did not arrive. Never report
+          // that as unqualified success: the owner now cannot sign in at all.
+          setMissingCredential(
+            `The password for ${ownerName} was reset, but no temporary credential was returned. Issue a new temporary password from Users & members before telling the customer anything.`,
+          );
+          return `${ownerName}: reset recorded without a retrievable credential.`;
+        }
+
+        setCredential({
+          subjectName: result.member?.fullName ?? ownerName,
+          subjectEmail: result.member?.email ?? row.ownerEmail ?? '',
+          type: result.credential.type,
+          temporaryPassword: result.credential.temporaryPassword,
+          invitationToken: result.credential.invitationToken,
+          expiresAt: result.credential.expiresAt,
+          deliveryStatus: result.credential.deliveryStatus,
+          message: result.credential.message,
+          revokedSessions: result.credential.revokedSessions,
+          mustChangePassword: result.credential.mustChangePassword,
+        });
+        return `Temporary password issued for ${ownerName}, the owner of ${row.legalName}.`;
+      },
+    });
+  };
+
+  /**
    * Enter the subscriber's workspace. The member roster held for any previously
    * viewed subscriber is discarded BEFORE the new context is set, so the Members
    * page can never paint one tenant's people under another tenant's name.
@@ -342,6 +436,20 @@ export function BackendSubscribersPanel({
       {notice && (
         <Alert variant="success" onClose={() => setNotice(null)}>
           <span data-testid="subscribers-notice">{notice}</span>
+        </Alert>
+      )}
+      {/*
+        A reset that produced no credential. Shown as a WARNING with the recovery
+        step, never folded into the success banner: the owner's old password has
+        already stopped working, and nobody has the new one.
+      */}
+      {missingCredential && (
+        <Alert
+          variant="warning"
+          title="Password reset without a retrievable credential"
+          onClose={() => setMissingCredential(null)}
+        >
+          <span data-testid="subscribers-missing-credential">{missingCredential}</span>
         </Alert>
       )}
 
@@ -680,6 +788,26 @@ export function BackendSubscribersPanel({
                             Archive only
                           </span>
                         ))}
+                      {/*
+                        "Reset owner password", named after the PERSON it acts
+                        on. Offered only to an operator holding
+                        `members.reset_password`, and only where the row actually
+                        has an owner — an organization without one has nobody to
+                        reset, and a button that could not work is worse than no
+                        button.
+                      */}
+                      {can.resetPassword && row.ownerUserId && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          disabled={busy}
+                          onClick={() => resetOwnerPassword(row)}
+                          aria-label={`Reset the password of ${row.ownerName ?? 'the owner'} of ${row.legalName}`}
+                          data-testid={`reset-owner-password-${row.organizationId}`}
+                        >
+                          Reset owner password
+                        </Button>
+                      )}
                       {capabilities.includes('members.read') && (
                         <Button
                           size="sm"
@@ -839,6 +967,14 @@ export function BackendSubscribersPanel({
           }}
         />
       )}
+
+      {/*
+        The one-time credential, rendered as a SIBLING of every drawer and dialog
+        above so that closing any of them — or the roster refresh that follows a
+        reset — cannot unmount the value. Dismissing it drops the password from
+        state immediately and irrecoverably; there is no second chance to read it.
+      */}
+      <CredentialResultDialog result={credential} onClose={() => setCredential(null)} />
 
       <ReasonPromptDialog
         open={pending !== null}
