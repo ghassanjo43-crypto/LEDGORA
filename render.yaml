@@ -57,9 +57,26 @@ services:
         value: lax
       - key: COOKIE_PARTITIONED
         value: "false"
+      # The ONE origin every emailed link is built from — reset and invitation
+      # alike. Distinct from FRONTEND_URL above, which is a CORS allow-list and
+      # may hold several origins; a link has to name exactly one.
+      - key: APP_PUBLIC_URL
+        value: https://ledgora-frontend.onrender.com
+      # Sender for transactional email. The domain must be verified in Resend.
+      - key: EMAIL_FROM
+        value: Ledgora <accounts@expertsgroup.me>
       # Provision a PostgreSQL instance and paste its internal connection string.
       - key: DATABASE_URL
         sync: false
       # Generate once: node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
       - key: SESSION_SECRET
+        sync: false
+      # Resend API key. Backend-only: never returned by an API response, never
+      # logged, never sent to the browser. Paste it in the Render dashboard —
+      # `sync: false` keeps it out of this file and out of git.
+      #
+      # Setting this WITHOUT EMAIL_FROM (or the reverse) is refused at boot: a
+      # half-configured mailer that fails every send silently is how password
+      # resets vanish behind a cheerful "instructions have been sent".
+      - key: RESEND_API_KEY
         sync: false

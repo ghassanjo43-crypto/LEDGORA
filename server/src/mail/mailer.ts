@@ -11,7 +11,9 @@
  * ── Which providers this actually works with ─────────────────────────────────
  * ONE contract: a JSON body of `{from, to[], subject, html, text}` with a
  * `Bearer` token in `Authorization`. That is Resend's API, and anything that
- * deliberately mimics it.
+ * deliberately mimics it. Resend is therefore reached with no SDK and no new
+ * dependency — `RESEND_API_KEY` alone is enough, because the endpoint is a
+ * constant this module already knows (`RESEND_ENDPOINT`).
  *
  * It does NOT work with Postmark (`X-Postmark-Server-Token`, and
  * `From`/`To`/`HtmlBody`/`TextBody`), SendGrid (`personalizations[]`) or
@@ -113,6 +115,23 @@ export interface HttpMailerOptions {
 }
 
 /**
+ * How long a send may take before it is called a failure.
+ *
+ * 20 seconds, not 10. The FIRST outbound HTTPS request from a cold process pays
+ * for DNS, the TCP handshake and the TLS handshake before the provider sees any
+ * bytes, and on a container that has just been woken that was observed to exceed
+ * 10s while the very next request completed promptly. A timeout short enough to
+ * fire on a cold start turns the first password reset after an idle period into
+ * a `failed` — which the caller cannot be told about, because the endpoint must
+ * not reveal whether the address exists. The person simply never gets the email.
+ *
+ * The ceiling is still low enough that a genuinely hung provider cannot hold a
+ * request open: nothing waits on the notice path, and forgot-password answers
+ * with the same generic body whatever this returns.
+ */
+export const MAIL_TIMEOUT_MS = 20_000;
+
+/**
  * Production transport: POSTs JSON to a transactional email provider.
  *
  * The request carries the API key in an `Authorization` header, so the
@@ -127,7 +146,7 @@ export class HttpMailer implements Mailer {
     const doFetch = this.options.fetchImpl ?? fetch;
     // A provider that never answers must not hold the request open forever.
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.options.timeoutMs ?? 10_000);
+    const timer = setTimeout(() => controller.abort(), this.options.timeoutMs ?? MAIL_TIMEOUT_MS);
 
     try {
       const response = await doFetch(this.options.endpoint, {
@@ -178,25 +197,63 @@ export interface MailConfig {
   MAIL_PROVIDER_URL?: string | undefined;
   MAIL_API_KEY?: string | undefined;
   MAIL_FROM?: string | undefined;
-  isProduction: boolean;
-  isTest: boolean;
+  /** Resend's own variable names, as the Render service carries them. */
+  RESEND_API_KEY?: string | undefined;
+  EMAIL_FROM?: string | undefined;
+  isProduction?: boolean;
+  isTest?: boolean;
+}
+
+/**
+ * Resend's send endpoint.
+ *
+ * The default when a `RESEND_API_KEY` is present and no explicit provider URL
+ * is: Resend IS the contract this transport speaks, so asking an operator to
+ * also paste the URL would be asking them to restate a constant.
+ */
+export const RESEND_ENDPOINT = 'https://api.resend.com/emails';
+
+export interface ResolvedMailTransport {
+  endpoint: string;
+  apiKey: string;
+  from: string;
+}
+
+/**
+ * Fold the two spellings of the same three settings into one answer.
+ *
+ * `MAIL_*` is the generic, provider-neutral form; `RESEND_API_KEY`/`EMAIL_FROM`
+ * are what Resend and the Render service call them. An explicit `MAIL_*` value
+ * wins, so a deployment can still point this at a Resend-compatible provider
+ * that is not Resend.
+ *
+ * `partial` is the distinction that matters at boot: NOTHING configured means
+ * email is deliberately off, whereas SOME of it configured means somebody meant
+ * to turn it on and left a variable behind. See `config/env`, which refuses the
+ * second case in production.
+ */
+export function resolveMailTransport(config: MailConfig): {
+  transport: ResolvedMailTransport | null;
+  partial: boolean;
+} {
+  const apiKey = config.MAIL_API_KEY ?? config.RESEND_API_KEY;
+  const from = config.MAIL_FROM ?? config.EMAIL_FROM;
+  const endpoint = config.MAIL_PROVIDER_URL ?? (config.RESEND_API_KEY ? RESEND_ENDPOINT : undefined);
+
+  if (endpoint && apiKey && from) return { transport: { endpoint, apiKey, from }, partial: false };
+  return { transport: null, partial: Boolean(config.MAIL_PROVIDER_URL || apiKey || from) };
 }
 
 /**
  * Choose a transport from configuration.
  *
- * Both the endpoint and the key are required before anything is attempted: a
- * half-configured mailer that silently fails every send is worse than one that
- * says up front it is not configured.
+ * The endpoint, the key AND the sender are all required before anything is
+ * attempted: a half-configured mailer that silently fails every send is worse
+ * than one that says up front it is not configured.
  */
 export function createMailer(config: MailConfig): Mailer {
-  if (config.MAIL_PROVIDER_URL && config.MAIL_API_KEY && config.MAIL_FROM) {
-    return new HttpMailer({
-      endpoint: config.MAIL_PROVIDER_URL,
-      apiKey: config.MAIL_API_KEY,
-      from: config.MAIL_FROM,
-    });
-  }
+  const { transport } = resolveMailTransport(config);
+  if (transport) return new HttpMailer(transport);
   // Tests must not print; development gets a breadcrumb that it would have sent.
   if (config.isTest) return new UnavailableMailer();
   return config.isProduction ? new UnavailableMailer() : new ConsoleMailer();

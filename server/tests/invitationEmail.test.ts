@@ -24,6 +24,7 @@ import {
 import {
   ConsoleMailer,
   HttpMailer,
+  MAIL_TIMEOUT_MS,
   UnavailableMailer,
   createMailer,
   type MailMessage,
@@ -232,6 +233,80 @@ describe('the mail transport', () => {
     expect(result.delivery).toBe('failed');
     expect(JSON.stringify(result)).not.toContain('SECRET-TOKEN');
     expect(result.error).toContain('422');
+  });
+
+  /**
+   * The cold-start budget.
+   *
+   * The first outbound HTTPS request from a woken container pays for DNS, TCP
+   * and TLS before the provider sees a byte, and 10s was observed to be too
+   * short for it while the very next request completed promptly. A timeout that
+   * fires on a cold start makes the first password reset after an idle period
+   * vanish — the caller cannot be told, because the endpoint must not reveal
+   * whether the address exists.
+   */
+  it('gives a cold connection 20 seconds before abandoning it', async () => {
+    expect(MAIL_TIMEOUT_MS).toBe(20_000);
+    vi.useFakeTimers();
+    try {
+      let signal: AbortSignal | undefined;
+      const http = new HttpMailer({
+        endpoint: 'https://provider.test/send',
+        apiKey: 'k',
+        from: 'no-reply@ledgora.test',
+        // A provider that has accepted the connection but not yet answered.
+        fetchImpl: ((_url: string, init: RequestInit) =>
+          new Promise((_resolve, reject) => {
+            signal = init.signal!;
+            init.signal!.addEventListener('abort', () =>
+              reject(Object.assign(new Error('aborted'), { name: 'AbortError' })),
+            );
+          })) as unknown as typeof fetch,
+      });
+
+      const pending = http.send({ to: 'a@b.test', subject: 's', html: 'h', text: 't', template: 'x' });
+
+      // Still waiting at the OLD budget — this is the regression this guards.
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(signal!.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(MAIL_TIMEOUT_MS - 10_000);
+      expect(signal!.aborted).toBe(true);
+
+      const result = await pending;
+      expect(result.delivery).toBe('failed');
+      expect(result.error).toMatch(/timed out/i);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('clears the abort timer once the provider has answered', async () => {
+    // A timer left behind would abort a request that is already over, and would
+    // hold the process open for twenty seconds after every send.
+    vi.useFakeTimers();
+    try {
+      let signal: AbortSignal | undefined;
+      const http = new HttpMailer({
+        endpoint: 'https://provider.test/send',
+        apiKey: 'k',
+        from: 'no-reply@ledgora.test',
+        fetchImpl: (async (_url: string, init: RequestInit) => {
+          signal = init.signal!;
+          return new Response(JSON.stringify({ id: 'msg_1' }), { status: 200 });
+        }) as unknown as typeof fetch,
+      });
+
+      expect((await http.send({ to: 'a@b.test', subject: '', html: '', text: '', template: 'x' })).delivery).toBe(
+        'sent',
+      );
+      expect(vi.getTimerCount()).toBe(0);
+
+      await vi.advanceTimersByTimeAsync(MAIL_TIMEOUT_MS + 1_000);
+      expect(signal!.aborted).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('reports failed when the provider cannot be reached', async () => {

@@ -7,6 +7,12 @@
  * invitation ever issued was a link that could not be used. This module is the
  * redemption half.
  *
+ * It is ALSO where a self-service "I forgot my password" link is minted
+ * (`issuePasswordResetToken`), deliberately in the same module and the same
+ * table as the invitation path: one token store, one digest-only rule, one
+ * redemption function. A second reset system would be a second place for
+ * single-use, expiry and revocation to be got subtly wrong.
+ *
  * ── What redemption is allowed to reveal ─────────────────────────────────────
  * `describeToken` powers the "set your password" screen, which needs to know
  * whether the link is still good and whose account it is for. It returns the
@@ -29,6 +35,7 @@
 import type { Kysely } from 'kysely';
 import type { Database } from '../db/schema.js';
 import { hashToken } from '../lib/tokens.js';
+import { generateResetToken } from '../lib/credentials.js';
 import { hashPassword, checkPasswordPolicy } from '../lib/password.js';
 import { writeAuditLog, type AuditContext } from '../lib/audit.js';
 import { errors } from '../lib/errors.js';
@@ -98,6 +105,112 @@ export async function describeToken(db: Kysely<Database>, rawToken: string): Pro
     purpose: row.purpose,
     maskedEmail: maskEmail(row.email),
     expiresAt: new Date(row.expires_at).toISOString(),
+  };
+}
+
+/* ── Self-service reset: issuing the link ─────────────────────────────────── */
+
+export interface IssuedResetToken {
+  userId: string;
+  email: string;
+  /** Returned once, to be put in a link and then dropped. Never persisted. */
+  token: string;
+  expiresAt: Date;
+  ttlMinutes: number;
+}
+
+/**
+ * Mint a reset link for a self-service "I forgot my password" request.
+ *
+ * ── Why this returns `null` rather than throwing ─────────────────────────────
+ * The caller must answer identically whether or not the address exists, so
+ * "there is nobody here" is an ORDINARY result, not an error. Throwing would
+ * push the caller into a catch block that has to remember to reply as if
+ * nothing had happened — and one day it would not.
+ *
+ * ── Who is eligible ──────────────────────────────────────────────────────────
+ * A live account that is not deleted and not DISABLED. Disabling is a deliberate
+ * administrative decision, and a self-service link must never be the thing that
+ * begins to overturn it; redemption refuses a disabled account too, so issuing
+ * the link would only produce a message the holder cannot act on.
+ *
+ * ── What is written, and what is not ─────────────────────────────────────────
+ * Only the SHA-256 digest reaches the database — the same storage the invitation
+ * path uses, in the same table, redeemed by the same `redeemToken`. There is no
+ * second reset system here. The raw token is returned to the caller for exactly
+ * one purpose: to be interpolated into an email body that is never logged.
+ */
+export async function issuePasswordResetToken(
+  db: Kysely<Database>,
+  input: { email: string; ttlMinutes: number },
+  context: AuditContext = {},
+): Promise<IssuedResetToken | null> {
+  const normalized = input.email.trim().toLowerCase();
+  if (!normalized) return null;
+
+  const user = await db
+    .selectFrom('users')
+    .select(['id', 'email', 'status', 'deleted_at'])
+    .where('normalized_email', '=', normalized)
+    .executeTakeFirst();
+
+  if (!user || user.deleted_at || user.status === 'disabled') return null;
+
+  const ttlMinutes = Math.max(input.ttlMinutes, 1);
+  const generated = generateResetToken(ttlMinutes);
+  const now = new Date();
+
+  await db.transaction().execute(async (trx) => {
+    /*
+     * Supersede every outstanding link first.
+     *
+     * `revoked_at`, not `used_at`: an earlier link that a repeated request
+     * replaced was never redeemed, and recording it as used would put a
+     * redemption in the trail that never happened. It also means a stack of
+     * links from impatient repeat requests cannot undermine single-use — only
+     * the newest one works.
+     */
+    await trx
+      .updateTable('password_reset_tokens')
+      .set({ revoked_at: now })
+      .where('user_id', '=', user.id)
+      .where('used_at', 'is', null)
+      .where('revoked_at', 'is', null)
+      .execute();
+
+    await trx
+      .insertInto('password_reset_tokens')
+      .values({
+        user_id: user.id,
+        token_hash: generated.tokenHash,
+        expires_at: generated.expiresAt,
+        purpose: 'reset',
+        // Nobody issued it on the account holder's behalf; the request was
+        // unauthenticated, so there is no operator to name.
+        issued_by_user_id: null,
+      })
+      .execute();
+
+    await writeAuditLog(trx, {
+      ...context,
+      // Attributed to the account itself. The requester is unauthenticated and
+      // therefore unknown — the IP and user agent in `context` are all that can
+      // honestly be said about who asked.
+      actorUserId: user.id,
+      action: 'auth.password_reset_requested',
+      targetType: 'user',
+      targetId: user.id,
+      // No token, no hash. The fact and its window only.
+      metadata: { expiresAt: generated.expiresAt.toISOString(), ttlMinutes, selfService: true },
+    });
+  });
+
+  return {
+    userId: user.id,
+    email: user.email,
+    token: generated.token,
+    expiresAt: generated.expiresAt,
+    ttlMinutes,
   };
 }
 

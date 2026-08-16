@@ -138,6 +138,16 @@ export type AuditAction =
   | 'invitation.created'
   | 'invitation.redeemed'
   | 'invitation.revoked'
+  /**
+   * Somebody asked for a reset link for this account, and one was issued.
+   *
+   * Written only when the address MATCHED a live account — there is nothing to
+   * attribute an entry to otherwise, and minting audit rows for unknown
+   * addresses would turn the trail into the account-enumeration oracle the
+   * endpoint's identical responses exist to deny. It carries no token and no
+   * hash: the fact, the window, and whether the message was accepted.
+   */
+  | 'auth.password_reset_requested'
   | 'auth.password_reset_completed'
   /**
    * An `invited` membership became `active` because its holder established their

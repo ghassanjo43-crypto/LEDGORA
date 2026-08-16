@@ -14,9 +14,11 @@ import { getPlatformRoles, toPublicUser } from '../services/userService.js';
 import { writeAuditLog } from '../lib/audit.js';
 import { errors } from '../lib/errors.js';
 import { requireAuthenticatedUser } from '../guards/platform.js';
-import { describeToken, redeemToken } from '../services/invitationService.js';
+import { describeToken, issuePasswordResetToken, redeemToken } from '../services/invitationService.js';
 import { MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH } from '../lib/password.js';
 import { deriveCsrfToken, CSRF_HEADER, SESSION_COOKIE } from '../plugins/session.js';
+import { buildAcceptUrl } from '../mail/invitationEmail.js';
+import { renderPasswordChangedEmail, renderPasswordResetEmail } from '../mail/passwordEmails.js';
 
 const emailSchema = z.string().trim().min(3).max(320).email('Enter a valid email address.');
 const passwordSchema = z.string().min(1).max(MAX_PASSWORD_LENGTH);
@@ -54,6 +56,48 @@ function parse<T extends z.ZodTypeAny>(schema: T, body: unknown): z.infer<T> {
     throw errors.validation('Please fix the highlighted fields.', { fieldErrors });
   }
   return result.data;
+}
+
+/**
+ * The one answer `POST /api/auth/forgot-password` ever gives.
+ *
+ * A single constant rather than three literals, so no future edit can make the
+ * "we sent it" branch read differently from the "there is nobody here" branch —
+ * which is the whole security property of the endpoint.
+ */
+const FORGOT_PASSWORD_RESPONSE = {
+  ok: true as const,
+  message: 'If an account exists for that address, reset instructions have been sent.',
+};
+
+/**
+ * Tell the account holder their password changed.
+ *
+ * BEST EFFORT, and structurally so: it is called after the change has already
+ * been committed, it swallows every outcome, and nothing downstream reads its
+ * result. A person who has just successfully set a password must not be told the
+ * attempt failed because a mail provider was slow.
+ *
+ * The message carries no link and no credential, so an undelivered one costs the
+ * recipient nothing beyond the notice itself.
+ */
+async function notifyPasswordChanged(
+  app: FastifyInstance,
+  input: { to: string; trigger: 'reset' | 'self_service' },
+): Promise<void> {
+  try {
+    const rendered = renderPasswordChangedEmail({ signInUrl: `${app.config.appPublicUrl}/login` });
+    const result = await app.mailer.send({ to: input.to, ...rendered });
+    if (result.delivery === 'failed') {
+      app.log.warn(
+        { template: rendered.template, trigger: input.trigger, reason: result.error },
+        'password-changed notification could not be delivered',
+      );
+    }
+  } catch (cause) {
+    // A notice is not worth an unhandled rejection on a successful change.
+    app.log.warn({ trigger: input.trigger, err: cause }, 'password-changed notification threw');
+  }
 }
 
 export async function authRoutes(app: FastifyInstance): Promise<void> {
@@ -203,22 +247,100 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       requestContext(request),
     );
 
+    // Best effort, and awaited only so the test seam is deterministic — the
+    // helper swallows every outcome, so it cannot fail the change.
+    await notifyPasswordChanged(app, { to: principal.user.email, trigger: 'self_service' });
+
     const roles = await getPlatformRoles(app.db, principal.user.id);
     return reply.send({ ok: true, platformRoles: roles });
   });
 
-  /* ── Service seams (deliberately not implemented in-browser) ──────────── */
+  /* ── Forgot password ──────────────────────────────────────────────────── */
 
-  // BACKEND SEAM: needs transactional email. The endpoint always reports
-  // success so it cannot be used to discover which addresses are registered.
-  app.post('/api/auth/forgot-password', async (request, reply) => {
-    const input = parse(z.object({ email: emailSchema }), request.body);
-    app.log.info({ email: input.email }, 'password reset requested (delivery not configured)');
-    return reply.send({
-      ok: true,
-      message: 'If an account exists for that address, reset instructions have been sent.',
-    });
-  });
+  /**
+   * Send a reset link, without ever saying whether there was anyone to send it
+   * to.
+   *
+   * ── The non-enumeration rule, and how it is kept ─────────────────────────
+   * EVERY path below returns `FORGOT_PASSWORD_RESPONSE` with status 200: the
+   * address is unknown, the account is disabled, the mail provider refused, no
+   * mail provider is configured at all. None of them is distinguishable by a
+   * caller, because the difference between them is exactly the fact — "is there
+   * an account here?" — that an unauthenticated stranger must not be able to
+   * ask. The one thing that would leak it is an exception escaping to the error
+   * handler as a 500, so the delivery half is wrapped.
+   *
+   * ── What is NOT done here ────────────────────────────────────────────────
+   * No session is issued: the link proves nothing yet. The raw token is never
+   * logged (`app.log` sees the recipient and the outcome only), never audited
+   * and never returned in the response — the browser gets the same three fields
+   * whatever happened. Only its SHA-256 digest reaches the database, via the
+   * SAME `password_reset_tokens` table the invitation flow uses.
+   *
+   * ── Rate limiting ────────────────────────────────────────────────────────
+   * A tighter budget than login. The endpoint cannot enumerate, but each
+   * accepted call posts mail to a third party, so the limit is what stops it
+   * being used to harass an address or to burn the sending domain's reputation.
+   */
+  app.post(
+    '/api/auth/forgot-password',
+    {
+      config: {
+        rateLimit: {
+          max: config.FORGOT_PASSWORD_RATE_LIMIT_MAX,
+          timeWindow: config.LOGIN_RATE_LIMIT_WINDOW_MINUTES * 60_000,
+        },
+      },
+    },
+    async (request, reply) => {
+      const input = parse(z.object({ email: emailSchema }), request.body);
+
+      const issued = await issuePasswordResetToken(
+        app.db,
+        { email: input.email, ttlMinutes: config.PASSWORD_RESET_TTL_MINUTES },
+        requestContext(request),
+      );
+
+      if (!issued) {
+        /*
+         * No account, or one that cannot act on a link. Nothing is sent and
+         * nothing is written — minting an audit row for an unknown address would
+         * turn the trail itself into the oracle this response denies.
+         */
+        return reply.send(FORGOT_PASSWORD_RESPONSE);
+      }
+
+      try {
+        const rendered = renderPasswordResetEmail({
+          // The SAME redemption page the invitation link opens; the token travels
+          // in the query string and is immediately POSTed to `invitation/inspect`
+          // so it never reaches a server request log.
+          resetUrl: buildAcceptUrl(config.appPublicUrl, issued.token),
+          ttlMinutes: issued.ttlMinutes,
+        });
+
+        const result = await app.mailer.send({ to: issued.email, ...rendered });
+        if (result.delivery !== 'sent') {
+          /*
+           * Recorded server-side so an operator can see that recovery is broken,
+           * and reported to the CALLER as nothing at all. The reason is a short
+           * provider-independent string; the body — which holds the live link —
+           * is never touched.
+           */
+          app.log.warn(
+            { template: rendered.template, delivery: result.delivery, reason: result.error },
+            'password reset email was not delivered',
+          );
+        }
+      } catch (cause) {
+        // A provider that throws must not become a 500, which would answer a
+        // question the 200 refuses to.
+        app.log.error({ err: cause }, 'password reset email threw during delivery');
+      }
+
+      return reply.send(FORGOT_PASSWORD_RESPONSE);
+    },
+  );
 
   /* ── Invitation / reset redemption ────────────────────────────────────── */
 
@@ -284,6 +406,19 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const input = parse(redeemSchema, request.body);
       const result = await redeemToken(app.db, input, requestContext(request));
+
+      /*
+       * Tell the account holder, for a RESET only.
+       *
+       * An invitation redemption is the first password the account has ever had,
+       * and its holder has just been through a mail round-trip to get here — a
+       * "your password was changed" notice would be noise. A reset replaces an
+       * existing credential, which is precisely the event somebody needs to hear
+       * about if it was not them.
+       */
+      if (result.purpose === 'reset') {
+        await notifyPasswordChanged(app, { to: result.email, trigger: 'reset' });
+      }
       /*
        * No session is issued here. Completing setup and signing in are separate
        * acts: the person proves they hold the link, then proves they know the

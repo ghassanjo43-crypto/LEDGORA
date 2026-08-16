@@ -195,7 +195,9 @@ async function deliverInvitation(
     organizationName: input.organizationName,
     inviterName: input.inviterName ?? null,
     roleLabel: input.roleLabel,
-    acceptUrl: buildAcceptUrl(app.config.FRONTEND_URL, input.token),
+    // `appPublicUrl`, not `FRONTEND_URL`: the latter is a CORS allow-list that
+    // may hold several origins, and a link has to name exactly one.
+    acceptUrl: buildAcceptUrl(app.config.appPublicUrl, input.token),
     expiresAt: new Date(input.expiresAt),
     isResend: input.isResend,
   });
