@@ -9,7 +9,7 @@
  * Nothing in this module activates a subscription. Activation is exclusively an
  * administrator action after payment verification (Phase 3).
  */
-import type { Kysely, Transaction } from 'kysely';
+import { sql, type Kysely, type Transaction } from 'kysely';
 import type { Database, SubscriptionStatus } from '../db/schema.js';
 import { generatePaymentReference } from '../lib/tokens.js';
 import { writeAuditLog, type AuditContext } from '../lib/audit.js';
@@ -297,10 +297,21 @@ export async function confirmSubscription(
 export interface CurrentSubscriptionView {
   subscription: {
     id: string;
+    organizationId: string;
     status: SubscriptionStatus;
     billingCycle: string;
+    planId: string | null;
     planCode: string | null;
     planName: string | null;
+    planDescription: string | null;
+    edition: string | null;
+    currency: string | null;
+    monthlyPrice: number | null;
+    annualPrice: number | null;
+    userLimit: number;
+    entityLimit: number;
+    modules: string[];
+    paymentStatus: string | null;
     paymentReference: string | null;
     startsAt: string | null;
     expiresAt: string | null;
@@ -327,15 +338,28 @@ export async function getCurrentSubscription(
     .leftJoin('subscription_plans', 'subscription_plans.id', 'subscriptions.plan_id')
     .select([
       'subscriptions.id',
+      'subscriptions.organization_id',
       'subscriptions.status',
       'subscriptions.billing_cycle',
       'subscriptions.payment_reference',
       'subscriptions.starts_at',
       'subscriptions.expires_at',
+      'subscriptions.plan_id',
+      'subscriptions.user_limit',
+      'subscriptions.entity_limit',
       'subscription_plans.code as plan_code',
       'subscription_plans.name as plan_name',
+      'subscription_plans.description as plan_description',
+      'subscription_plans.edition as plan_edition',
+      'subscription_plans.currency as plan_currency',
+      'subscription_plans.monthly_price as plan_monthly_price',
+      'subscription_plans.annual_price as plan_annual_price',
+      'subscription_plans.module_entitlements as plan_modules',
     ])
     .where('subscriptions.organization_id', '=', organizationId)
+    // Match the duplicate-purchase authority: an active row outranks a newer
+    // abandoned draft, so bootstrap can never deny what purchase rejects.
+    .orderBy(sql<number>`case when subscriptions.status = 'active' then 0 else 1 end`)
     .orderBy('subscriptions.created_at', 'desc')
     .executeTakeFirst();
 
@@ -354,10 +378,23 @@ export async function getCurrentSubscription(
   return {
     subscription: {
       id: subscription.id,
+      organizationId: subscription.organization_id,
       status: subscription.status,
       billingCycle: subscription.billing_cycle,
+      planId: subscription.plan_id,
       planCode: subscription.plan_code,
       planName: subscription.plan_name,
+      planDescription: subscription.plan_description,
+      edition: subscription.plan_edition,
+      currency: subscription.plan_currency,
+      monthlyPrice: subscription.plan_monthly_price === null ? null : Number(subscription.plan_monthly_price),
+      annualPrice: subscription.plan_annual_price === null ? null : Number(subscription.plan_annual_price),
+      userLimit: subscription.user_limit ?? 0,
+      entityLimit: subscription.entity_limit ?? 0,
+      modules: typeof subscription.plan_modules === 'string' ? JSON.parse(subscription.plan_modules) : (subscription.plan_modules ?? []),
+      // Direct administrator activation is the paid commercial authority even
+      // when it did not originate from a customer invoice.
+      paymentStatus: invoice?.status ?? (subscription.status === 'active' ? 'paid' : null),
       paymentReference: subscription.payment_reference,
       startsAt: subscription.starts_at ? new Date(subscription.starts_at).toISOString() : null,
       expiresAt: subscription.expires_at ? new Date(subscription.expires_at).toISOString() : null,

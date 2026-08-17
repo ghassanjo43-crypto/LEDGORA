@@ -169,6 +169,7 @@ function SubscriptionOverview({
   const activePlan = useActivePlan();
   const reminder = useRenewalReminder();
   const cancelSubscription = useBillingStore((s) => s.cancelSubscription);
+  const paymentStatus = useBillingStore((s) => s.serverPaymentStatus);
   const statusMeta = STATUS_META[subscription.status];
   const active = statusIsActive(subscription.status);
   const info = EDITION_INFO[subscription.edition];
@@ -236,7 +237,8 @@ function SubscriptionOverview({
             </div>
           )}
 
-          <dl className="grid grid-cols-2 gap-3 border-t border-slate-100 pt-4 dark:border-slate-800 sm:grid-cols-4">
+          <dl className="grid grid-cols-2 gap-3 border-t border-slate-100 pt-4 dark:border-slate-800 sm:grid-cols-5">
+            <Stat icon={ShieldCheck} label="Payment" value={paymentStatus ? paymentStatus.replaceAll('_', ' ') : 'Not recorded'} />
             <Stat icon={CalendarClock} label="Started" value={subscription.startsAt ? formatDate(subscription.startsAt) : '—'} />
             <Stat icon={CalendarClock} label="Expires" value={subscription.expiresAt ? formatDate(subscription.expiresAt) : 'No expiry'} />
             <Stat icon={Users} label="User limit" value={String(subscription.userLimit)} />

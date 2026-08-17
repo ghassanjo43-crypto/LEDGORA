@@ -22,6 +22,7 @@ function useSessionInputs(): SessionInputs {
   const onboardingStatus = useOrganizationStore((s) => s.subscription?.status ?? null);
   const entitlementStatus = useEntitlementStore((s) => s.subscription.status);
   const activePlanId = useBillingStore((s) => s.activePlanId);
+  const subscriptionHydration = useBillingStore((s) => s.subscriptionHydration);
   const demoActive = useAccountSessionStore((s) => s.demoActive);
 
   return useMemo(
@@ -32,9 +33,10 @@ function useSessionInputs(): SessionInputs {
       onboardingStatus,
       entitlementStatus,
       subscriptionPlanId: activePlanId || null,
-      demoActive,
+      // A server-confirmed active subscription always outranks stale demo state.
+      demoActive: subscriptionHydration === 'active' ? false : demoActive,
     }),
-    [users, currentUserId, organizationId, organizationName, onboardingStatus, entitlementStatus, activePlanId, demoActive],
+    [users, currentUserId, organizationId, organizationName, onboardingStatus, entitlementStatus, activePlanId, subscriptionHydration, demoActive],
   );
 }
 

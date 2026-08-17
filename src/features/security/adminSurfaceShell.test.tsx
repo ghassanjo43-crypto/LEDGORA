@@ -38,6 +38,24 @@ const sessionResponse = (user: Record<string, unknown> | null) =>
     headers: { 'content-type': 'application/json' },
   });
 
+const accountBootstrap = (user: Record<string, unknown> | null) =>
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    const url = String(input);
+    if (url.endsWith('/api/organizations/current')) {
+      return new Response(JSON.stringify({ organization: null }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    if (url.endsWith('/api/subscriptions/current')) {
+      return new Response(JSON.stringify({ subscription: null, invoice: null, bank: null }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    return sessionResponse(user);
+  });
+
 function goto(path: string): void {
   window.history.replaceState({}, '', path);
   useRouterStore.getState().sync();
@@ -113,7 +131,7 @@ describe('operator refreshing /admin/console', () => {
   });
 
   it('never lands on package selection', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(sessionResponse(adminUser()));
+    accountBootstrap(adminUser());
 
     goto(ROUTES.adminConsole);
     render(<AppShell />);
@@ -126,7 +144,7 @@ describe('operator refreshing /admin/console', () => {
 
 describe('regular customer at /admin/console', () => {
   it('is redirected away into the customer funnel', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(sessionResponse(adminUser({ platformRoles: [] })));
+    accountBootstrap(adminUser({ platformRoles: [] }));
 
     goto(ROUTES.adminConsole);
     render(<AppShell />);
@@ -139,9 +157,7 @@ describe('regular customer at /admin/console', () => {
 
 describe('bootstrap administrator with a temporary password', () => {
   it('is held on the password change page before the console', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      sessionResponse(adminUser({ mustChangePassword: true })),
-    );
+    accountBootstrap(adminUser({ mustChangePassword: true }));
 
     goto(ROUTES.adminConsole);
     render(<AppShell />);

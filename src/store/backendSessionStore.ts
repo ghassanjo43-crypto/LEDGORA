@@ -14,7 +14,7 @@ import { create } from 'zustand';
 import type { BackendPlatformRole, BackendUser } from '@/services/api/authApi';
 import { authApi } from '@/services/api/authApi';
 import { isApiConfigured, clearCsrfToken } from '@/services/api/client';
-import { mirrorVerifiedUser, mirrorOrganizationFromBackend, clearLocalSession } from '@/services/sessionMirror';
+import { mirrorVerifiedUser, mirrorOrganizationFromBackend, mirrorSubscriptionFromBackend, clearLocalSession } from '@/services/sessionMirror';
 
 export type BackendSessionStatus = 'unknown' | 'loading' | 'ready' | 'unavailable';
 
@@ -69,7 +69,15 @@ export const useBackendSessionStore = create<BackendSessionState>()((set) => ({
         // cold reload (persisted stores, no in-memory state) still has a current
         // user and organization to route on.
         mirrorVerifiedUser(result.user);
-        await mirrorOrganizationFromBackend();
+        // Platform operators have no subscriber onboarding lifecycle of their
+        // own. Tenant bootstrap is therefore both unnecessary and harmful for
+        // them: a billing read must never be able to discard a verified admin
+        // role or CSRF token. An operator explicitly entering a tenant uses the
+        // separate viewed-organization flow.
+        if ((result.user.platformRoles ?? []).length === 0) {
+          await mirrorOrganizationFromBackend();
+          await mirrorSubscriptionFromBackend();
+        }
         set({ status: 'ready', user: result.user, platformRoles: result.user.platformRoles ?? [], error: null });
         return;
       }

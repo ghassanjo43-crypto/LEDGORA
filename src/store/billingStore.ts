@@ -80,6 +80,9 @@ interface BillingState {
   auditTrail: BillingAuditEntry[];
   /** Plan the active subscription was last activated from (drives upgrade math). */
   activePlanId?: string;
+  /** Server subscription authority: loading is distinct from no subscription. */
+  subscriptionHydration: 'idle' | 'loading' | 'active' | 'inactive' | 'error';
+  serverPaymentStatus: string | null;
   seeded: boolean;
 
   ensureSeeded: () => void;
@@ -111,7 +114,7 @@ interface BillingState {
   resetToDefault: () => void;
 }
 
-function seedState(): Pick<BillingState, 'plans' | 'settings' | 'invoices' | 'auditTrail' | 'seeded' | 'activePlanId'> {
+function seedState(): Pick<BillingState, 'plans' | 'settings' | 'invoices' | 'auditTrail' | 'seeded' | 'activePlanId' | 'subscriptionHydration' | 'serverPaymentStatus'> {
   const now = nowIso();
   return {
     plans: makeSeedPlans(now),
@@ -120,6 +123,8 @@ function seedState(): Pick<BillingState, 'plans' | 'settings' | 'invoices' | 'au
     auditTrail: [],
     seeded: true,
     activePlanId: undefined,
+    subscriptionHydration: 'idle',
+    serverPaymentStatus: null,
   };
 }
 

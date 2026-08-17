@@ -24,6 +24,12 @@ import { subscriptionApi } from './api/authApi';
 import { clearCsrfToken } from './api/client';
 import { useAuthStore } from '@/store/authStore';
 import { useOrganizationStore } from '@/store/organizationStore';
+import { useBillingStore } from '@/store/billingStore';
+import { useEntitlementStore } from '@/store/entitlementStore';
+import { useAccountSessionStore } from '@/store/accountSessionStore';
+import { publicToSubscriptionPlan } from './api/planCatalogApi';
+import type { LedgoraEdition, LedgoraModule } from '@/types/entitlements';
+import type { SubscriptionStatus } from '@/types/subscription';
 import { clearWorkspaceForSignOut } from '@/lib/freeDemoSession';
 import type { RegisteredUser } from '@/types/onboarding';
 
@@ -124,4 +130,58 @@ export async function mirrorOrganizationFromBackend(): Promise<Record<string, un
   await useOrganizationStore.getState().hydrateFromBackend({ force: true });
   const organization = useOrganizationStore.getState().organization;
   return organization ? { ...organization } : null;
+}
+
+/** Hydrate every subscriber access decision from the same server row used by purchase conflict checks. */
+export async function mirrorSubscriptionFromBackend(): Promise<void> {
+  useBillingStore.setState({ subscriptionHydration: 'loading' });
+  try {
+    const { subscription } = await subscriptionApi.current();
+    if (!subscription) {
+      useBillingStore.setState({ activePlanId: undefined, subscriptionHydration: 'inactive', serverPaymentStatus: null });
+      useOrganizationStore.setState({ subscription: null });
+      return;
+    }
+    const status = subscription.status === 'past_due' ? 'past-due' : subscription.status as SubscriptionStatus;
+    const active = status === 'active' || status === 'past-due';
+    if (subscription.planId) {
+      const plan = publicToSubscriptionPlan({
+        id: subscription.planId, code: subscription.planCode ?? '', name: subscription.planName ?? '',
+        description: subscription.planDescription, edition: subscription.edition ?? 'core',
+        currency: subscription.currency ?? 'USD', monthlyPrice: subscription.monthlyPrice ?? 0,
+        annualPrice: subscription.annualPrice, userLimit: subscription.userLimit,
+        entityLimit: subscription.entityLimit, modules: subscription.modules,
+      }, 0);
+      useBillingStore.setState((state) => ({
+        plans: [...state.plans.filter((item) => item.id !== plan.id), plan],
+        activePlanId: active ? plan.id : undefined,
+        seeded: true,
+        subscriptionHydration: active ? 'active' : 'inactive',
+        serverPaymentStatus: subscription.paymentStatus,
+      }));
+    } else {
+      useBillingStore.setState({ activePlanId: undefined, subscriptionHydration: 'inactive', serverPaymentStatus: subscription.paymentStatus });
+    }
+    useOrganizationStore.setState({ subscription: {
+      id: subscription.id, organizationId: subscription.organizationId,
+      status: subscription.status as never, basePlanCode: subscription.planCode ?? '', addOnModuleCodes: [],
+      extraUsers: 0, extraCompanies: 0, currency: subscription.currency ?? 'USD',
+      monthlyTotal: subscription.monthlyPrice ?? 0, startsAt: subscription.startsAt ?? undefined,
+      expiresAt: subscription.expiresAt ?? undefined, paymentReference: subscription.paymentReference ?? undefined,
+      createdAt: subscription.startsAt ?? new Date().toISOString(), updatedAt: new Date().toISOString(),
+    }});
+    useEntitlementStore.getState().replaceSubscription({
+      id: subscription.id, organizationId: subscription.organizationId,
+      edition: (subscription.edition ?? 'core') as LedgoraEdition, status,
+      enabledModules: subscription.modules as LedgoraModule[], disabledModules: [],
+      userLimit: subscription.userLimit, entityLimit: subscription.entityLimit,
+      startsAt: subscription.startsAt ?? new Date().toISOString(), expiresAt: subscription.expiresAt ?? undefined,
+      activationMethod: 'admin', createdAt: subscription.startsAt ?? new Date().toISOString(),
+      updatedAt: new Date().toISOString(), activatedAt: active ? (subscription.startsAt ?? undefined) : undefined,
+    });
+    if (active) useAccountSessionStore.setState({ demoActive: false });
+  } catch (error) {
+    useBillingStore.setState({ subscriptionHydration: 'error' });
+    throw error;
+  }
 }

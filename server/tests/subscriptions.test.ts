@@ -160,6 +160,25 @@ describe('organizations', () => {
 /* ── Subscription + invoice + payment reference ──────────────────────────── */
 
 describe('subscription confirmation', () => {
+  it('returns the active canonical package used by duplicate-subscription checks', async () => {
+    const cookies = await customerWithOrg('assigned@acme.test');
+    const organization = (await ctx.app.inject({ method: 'GET', url: '/api/organizations/current', headers: authHeaders(cookies) })).json().organization;
+    const planId = await firstPlanId();
+    await ctx.db.insertInto('subscriptions').values({
+      organization_id: organization.id, plan_id: planId, status: 'active', billing_cycle: 'monthly',
+      user_limit: 3, entity_limit: 1, starts_at: new Date('2026-08-01'), expires_at: new Date('2026-09-01'),
+    }).execute();
+
+    const current = await ctx.app.inject({ method: 'GET', url: '/api/subscriptions/current', headers: authHeaders(cookies) });
+    expect(current.statusCode).toBe(200);
+    expect(current.json().subscription).toMatchObject({ organizationId: organization.id, status: 'active', paymentStatus: 'paid', planId, planCode: 'core', planName: 'Ledgora Core' });
+    expect(current.json().subscription.modules).toEqual(expect.arrayContaining(['accounting', 'invoicing', 'reports']));
+
+    const duplicate = await ctx.app.inject({ method: 'POST', url: '/api/subscriptions', headers: authHeaders(cookies), payload: { planId } });
+    expect(duplicate.statusCode).toBe(409);
+    expect(duplicate.json().error.message).toContain('already has an active subscription');
+  });
+
   it('creates a draft that is not active and has no invoice', async () => {
     const cookies = await customerWithOrg();
     const response = await ctx.app.inject({

@@ -69,6 +69,7 @@ describe('CSRF token lifecycle', () => {
     mockRoutes({
       '/api/auth/login': () => json({ user: backendUser(), mustChangePassword: false, csrfToken: 'csrf-from-login' }),
       '/api/organizations/current': () => json({ organization: null }),
+      '/api/subscriptions/current': () => json({ subscription: null, invoice: null, bank: null }),
       '/api/auth/session': () => json({ authenticated: true, user: backendUser(), csrfToken: 'csrf-from-session' }),
     });
 

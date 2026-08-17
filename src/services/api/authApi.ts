@@ -151,7 +151,15 @@ export const subscriptionApi = {
 
   current() {
     return api.get<{
-      subscription: Record<string, unknown> | null;
+      subscription: ({
+        id: string; organizationId: string; status: string; billingCycle: string;
+        planId: string | null; planCode: string | null; planName: string | null;
+        planDescription: string | null; edition: string | null; currency: string | null;
+        monthlyPrice: number | null; annualPrice: number | null;
+        userLimit: number; entityLimit: number; modules: string[];
+        paymentStatus: string | null;
+        paymentReference: string | null; startsAt: string | null; expiresAt: string | null;
+      }) | null;
       invoice: Record<string, unknown> | null;
       bank: Record<string, unknown> | null;
     }>('/api/subscriptions/current');

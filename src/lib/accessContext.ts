@@ -66,6 +66,10 @@ export function isSessionResolving(): boolean {
   // able from one who has none, and would be bounced back to the organization
   // step they just completed. Only wait while a session actually exists.
   if (!useBackendSessionStore.getState().user) return false;
+  // A verified platform operator has no tenant organization of their own. Its
+  // organization hydration state belongs only to an explicitly viewed tenant
+  // and must not hold the platform session in a resolving state.
+  if (useBackendSessionStore.getState().platformRoles.length > 0) return false;
   return organizationAvailability() === 'loading';
 }
 
