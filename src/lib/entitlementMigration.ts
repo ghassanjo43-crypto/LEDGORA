@@ -15,6 +15,25 @@ import type {
   SubscriptionStatus,
 } from '@/types/subscription';
 import { EDITION_LIMITS } from '@/config/editions';
+import { isSafeDate } from './safeDate';
+
+const OPTIONAL_DATES = ['expiresAt', 'activatedAt', 'suspendedAt'] as const;
+const REQUIRED_DATES = ['startsAt', 'createdAt', 'updatedAt'] as const;
+
+/** Repair only malformed lifecycle fields; valid persisted values remain byte-for-byte unchanged. */
+export function sanitizeSubscriptionDates(
+  subscription: OrganizationSubscription,
+  fallback = new Date().toISOString(),
+): OrganizationSubscription {
+  const next = { ...subscription } as OrganizationSubscription & Record<string, unknown>;
+  for (const field of OPTIONAL_DATES) {
+    if (!isSafeDate(next[field])) delete next[field];
+  }
+  for (const field of REQUIRED_DATES) {
+    if (!isSafeDate(next[field])) next[field] = fallback;
+  }
+  return next;
+}
 
 /** Deterministic-ish id without pulling in the app's generateId (keeps this pure). */
 function subId(): string {

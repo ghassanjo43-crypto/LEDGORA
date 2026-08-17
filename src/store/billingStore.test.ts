@@ -222,6 +222,20 @@ describe('upgrade and downgrade', () => {
 /* ── Lifecycle: cancel, expiry, grace ─────────────────────────────────────── */
 
 describe('subscription lifecycle', () => {
+  it.each([
+    ['invalid date string', 'not-a-date'],
+    ['empty string', ''],
+    ['null legacy value', null],
+    ['undefined legacy value', undefined],
+    ['malformed JSON date value', { date: '2026-07-20' }],
+    ['impossible date', '2026-02-30'],
+  ])('does not throw during expiry/bootstrap for %s', (_label, expiresAt) => {
+    ent().replaceSubscription({ ...ent().subscription, expiresAt } as never);
+    expect(() => billing().applyExpiryTransitions()).not.toThrow();
+    expect(() => billing().ensureSeeded()).not.toThrow();
+    expect(ent().subscription.status).toBe('active');
+  });
+
   it('cancels without deleting data and blocks new posting', () => {
     billing().cancelSubscription('customer request');
     expect(ent().subscription.status).toBe('cancelled');

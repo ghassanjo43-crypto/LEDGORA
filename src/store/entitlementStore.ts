@@ -27,6 +27,7 @@ import {
   createEnterpriseDevelopmentSubscription,
   isSubscriptionShape,
   migrateExistingOrganization,
+  sanitizeSubscriptionDates,
 } from '@/lib/entitlementMigration';
 import { sortModules } from '@/config/editions';
 import { operatorAuditContext, resolveAuditActor } from './platformFullAccess';
@@ -312,7 +313,7 @@ export const useEntitlementStore = create<EntitlementState>()(
       migrate: (persisted, _version) => {
         const p = (persisted ?? {}) as Partial<EntitlementState>;
         const subscription = isSubscriptionShape(p.subscription)
-          ? p.subscription
+          ? sanitizeSubscriptionDates(p.subscription)
           : migrateExistingOrganization(null);
         const auditTrail: SubscriptionAuditEntry[] = Array.isArray(p.auditTrail)
           ? p.auditTrail
@@ -324,7 +325,7 @@ export const useEntitlementStore = create<EntitlementState>()(
       merge: (persisted, current) => {
         const p = (persisted ?? {}) as Partial<EntitlementState>;
         const subscription = isSubscriptionShape(p.subscription)
-          ? p.subscription
+          ? sanitizeSubscriptionDates(p.subscription)
           : migrateExistingOrganization(current.subscription ?? null);
         return {
           ...current,

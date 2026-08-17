@@ -12,15 +12,17 @@ import type {
   SubscriptionInvoice,
   SubscriptionPlan,
 } from '@/types/billing';
+import { parseSafeDate } from './safeDate';
 
 /** yyyy-mm-dd for a Date. */
 export function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10);
+  return Number.isFinite(d.getTime()) ? d.toISOString().slice(0, 10) : '';
 }
 
 /** Add whole months to an ISO date, clamping day-of-month overflow. */
 export function addMonths(isoDay: string, months: number): string {
-  const d = new Date(`${isoDay}T00:00:00Z`);
+  const d = parseSafeDate(isoDay);
+  if (!d) return '';
   const targetMonth = d.getUTCMonth() + months;
   const result = new Date(Date.UTC(d.getUTCFullYear(), targetMonth, 1));
   // clamp day to the last valid day of the target month
@@ -33,8 +35,8 @@ export function addMonths(isoDay: string, months: number): string {
 
 /** Inclusive day difference b - a (in whole days). */
 export function daysBetween(aIso: string, bIso: string): number {
-  const a = new Date(`${aIso}T00:00:00Z`).getTime();
-  const b = new Date(`${bIso}T00:00:00Z`).getTime();
+  const a = parseSafeDate(aIso)?.getTime() ?? Number.NaN;
+  const b = parseSafeDate(bIso)?.getTime() ?? Number.NaN;
   return Math.round((b - a) / 86_400_000);
 }
 
@@ -193,7 +195,8 @@ export function computeRenewalReminder(
 
 /** Add whole days to an ISO date. */
 export function addDays(isoDay: string, days: number): string {
-  const d = new Date(`${isoDay}T00:00:00Z`);
+  const d = parseSafeDate(isoDay);
+  if (!d) return '';
   d.setUTCDate(d.getUTCDate() + days);
   return isoDate(d);
 }
@@ -212,7 +215,7 @@ export function computeExpiryTransition(
   today: string,
 ): ExpiryTransition {
   const { expiresAt, status } = subscription;
-  if (!expiresAt) return 'none';
+  if (typeof expiresAt !== 'string' || !parseSafeDate(expiresAt) || !parseSafeDate(today)) return 'none';
   const graceEnd = addDays(expiresAt, settings.graceDays);
   if (today > graceEnd) {
     return status === 'expired' ? 'none' : 'to-expired';
