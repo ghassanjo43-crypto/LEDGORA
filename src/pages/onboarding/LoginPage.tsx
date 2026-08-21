@@ -166,6 +166,7 @@ export function LoginPage() {
   return (
     <CenteredCard
       title="Sign in to LEDGORA"
+      brandSize="login"
       footer={
         <span>
           New to LEDGORA?{' '}

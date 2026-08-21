@@ -11,7 +11,7 @@ import { useRouterStore } from '@/store/routerStore';
 import { ROUTES } from '@/lib/accessControl';
 import { useHasCurrentOrganization } from '@/lib/currentOrganization';
 
-export function Brand({ className }: { className?: string }) {
+export function Brand({ className, size = 'default' }: { className?: string; size?: 'default' | 'login' }) {
   const navigate = useRouterStore((s) => s.navigate);
   return (
     <button
@@ -23,8 +23,19 @@ export function Brand({ className }: { className?: string }) {
       <span
         role="img"
         aria-label="Ledgora"
-        className="h-8 w-32 rounded bg-center bg-no-repeat"
-        style={{ backgroundImage: "url('/ledgora-logo.png')", backgroundSize: 'contain' }}
+        className={cn(
+          'rounded bg-center bg-no-repeat',
+          size === 'login'
+            ? 'h-11 w-[180px]'
+            : 'h-8 w-32',
+        )}
+        style={{
+          backgroundImage: "url('/ledgora-logo.png')",
+          // The source PNG has a broad blank canvas around the artwork. The
+          // login variant removes that visual constraint without changing
+          // the logo's aspect ratio or cropping the mark/wordmark themselves.
+          backgroundSize: size === 'login' ? '130% auto' : 'contain',
+        }}
       />
     </button>
   );
@@ -76,18 +87,20 @@ export function CenteredCard({
   children,
   width = 'md',
   footer,
+  brandSize = 'default',
 }: {
   title: string;
   subtitle?: string;
   children: ReactNode;
   width?: 'md' | 'lg' | 'xl';
   footer?: ReactNode;
+  brandSize?: 'default' | 'login';
 }) {
   const maxW = width === 'xl' ? 'max-w-3xl' : width === 'lg' ? 'max-w-xl' : 'max-w-md';
   return (
     <div className="flex min-h-full flex-col items-center justify-center bg-slate-50 px-4 py-10 dark:bg-slate-950">
       <div className="mb-6">
-        <Brand />
+        <Brand size={brandSize} />
       </div>
       <div className={cn('w-full rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-8', maxW)}>
         <h1 className="text-xl font-semibold text-slate-900 dark:text-slate-50">{title}</h1>
