@@ -33,6 +33,9 @@ import { resolveInventoryAccounts } from '@/lib/inventoryAccounts';
 import { useProjectStore } from '@/store/projectStore';
 import { PrintDocument } from '@/components/ui/PrintDocument';
 import { BillRenderer } from './BillRenderer';
+import { getCurrentUser } from '@/store/authStore';
+import { roleCanEditBills } from '@/lib/transactionDocumentPermissions';
+import { isPlatformAdminFullAccess } from '@/store/platformFullAccess';
 
 interface Props {
   open: boolean;
@@ -77,12 +80,14 @@ export function BillEditorDrawer({ open, billId, onClose }: Props) {
   const [notes, setNotes] = useState(bill?.notes ?? '');
 
   const [loadedId, setLoadedId] = useState<string | null>(null);
+  const [loadedVersion, setLoadedVersion] = useState<string | undefined>(undefined);
   if (bill && bill.id !== loadedId) {
     setLoadedId(bill.id);
     setLines(bill.lines.length ? bill.lines : [makeEmptyBillLine(bill.id, 1)]);
     setSupplierId(bill.supplierId); setSupplierInvoiceNumber(bill.supplierInvoiceNumber); setBillType(bill.billType);
     setBillDate(bill.billDate); setDueDate(bill.dueDate);
     setPoRef(bill.purchaseOrderId ?? ''); setNotes(bill.notes ?? '');
+    setLoadedVersion(bill.updatedAt);
   }
 
   /*
@@ -107,7 +112,8 @@ export function BillEditorDrawer({ open, billId, onClose }: Props) {
   );
 
   if (!bill) return null;
-  const readOnly = !['draft', 'submitted', 'approved'].includes(bill.status);
+  const mayEdit = isPlatformAdminFullAccess() || roleCanEditBills(getCurrentUser()?.role ?? 'owner');
+  const readOnly = bill.status !== 'draft' || !mayEdit;
 
   const setLine = (id: string, patch: Partial<BillLine>): void => setLines((prev) => prev.map((l) => (l.id === id ? { ...l, ...patch } : l)));
   const selectItem = (lineId: string, itemId?: string): void => {
@@ -124,7 +130,10 @@ export function BillEditorDrawer({ open, billId, onClose }: Props) {
   // `currency` and `exchangeRate` are deliberately absent: an edit must not be
   // able to re-denominate a bill, so the stored values are simply left alone.
   const collect = (): Partial<Bill> => ({ supplierId, supplierInvoiceNumber, billType, billDate, dueDate, purchaseOrderId: poRef || undefined, notes, lines });
-  const persist = (): boolean => { const res = updateDraft(bill.id, collect()); if (!res.ok) { const message = res.error ?? 'Could not save the bill.'; setFormError(message); notify(message, 'error'); requestAnimationFrame(() => document.querySelector<HTMLElement>('[aria-modal="true"] [aria-invalid="true"]')?.focus()); return false; } setFormError(null); return true; };
+  const persist = (): boolean => { const res = updateDraft(bill.id, collect(), { expectedUpdatedAt: loadedVersion }); if (!res.ok) { const message = res.error ?? 'Could not save the bill.'; setFormError(message); notify(message, 'error'); requestAnimationFrame(() => document.querySelector<HTMLElement>('[aria-modal="true"] [aria-invalid="true"]')?.focus()); return false; } setLoadedVersion(useBillStore.getState().getBill(bill.id)?.updatedAt); setFormError(null); return true; };
+
+  const dirty = !readOnly && JSON.stringify(collect()) !== JSON.stringify({ supplierId: bill.supplierId, supplierInvoiceNumber: bill.supplierInvoiceNumber, billType: bill.billType, billDate: bill.billDate, dueDate: bill.dueDate, purchaseOrderId: bill.purchaseOrderId, notes: bill.notes, lines: bill.lines });
+  const requestClose = (): void => { if (!dirty || window.confirm('Discard unsaved changes to this bill?')) onClose(); };
 
   const onSave = (): void => { if (persist()) { notify('Bill draft saved.', 'success'); onClose(); } };
   const onSubmit = (): void => { if (!persist()) return; const r = submitBill(bill.id); if (r.ok) notify('Bill submitted.', 'success'); else notify(r.error ?? 'Could not submit.', 'error'); };
@@ -144,14 +153,14 @@ export function BillEditorDrawer({ open, billId, onClose }: Props) {
 
   return (
     <>
-      <Drawer open={open} onClose={onClose} widthClassName="max-w-5xl" title={`Bill ${bill.billNumber}`}
+      <Drawer open={open} onClose={requestClose} widthClassName="max-w-5xl" title={`Bill ${bill.billNumber}`}
         description={readOnly ? `${bill.status} — read only` : 'Enter the supplier invoice, then submit/approve and post to Trade Payables'}
         footer={
           <div className="flex w-full flex-wrap items-center justify-between gap-3">
             <div className="text-sm"><span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Bill total</span><span className="ml-2 font-mono text-base font-bold">{money(totals.grandTotal)}</span></div>
             {formError && <p role="alert" className="w-full text-xs text-red-600 dark:text-red-400">Please review the form: {formError}</p>}
             <div className="flex flex-wrap items-center justify-end gap-2">
-              <Button variant="outline" onClick={onClose}>Close</Button>
+              <Button variant="outline" onClick={requestClose}>Close</Button>
               {!readOnly && <Button variant="ghost" size="sm" onClick={onPreview}><Eye className="h-4 w-4" /> Preview</Button>}
               {!readOnly && <Button variant="secondary" onClick={onSave}><Save className="h-4 w-4" /> Save</Button>}
               {bill.status === 'draft' && <Button variant="secondary" onClick={onSubmit}><Send className="h-4 w-4" /> Submit</Button>}

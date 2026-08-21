@@ -110,7 +110,7 @@ export function makeEmptyBillLine(billId: string, sortOrder: number): BillLine {
   return { id: generateId('bline'), billId, description: '', accountId: '', quantity: 1, unitPrice: 0, discountAmount: 0, taxRate: 0, taxableAmount: 0, taxAmount: 0, lineSubtotal: 0, lineTotal: 0, sortOrder };
 }
 
-const EDITABLE: Bill['status'][] = ['draft', 'submitted', 'approved'];
+const POSTABLE: Bill['status'][] = ['draft', 'submitted', 'approved'];
 
 interface BillState {
   bills: Bill[];
@@ -125,13 +125,13 @@ interface BillState {
   takeBillNumber: (entityId: string, usedNumbers: Set<string>, date: string) => string;
 
   createDraft: (input?: { supplierId?: string; billType?: BillType; billDate?: string; dueDate?: string; currency?: string }) => BillActionResult;
-  updateDraft: (id: string, patch: Partial<Bill>) => BillActionResult;
+  updateDraft: (id: string, patch: Partial<Bill>, opts?: { expectedUpdatedAt?: string }) => BillActionResult;
   deleteDraft: (id: string) => BillActionResult;
   duplicateBill: (id: string) => BillActionResult;
 
   submitBill: (id: string) => BillActionResult;
   approveBill: (id: string) => BillActionResult;
-  returnToDraft: (id: string) => BillActionResult;
+  returnToDraft: (id: string, reason?: string) => BillActionResult;
   postBill: (id: string, opts?: { overrideDuplicate?: boolean }) => BillActionResult;
   recordPayment: (id: string, input: { amount: number; date: string; bankAccountId: string; method?: BillPaymentMethod; reference?: string; bankFeeAmount?: number; bankFeeAccountId?: string; realizedFxAmount?: number }) => BillActionResult;
   /** Apply a Payments-module allocation to a bill WITHOUT posting a journal (the payment owns the bank entry). */
@@ -229,12 +229,23 @@ export const useBillStore = create<BillState>()(
         return { ok: true, id };
       },
 
-      updateDraft: (id, patch) => {
+      updateDraft: (id, patch, opts) => {
         const { bills } = get();
         const existing = bills.find((b) => b.id === id);
         if (!existing) return { ok: false, error: 'Bill not found.' };
-        if (!EDITABLE.includes(existing.status)) return { ok: false, error: 'Only draft, submitted or approved bills can be edited. Reverse a posted bill instead.' };
-        const merged = withTotals({ ...existing, ...patch, lines: (patch.lines ?? existing.lines).map((l) => ({ ...l, billId: id })) });
+        const permitted = assertTransactionDocumentPermission(currentRole(), 'bill.edit');
+        if (!permitted.ok) return { ok: false, error: permitted.error };
+        if (existing.entityId !== INVOICE_ENTITY_ID) return { ok: false, error: 'Bill not found in the current entity.' };
+        if (existing.status !== 'draft') return { ok: false, error: existing.status === 'posted' || existing.journalEntryId ? 'Posted bills cannot be edited because they have affected the ledger. Reverse or void this bill and create a corrected bill.' : 'Return this bill to draft before editing it.' };
+        if (existing.journalEntryId || existing.goodsReceiptId || existing.payments.length > 0 || existing.amountPaid > 0 || existing.supplierCreditsApplied > 0) return { ok: false, error: 'This bill has accounting, inventory, credit or payment activity and cannot be edited directly.' };
+        if (opts?.expectedUpdatedAt && opts.expectedUpdatedAt !== existing.updatedAt) return { ok: false, error: 'This bill was changed in another session. Reload it before saving.' };
+        const allowed = ['supplierId', 'supplierInvoiceNumber', 'billType', 'billDate', 'dueDate', 'purchaseOrderId', 'notes', 'lines'] as const;
+        const clean: Partial<Bill> = {};
+        for (const key of allowed) if (Object.prototype.hasOwnProperty.call(patch, key)) (clean as Record<string, unknown>)[key] = patch[key];
+        const changed = Object.keys(clean).some((key) => JSON.stringify(existing[key as keyof Bill]) !== JSON.stringify(clean[key as keyof Bill]));
+        if (!changed) return { ok: true, id };
+        const merged = withTotals({ ...existing, ...clean, lines: (clean.lines ?? existing.lines).map((l) => ({ ...l, billId: id })) });
+        merged.auditTrail = [...existing.auditTrail, audit('bill-draft-updated')];
         set({ bills: bills.map((b) => (b.id === id ? merged : b)) });
         return { ok: true, id };
       },
@@ -280,13 +291,17 @@ export const useBillStore = create<BillState>()(
         set({ bills: bills.map((x) => (x.id === id ? { ...x, status: 'approved', approvedAt: now, approvedBy: ACTOR, auditTrail: [...x.auditTrail, audit('bill-approved')], updatedAt: now } : x)) });
         return { ok: true, id };
       },
-      returnToDraft: (id) => {
+      returnToDraft: (id, reason) => {
         const { bills } = get();
         const b = bills.find((x) => x.id === id);
         if (!b) return { ok: false, error: 'Bill not found.' };
+        const permitted = assertTransactionDocumentPermission(currentRole(), 'bill.transition');
+        if (!permitted.ok) return { ok: false, error: permitted.error };
+        if (b.entityId !== INVOICE_ENTITY_ID) return { ok: false, error: 'Bill not found in the current entity.' };
         if (b.status !== 'submitted' && b.status !== 'approved') return { ok: false, error: 'Only a submitted or approved bill can return to draft.' };
+        if (b.journalEntryId || b.goodsReceiptId || b.payments.length > 0 || b.amountPaid > 0 || b.supplierCreditsApplied > 0) return { ok: false, error: 'A bill with accounting, inventory, credit or payment activity cannot return to draft.' };
         const now = nowIso();
-        set({ bills: bills.map((x) => (x.id === id ? { ...x, status: 'draft', approvedAt: undefined, approvedBy: undefined, submittedAt: undefined, auditTrail: [...x.auditTrail, audit('returned-to-draft')], updatedAt: now } : x)) });
+        set({ bills: bills.map((x) => (x.id === id ? { ...x, status: 'draft', approvedAt: undefined, approvedBy: undefined, submittedAt: undefined, auditTrail: [...x.auditTrail, audit(b.status === 'approved' ? 'bill-reopened' : 'bill-submission-recalled', reason?.trim() || undefined)], updatedAt: now } : x)) });
         return { ok: true, id };
       },
 
@@ -294,7 +309,7 @@ export const useBillStore = create<BillState>()(
         const { bills } = get();
         const existing = bills.find((b) => b.id === id);
         if (!existing) return { ok: false, error: 'Bill not found.' };
-        if (!EDITABLE.includes(existing.status)) return { ok: false, error: 'Only a draft/submitted/approved bill can be posted.' };
+        if (!POSTABLE.includes(existing.status)) return { ok: false, error: 'Only a draft/submitted/approved bill can be posted.' };
 
         const bill = withTotals(existing);
         const dup = checkDuplicateSupplierInvoiceNumber(bills, { entityId: bill.entityId, supplierId: bill.supplierId, supplierInvoiceNumber: bill.supplierInvoiceNumber, excludeBillId: bill.id });

@@ -7,11 +7,14 @@ import { ItemsPage } from '@/pages/inventory/ItemsPage';
 import { useBillStore } from '@/store/billStore';
 import { useInventoryStore } from '@/store/inventoryStore';
 import { makeInventorySeed } from '@/lib/inventorySeed';
+import { BillsPage } from '@/pages/BillsPage';
+import { useInvoiceTemplateStore } from '@/store/invoiceTemplateStore';
 
 const page = (node: React.ReactElement) => render(<ToastProvider>{node}</ToastProvider>);
 
 beforeEach(() => {
   useBillStore.setState({ bills: [] });
+  useInvoiceTemplateStore.getState().resetToDefault();
   useInventoryStore.setState({ ...makeInventorySeed('manufacturing'), movements: [], documents: [], auditTrail: [], seeded: true });
 });
 afterEach(cleanup);
@@ -32,6 +35,46 @@ describe('vertical bill entry', () => {
 
     fireEvent.click(within(region).getByRole('button', { name: /remove line 2/i }));
     expect(within(region).getAllByTestId('bill-line-card')).toHaveLength(1);
+  });
+
+  it('opens an existing draft from the register while submitted bills require recall', () => {
+    const draftId = useBillStore.getState().createDraft().id!;
+    const submittedId = useBillStore.getState().createDraft().id!;
+    useBillStore.getState().submitBill(submittedId);
+    page(<BillsPage />);
+
+    const draftRow = screen.getByText(useBillStore.getState().getBill(draftId)!.billNumber).closest('tr')!;
+    fireEvent.click(within(draftRow).getByText('Actions'));
+    expect(within(draftRow).getByText('Edit')).toBeTruthy();
+    fireEvent.click(within(draftRow).getByText('Edit'));
+    expect(screen.getByRole('dialog').textContent).toContain(useBillStore.getState().getBill(draftId)!.billNumber);
+    cleanup();
+
+    page(<BillsPage />);
+    const submittedRow = screen.getByText(useBillStore.getState().getBill(submittedId)!.billNumber).closest('tr')!;
+    fireEvent.click(within(submittedRow).getByText('Actions'));
+    expect(within(submittedRow).queryByText('Edit')).toBeNull();
+    expect(within(submittedRow).getByText('Recall submission')).toBeTruthy();
+  });
+
+  it('renders submitted bills read-only even when the editor is called directly', () => {
+    const id = useBillStore.getState().createDraft().id!;
+    useBillStore.getState().submitBill(id);
+    page(<BillEditorDrawer open billId={id} onClose={() => {}} />);
+    expect(screen.queryByRole('button', { name: /^save$/i })).toBeNull();
+    expect(screen.getByText(/submitted.*read only/i)).toBeTruthy();
+  });
+
+  it('shows immutable-ledger guidance instead of Edit for a posted bill', () => {
+    const id = useBillStore.getState().createDraft().id!;
+    const bill = useBillStore.getState().getBill(id)!;
+    useBillStore.setState({ bills: [{ ...bill, status: 'posted', journalEntryId: 'je_historical' }] });
+    page(<BillsPage />);
+    const row = screen.getByText(bill.billNumber).closest('tr')!;
+    fireEvent.click(within(row).getByText('Actions'));
+    expect(within(row).queryByText('Edit')).toBeNull();
+    fireEvent.click(within(row).getByText('View'));
+    expect(screen.getByText(/Posted bills cannot be edited because they have affected the ledger/i)).toBeTruthy();
   });
 
   it('keeps manual lines, calculated totals, and receive-to-stock guidance visible', () => {

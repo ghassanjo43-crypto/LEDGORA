@@ -24,6 +24,9 @@ import { BillRenderer } from '@/components/bills/BillRenderer';
 import { BillSupplierCreditDialog } from '@/components/bills/BillSupplierCreditDialog';
 import { BillReverseDialog } from '@/components/bills/BillReverseDialog';
 import { PrintDocument } from '@/components/ui/PrintDocument';
+import { useAuthStore } from '@/store/authStore';
+import { roleCanEditBills, roleCanTransitionBills } from '@/lib/transactionDocumentPermissions';
+import { isPlatformAdminFullAccess } from '@/store/platformFullAccess';
 
 function today(): string { return new Date().toISOString().slice(0, 10); }
 function isOverdue(b: { dueDate: string; balanceDue: number; status: BillStatus }): boolean {
@@ -40,6 +43,11 @@ export function BillsPage() {
   const requestPaymentEditor = usePaymentEditor((s) => s.requestOpen);
   const setActiveView = useStore((s) => s.setActiveView);
   const { notify } = useToast();
+  const users = useAuthStore((s) => s.users);
+  const currentUserId = useAuthStore((s) => s.currentUserId);
+  const role = users.find((user) => user.id === currentUserId)?.role ?? 'owner';
+  const canEdit = isPlatformAdminFullAccess() || roleCanEditBills(role);
+  const canTransition = isPlatformAdminFullAccess() || roleCanTransitionBills(role);
 
   const [editorId, setEditorId] = useState<string | null>(null);
   const [previewId, setPreviewId] = useState<string | null>(null);
@@ -80,6 +88,11 @@ export function BillsPage() {
     const res = createPaymentForBill(billId);
     if (res.ok && res.id) { requestPaymentEditor(res.id); setActiveView('payments'); }
     else notify(res.error ?? 'Could not start a payment.', 'error');
+  };
+  const returnToDraft = (billId: string, approved: boolean): void => {
+    const reason = window.prompt(approved ? 'Reason for reopening this approved bill (optional)' : 'Reason for recalling this submission (optional)');
+    if (reason === null) return;
+    act(() => store.returnToDraft(billId, reason), approved ? 'Bill reopened as a draft.' : 'Bill submission recalled.');
   };
 
   const previewBill = previewId ? store.getBill(previewId) : undefined;
@@ -125,7 +138,9 @@ export function BillsPage() {
                   <td className="px-3 py-2 text-xs">{b.journalEntryId ? <Badge tone="green">posted</Badge> : <span className="text-slate-400">—</span>}</td>
                   <td className="px-3 py-2 text-right">
                     <Dropdown label="Actions" align="right" trigger={(o) => (<span className={cx('inline-flex h-8 items-center gap-1 rounded-lg border border-slate-200 px-2 text-xs text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300', o && 'bg-slate-50')}>Actions <ChevronDown className="h-3 w-3" /></span>)}>
-                      {(() => { const editable = ['draft', 'submitted', 'approved'].includes(b.status); return (<MenuItem onClick={() => (editable ? setEditorId(b.id) : setPreviewId(b.id))}>{editable ? <><Pencil className="h-4 w-4" /> Edit</> : <><Eye className="h-4 w-4" /> View</>}</MenuItem>); })()}
+                      {b.status === 'draft' && canEdit ? <MenuItem onClick={() => setEditorId(b.id)}><Pencil className="h-4 w-4" /> Edit</MenuItem> : <MenuItem onClick={() => setPreviewId(b.id)}><Eye className="h-4 w-4" /> View</MenuItem>}
+                      {b.status === 'submitted' && canTransition && <MenuItem onClick={() => returnToDraft(b.id, false)}><Pencil className="h-4 w-4" /> Recall submission</MenuItem>}
+                      {b.status === 'approved' && canTransition && <MenuItem onClick={() => returnToDraft(b.id, true)}><Pencil className="h-4 w-4" /> Reopen as draft</MenuItem>}
                       <MenuItem onClick={() => setPreviewId(b.id)}><Printer className="h-4 w-4" /> Preview / print</MenuItem>
                       {b.status === 'draft' && <MenuItem onClick={() => act(() => store.submitBill(b.id), 'Bill submitted.')}><Send className="h-4 w-4" /> Submit</MenuItem>}
                       {(b.status === 'draft' || b.status === 'submitted') && <MenuItem onClick={() => act(() => store.approveBill(b.id), 'Bill approved.')}><CheckCircle2 className="h-4 w-4" /> Approve</MenuItem>}
@@ -149,7 +164,8 @@ export function BillsPage() {
       {previewId && previewBill && previewSnap && (
         <>
           <div className="fixed inset-0 z-50 flex flex-col bg-slate-900/50 backdrop-blur-sm">
-            <div className="flex items-center justify-between border-b border-slate-200 bg-white px-4 py-2 dark:border-slate-800 dark:bg-slate-900"><div className="text-sm font-medium">{previewSnap.templateName} · <span className="text-slate-500">{previewBill.status}</span></div><div className="flex items-center gap-2"><Button size="sm" variant="outline" onClick={() => window.print()}><Printer className="h-4 w-4" /> Print / PDF</Button><button onClick={() => setPreviewId(null)} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800" aria-label="Close"><X className="h-5 w-5" /></button></div></div>
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-white px-4 py-2 dark:border-slate-800 dark:bg-slate-900"><div className="text-sm font-medium">{previewSnap.templateName} · <Badge tone={BILL_STATUS_TONE[previewBill.status]}>{previewBill.status}</Badge></div><div className="flex flex-wrap items-center gap-2">{previewBill.status === 'draft' && canEdit && <Button size="sm" variant="outline" onClick={() => { setPreviewId(null); setEditorId(previewBill.id); }}><Pencil className="h-4 w-4" /> Edit</Button>}{previewBill.status === 'submitted' && canTransition && <Button size="sm" variant="outline" onClick={() => returnToDraft(previewBill.id, false)}>Recall submission</Button>}{previewBill.status === 'approved' && canTransition && <Button size="sm" variant="outline" onClick={() => returnToDraft(previewBill.id, true)}>Reopen as draft</Button>}{['posted', 'partially-paid'].includes(previewBill.status) && <Button size="sm" variant="outline" onClick={() => onRecordPayment(previewBill.id)}><Banknote className="h-4 w-4" /> Record payment</Button>}{['posted', 'partially-paid'].includes(previewBill.status) && <Button size="sm" variant="outline" onClick={() => setCreditId(previewBill.id)}><ReceiptText className="h-4 w-4" /> Supplier credit</Button>}{previewBill.journalEntryId && previewBill.status !== 'reversed' && <Button size="sm" variant="outline" onClick={() => setReverseId(previewBill.id)}><Ban className="h-4 w-4" /> Reverse</Button>}<Button size="sm" variant="outline" onClick={() => window.print()}><Printer className="h-4 w-4" /> Print / PDF</Button><button onClick={() => setPreviewId(null)} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800" aria-label="Close"><X className="h-5 w-5" /></button></div></div>
+            {['posted', 'partially-paid', 'paid', 'reversed', 'void'].includes(previewBill.status) && <div role="note" className="border-b border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">Posted bills cannot be edited because they have affected the ledger. Reverse or void this bill and create a corrected bill.</div>}
             <div className="flex-1 overflow-auto p-6"><div className="mx-auto shadow-xl"><BillRenderer bill={previewBill} snapshot={previewSnap} supplierName={supplierName(previewBill.supplierId)} supplierAddress={[previewSupplier?.addressLine1, previewSupplier?.city, previewSupplier?.country].filter(Boolean).join(', ')} supplierTaxNumber={previewSupplier?.taxRegistrationNumber} /></div></div>
           </div>
           <PrintDocument><BillRenderer bill={previewBill} snapshot={previewSnap} supplierName={supplierName(previewBill.supplierId)} supplierAddress={[previewSupplier?.addressLine1, previewSupplier?.city, previewSupplier?.country].filter(Boolean).join(', ')} supplierTaxNumber={previewSupplier?.taxRegistrationNumber} /></PrintDocument>
