@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { Account, BusinessEntity } from '@/types';
 import type { JournalIssue, JournalLine } from '@/types/journal';
+import { postingAccountEligibility } from '@/lib/accountEligibility';
 
 /* ────────────────────────────── Money helpers ───────────────────────────── */
 
@@ -293,19 +294,12 @@ export function getPostingErrors(
         lineNumber: line.lineNumber,
       });
     } else {
-      if (!isPostingAccount(account)) {
+      const eligibility = postingAccountEligibility(account, { accounts: [...accountsById.values()] });
+      if (!eligibility.eligible) {
         issues.push({
           severity: 'error',
-          rule: 'header-account',
-          message: `Line ${line.lineNumber}: "${account.name}" is a header account and cannot receive postings.`,
-          lineNumber: line.lineNumber,
-        });
-      }
-      if (!account.isActive) {
-        issues.push({
-          severity: 'error',
-          rule: 'inactive-account',
-          message: `Line ${line.lineNumber}: "${account.name}" is inactive and cannot be posted to.`,
+          rule: eligibility.reason === 'inactive' ? 'inactive-account' : 'header-account',
+          message: `Line ${line.lineNumber}: ${eligibility.message}`,
           lineNumber: line.lineNumber,
         });
       }

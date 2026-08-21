@@ -633,6 +633,8 @@ export interface AccountsTable {
   restricted_currency: string | null;
   is_postable: Generated<boolean>;
   active: Generated<boolean>;
+  blocked: Generated<boolean>;
+  archived: Generated<boolean>;
   system_account: Generated<boolean>;
   created_at: Timestamp;
   updated_at: Timestamp;

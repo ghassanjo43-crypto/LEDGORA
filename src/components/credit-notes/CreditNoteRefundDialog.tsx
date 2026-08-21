@@ -8,13 +8,14 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { useToast } from '@/components/ui/Toast';
+import { eligiblePostingAccounts } from '@/lib/accountEligibility';
 
 /** Refund remaining customer credit as cash — a separate journal entry. */
 export function CreditNoteRefundDialog({ creditNote, onClose }: { creditNote: CreditNote; onClose: () => void }) {
   const accounts = useStore((s) => s.accounts);
   const refundCreditNote = useCreditNoteStore((s) => s.refundCreditNote);
   const { notify } = useToast();
-  const banks = accounts.filter((a) => a.type === 'ASSET' && /cash and cash equivalents/i.test(a.ifrsSubcategory));
+  const banks = eligiblePostingAccounts({ accounts, purpose: 'bank-cash' });
 
   const [amount, setAmount] = useState(Math.round(creditNote.remainingCredit * 100) / 100);
   const [refundDate, setRefundDate] = useState(new Date().toISOString().slice(0, 10));

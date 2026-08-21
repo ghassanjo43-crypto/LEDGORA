@@ -24,6 +24,7 @@ import { Field, Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { useToast } from '@/components/ui/Toast';
 import { EntityPicker } from '@/components/shared/EntityPicker';
+import { eligiblePostingAccounts } from '@/lib/accountEligibility';
 import { AccountSelect } from '@/components/journal/AccountSelect';
 import { ReceiptRenderer } from './ReceiptRenderer';
 
@@ -51,7 +52,7 @@ export function ReceiptEditorDrawer({ open, receiptId, onClose }: Props) {
   const [showPreview, setShowPreview] = useState(false);
 
   const customers = useMemo(() => entities.filter((e) => e.entityType === 'customer' || e.entityType === 'both'), [entities]);
-  const cashAccounts = useMemo(() => accounts.filter((a) => a.isPostingAccount && a.type === 'ASSET' && /cash and cash equivalents/i.test(a.ifrsSubcategory)), [accounts]);
+  const cashAccounts = useMemo(() => eligiblePostingAccounts({ accounts, purpose: 'bank-cash' }), [accounts]);
 
   const [receiptType, setReceiptType] = useState<ReceiptType>(receipt?.receiptType ?? 'customer-payment');
   const [customerId, setCustomerId] = useState(receipt?.customerId ?? '');

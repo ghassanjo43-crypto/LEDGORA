@@ -2,7 +2,7 @@ import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 're
 import { createPortal } from 'react-dom';
 import type { Account } from '@/types';
 import { accountTypeLabel } from '@/data/ifrsOptions';
-import { isPostingAccount } from '@/lib/journalValidation';
+import { eligiblePostingAccounts, type AccountPurpose } from '@/lib/accountEligibility';
 import { computePopoverPosition, type PopoverPosition } from '@/lib/popoverPosition';
 import { cn } from '@/lib/utils';
 import { Icon } from '@/components/ui/icons';
@@ -35,6 +35,10 @@ interface AccountSelectProps {
    * choosing an account does not strand the user on the field they just filled.
    */
   onAfterSelect?: () => void;
+  purpose?: AccountPurpose;
+  activeEntityId?: string;
+  /** Reporting/drill-down surfaces may opt into the complete chart. */
+  selectionMode?: 'posting' | 'all';
 }
 
 /**
@@ -58,6 +62,9 @@ export function AccountSelect({
   id,
   openOnFocus = false,
   onAfterSelect,
+  purpose = 'general-journal',
+  activeEntityId,
+  selectionMode = 'posting',
 }: AccountSelectProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -85,10 +92,9 @@ export function AccountSelect({
 
   const selectable = useMemo(
     () =>
-      accounts
-        .filter((a) => isPostingAccount(a) && a.isActive)
+      (selectionMode === 'all' ? [...accounts] : eligiblePostingAccounts({ accounts, purpose, activeEntityId }))
         .sort((a, b) => a.code.localeCompare(b.code)),
-    [accounts],
+    [accounts, purpose, activeEntityId, selectionMode],
   );
 
   const selected = useMemo(() => accounts.find((a) => a.id === value), [accounts, value]);
@@ -368,7 +374,7 @@ export function AccountSelect({
             >
               {filtered.length === 0 && (
                 <li className="px-3 py-6 text-center text-xs text-slate-400">
-                  No active posting accounts match “{query}”.
+                  {query ? `No valid posting accounts match “${query}”.` : 'No valid posting accounts exist for this field.'}
                 </li>
               )}
               {filtered.map((account, idx) => (

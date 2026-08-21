@@ -39,6 +39,7 @@ import { errors } from '../../lib/errors.js';
 import { writeAccountingAudit, type AccountingActor } from './audit.js';
 import { assertPeriodAccepts } from './periodService.js';
 import { loadAccountsForPosting } from './accountService.js';
+import { assessPostingAccount } from './accountEligibility.js';
 import * as Money from './money.js';
 
 type Executor = Kysely<Database> | Transaction<Database>;
@@ -402,6 +403,7 @@ async function validateForPosting(
   trx: Trx,
   organizationId: string,
   journal: JournalRecord,
+  options: { enforceCurrentAccountEligibility?: boolean } = {},
 ): Promise<void> {
   const issues: ValidationIssue[] = [];
   const lines = journal.lines;
@@ -437,13 +439,11 @@ async function validateForPosting(
       });
       continue;
     }
-    if (!account.active) {
-      issues.push({ rule: 'account-inactive', message: `Line ${at}: "${account.accountName}" is inactive.`, lineNumber: at });
-    }
-    if (!account.isPostable) {
+    const eligibility = assessPostingAccount(account, account.hasChildren);
+    if (options.enforceCurrentAccountEligibility !== false && !eligibility.eligible) {
       issues.push({
-        rule: 'account-header',
-        message: `Line ${at}: "${account.accountName}" is a header account and cannot receive postings.`,
+        rule: `account-${eligibility.reason}`,
+        message: `Line ${at}: ${eligibility.message}`,
         lineNumber: at,
       });
     }
@@ -1162,8 +1162,10 @@ async function insertReversal(
   await insertLines(trx, actor.organizationId, created.id, reverseLines(original), rate);
 
   const reversal = await loadJournal(trx, actor.organizationId, created.id);
-  // The reversal is itself a posting and must satisfy every posting rule.
-  await validateForPosting(trx, actor.organizationId, reversal);
+  // A reversal withdraws an already-recorded posting. Re-check its balance and
+  // tenant-owned references, but do not strand history because an account was
+  // subsequently retired or blocked.
+  await validateForPosting(trx, actor.organizationId, reversal, { enforceCurrentAccountEligibility: false });
   // It is born posted, so its first version is the posted one.
   await writeVersion(trx, actor, reversal, 'posted', reason);
   return reversal;

@@ -73,6 +73,10 @@ export interface Account {
   /** True = leaf account that can receive journal postings. False = header. */
   isPostingAccount: boolean;
   isActive: boolean;
+  /** Optional lifecycle/ownership metadata used by persisted or imported charts. */
+  entityId?: string;
+  isBlocked?: boolean;
+  isArchived?: boolean;
   description: string;
   industryTag: string;
   /** Manual ordering index among siblings. */

@@ -25,6 +25,7 @@ import * as identityClassificationGuard from './migrations/011_identity_classifi
 import * as repairDeletionTombstoneStatusColumns from './migrations/012_repair_deletion_tombstone_status_columns.js';
 import * as accountingFoundation from './migrations/013_accounting_foundation.js';
 import * as commercialPackageCatalogue from './migrations/014_commercial_package_catalogue.js';
+import * as accountPostingStates from './migrations/015_account_posting_states.js';
 
 const MIGRATIONS: Record<string, Migration> = {
   '001_initial_schema': initialSchema,
@@ -41,6 +42,7 @@ const MIGRATIONS: Record<string, Migration> = {
   '012_repair_deletion_tombstone_status_columns': repairDeletionTombstoneStatusColumns,
   '013_accounting_foundation': accountingFoundation,
   '014_commercial_package_catalogue': commercialPackageCatalogue,
+  '015_account_posting_states': accountPostingStates,
 };
 
 class StaticMigrationProvider implements MigrationProvider {

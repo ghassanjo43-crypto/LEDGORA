@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { activePurchaseItems, activeSalesItems, purchaseItemDefaults, salesItemDefaults } from './itemCatalogue';
+import { activePurchaseItems, activeSalesItems, purchaseItemDefaults, salesItemDefaults, validateItemAccountMappings } from './itemCatalogue';
 import { useInventoryStore } from '@/store/inventoryStore';
 import { makeInventorySeed, ENTITY } from './inventorySeed';
 import type { InventoryItem } from '@/types/inventory';
+import { SEED_ACCOUNTS } from '@/data/seedAccounts';
 
 const state = () => useInventoryStore.getState();
 
@@ -66,5 +67,14 @@ describe('shared items catalogue', () => {
     state().ensureSeeded();
     expect(state().items.map((candidate) => candidate.code)).toEqual(['CAT-1']);
     expect(state().warehouses.length).toBeGreaterThan(0);
+  });
+
+  it('flags invalid item mappings without replacing the stored reference', () => {
+    const parent = SEED_ACCOUNTS.find((account) => !account.isPostingAccount)!;
+    const source = item({ salesAccountId: parent.id, purchaseAccountId: parent.id });
+    const issues = validateItemAccountMappings(source, SEED_ACCOUNTS);
+    expect(issues.map((issue) => issue.field)).toEqual(expect.arrayContaining(['salesAccountId', 'purchaseAccountId']));
+    expect(issues[0]?.message).toContain(`${parent.code} — ${parent.name}`);
+    expect(source.salesAccountId).toBe(parent.id);
   });
 });

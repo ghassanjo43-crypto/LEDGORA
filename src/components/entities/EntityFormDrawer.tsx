@@ -3,6 +3,7 @@ import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import type { AccountType, BusinessEntity, EntityType } from '@/types';
 import { entityFormSchema, type EntityFormValues } from '@/lib/entityValidation';
+import { eligiblePostingAccounts, type AccountPurpose } from '@/lib/accountEligibility';
 import {
   entityToFormValues,
   makeDefaultEntityValues,
@@ -96,18 +97,18 @@ export function EntityFormDrawer({ open, mode, onClose }: EntityFormDrawerProps)
 
   // Account link options, filtered to active posting accounts of relevant types.
   const accountOptions = useMemo(() => {
-    const build = (types: AccountType[]) => {
-      const opts = accounts
-        .filter((a) => a.isPostingAccount && a.isActive && types.includes(a.type))
+    const build = (types: AccountType[], purpose?: AccountPurpose) => {
+      const opts = eligiblePostingAccounts({ accounts, purpose })
+        .filter((a) => types.includes(a.type))
         .sort((a, b) => a.code.localeCompare(b.code))
         .map((a) => ({ value: a.id, label: `${a.code} — ${a.name}` }));
       return [{ value: '', label: 'Not linked' }, ...opts];
     };
     return {
-      revenue: build(['INCOME', 'OTHER_INCOME_EXPENSE']),
-      receivable: build(['ASSET']),
-      expense: build(['OPERATING_EXPENSE', 'COST_OF_SALES', 'OTHER_INCOME_EXPENSE']),
-      payable: build(['LIABILITY']),
+      revenue: build(['INCOME'], 'revenue'),
+      receivable: build(['ASSET'], 'accounts-receivable'),
+      expense: build(['OPERATING_EXPENSE', 'COST_OF_SALES', 'OTHER_INCOME_EXPENSE'], 'purchase-expense'),
+      payable: build(['LIABILITY'], 'accounts-payable'),
     };
   }, [accounts]);
 

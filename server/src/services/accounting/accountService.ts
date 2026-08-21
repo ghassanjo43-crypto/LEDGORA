@@ -39,7 +39,10 @@ export interface AccountRecord {
   restrictedCurrency: string | null;
   isPostable: boolean;
   active: boolean;
+  blocked: boolean;
+  archived: boolean;
   systemAccount: boolean;
+  hasChildren?: boolean;
 }
 
 export interface CreateAccountInput {
@@ -51,6 +54,9 @@ export interface CreateAccountInput {
   parentAccountId?: string | null;
   restrictedCurrency?: string | null;
   isPostable?: boolean;
+  active?: boolean;
+  blocked?: boolean;
+  archived?: boolean;
   systemAccount?: boolean;
 }
 
@@ -81,6 +87,8 @@ function toRecord(row: any): AccountRecord {
     restrictedCurrency: row.restricted_currency,
     isPostable: row.is_postable,
     active: row.active,
+    blocked: row.blocked,
+    archived: row.archived,
     systemAccount: row.system_account,
   };
 }
@@ -134,7 +142,14 @@ export async function loadAccountsForPosting(
     .where('organization_id', '=', organizationId)
     .where('id', 'in', [...new Set(accountIds)])
     .execute();
-  return new Map(rows.map((row) => [row.id, toRecord(row)]));
+  const children = await db
+    .selectFrom('accounts')
+    .select('parent_account_id')
+    .where('organization_id', '=', organizationId)
+    .where('parent_account_id', 'in', rows.map((row) => row.id))
+    .execute();
+  const parentIds = new Set(children.map((row) => row.parent_account_id).filter(Boolean));
+  return new Map(rows.map((row) => [row.id, { ...toRecord(row), hasChildren: parentIds.has(row.id) }]));
 }
 
 async function assertParentIsUsable(
@@ -190,6 +205,9 @@ export async function createAccount(
   const name = input.accountName.trim();
   if (!code) throw errors.validation('An account code is required.');
   if (!name) throw errors.validation('An account name is required.');
+  const active = input.active ?? !input.archived;
+  const archived = input.archived ?? false;
+  if (active && archived) throw errors.validation('An archived account cannot be active.');
 
   return db.transaction().execute(async (trx) => {
     await assertParentIsUsable(trx, actor.organizationId, input.parentAccountId);
@@ -214,6 +232,9 @@ export async function createAccount(
         parent_account_id: input.parentAccountId ?? null,
         restricted_currency: input.restrictedCurrency ?? null,
         is_postable: input.isPostable ?? true,
+        active,
+        blocked: input.blocked ?? false,
+        archived,
         system_account: input.systemAccount ?? false,
       })
       .returningAll()
@@ -244,6 +265,12 @@ export async function updateAccount(
       .where('id', '=', accountId)
       .executeTakeFirst();
     if (!existing) throw errors.notFound('Account');
+
+    const nextActive = input.active ?? existing.active;
+    const nextArchived = input.archived ?? existing.archived;
+    if (nextActive && nextArchived) {
+      throw errors.validation('An archived account cannot be active. Unarchive it before reactivating it.');
+    }
 
     if (input.parentAccountId !== undefined) {
       await assertParentIsUsable(trx, actor.organizationId, input.parentAccountId, accountId);
@@ -285,6 +312,8 @@ export async function updateAccount(
     if (input.restrictedCurrency !== undefined) patch.restricted_currency = input.restrictedCurrency;
     if (input.isPostable !== undefined) patch.is_postable = input.isPostable;
     if (input.active !== undefined) patch.active = input.active;
+    if (input.blocked !== undefined) patch.blocked = input.blocked;
+    if (input.archived !== undefined) patch.archived = input.archived;
 
     const row = await trx
       .updateTable('accounts')

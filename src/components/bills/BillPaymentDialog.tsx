@@ -8,6 +8,7 @@ import { BILL_PAYMENT_METHOD_LABELS } from '@/lib/billLabels';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
+import { eligiblePostingAccounts } from '@/lib/accountEligibility';
 import { AccountSelect } from '@/components/journal/AccountSelect';
 import { useToast } from '@/components/ui/Toast';
 
@@ -16,7 +17,7 @@ export function BillPaymentDialog({ bill, onClose }: { bill: Bill; onClose: () =
   const accounts = useStore((s) => s.accounts);
   const recordPayment = useBillStore((s) => s.recordPayment);
   const { notify } = useToast();
-  const cashAccounts = accounts.filter((a) => a.isPostingAccount && a.type === 'ASSET' && /cash and cash equivalents/i.test(a.ifrsSubcategory));
+  const cashAccounts = eligiblePostingAccounts({ accounts, purpose: 'bank-cash' });
 
   const [amount, setAmount] = useState(Math.round(bill.balanceDue * 100) / 100);
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
