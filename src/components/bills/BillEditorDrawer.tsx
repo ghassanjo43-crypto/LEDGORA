@@ -25,6 +25,9 @@ import { CostCenterLineControl } from '@/components/cost-centers/CostCenterLineC
 import { ProjectPicker } from '@/components/projects/ProjectPicker';
 import { useHasModule } from '@/store/entitlementHooks';
 import { InventoryLineControl } from '@/components/inventory/InventoryLineControl';
+import { ItemSelector } from '@/components/items/ItemSelector';
+import { purchaseItemDefaults } from '@/lib/itemCatalogue';
+import { useTaxCodeStore } from '@/store/taxCodeStore';
 import { useInventoryStore } from '@/store/inventoryStore';
 import { resolveInventoryAccounts } from '@/lib/inventoryAccounts';
 import { useProjectStore } from '@/store/projectStore';
@@ -45,6 +48,8 @@ export function BillEditorDrawer({ open, billId, onClose }: Props) {
   const showCostCenter = useHasModule('cost_centers');
   const showProject = useHasModule('projects');
   const showInventory = useHasModule('inventory_basic');
+  const catalogueItems = useInventoryStore((s) => s.items);
+  const taxCodes = useTaxCodeStore((s) => s.taxCodes);
   const showDimensions = showCostCenter || showProject || showInventory;
   const entities = useEntityStore((s) => s.entities);
   const bills = useBillStore((s) => s.bills);
@@ -104,6 +109,14 @@ export function BillEditorDrawer({ open, billId, onClose }: Props) {
   const readOnly = !['draft', 'submitted', 'approved'].includes(bill.status);
 
   const setLine = (id: string, patch: Partial<BillLine>): void => setLines((prev) => prev.map((l) => (l.id === id ? { ...l, ...patch } : l)));
+  const selectItem = (lineId: string, itemId?: string): void => {
+    if (!itemId) { setLine(lineId, { itemId: undefined }); return; }
+    const item = catalogueItems.find((candidate) => candidate.id === itemId);
+    if (!item) return;
+    const defaults = purchaseItemDefaults(item);
+    const tax = defaults.taxCodeId ? taxCodes.find((candidate) => candidate.id === defaults.taxCodeId) : undefined;
+    setLine(lineId, { ...defaults, taxRate: tax?.rate ?? 0 });
+  };
   const addLine = (): void => setLines((prev) => [...prev, makeEmptyBillLine(bill.id, prev.length + 1)]);
   const removeLine = (id: string): void => setLines((prev) => (prev.length > 1 ? prev.filter((l) => l.id !== id) : prev));
 
@@ -176,11 +189,12 @@ export function BillEditorDrawer({ open, billId, onClose }: Props) {
             <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
               <table className="min-w-full text-xs">
                 <thead className="bg-slate-50 text-[10px] uppercase tracking-wide text-slate-400 dark:bg-slate-800/40"><tr>
-                  <th className="px-2 py-2 text-left">Account</th><th className="px-2 py-2 text-left">Description</th><th className="px-2 py-2 text-right">Qty</th><th className="px-2 py-2 text-right">Unit price</th><th className="px-2 py-2 text-right">Disc %</th><th className="px-2 py-2 text-right">Tax %</th><th className="px-2 py-2 text-right">WHT %</th><th className="px-2 py-2 text-right">Line total</th><th />
+                  <th className="px-2 py-2 text-left">Item</th><th className="px-2 py-2 text-left">Account</th><th className="px-2 py-2 text-left">Description</th><th className="px-2 py-2 text-right">Qty</th><th className="px-2 py-2 text-right">Unit price</th><th className="px-2 py-2 text-right">Disc %</th><th className="px-2 py-2 text-right">Tax %</th><th className="px-2 py-2 text-right">WHT %</th><th className="px-2 py-2 text-right">Line total</th><th />
                 </tr></thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                   {lines.map((line) => { const c = calculateBillLine(line); return (
                     <tr key={line.id}>
+                      <td className="min-w-[12rem] px-2 py-1.5"><ItemSelector mode="purchase" value={line.itemId} disabled={readOnly} onChange={(id) => selectItem(line.id, id)} /></td>
                       <td className="px-2 py-1.5 min-w-[12rem]"><AccountSelect value={line.accountId} accounts={accounts} onChange={(a) => setLine(line.id, { accountId: a.id })} disabled={readOnly} /></td>
                       <td className="px-2 py-1.5 min-w-[10rem]"><Input value={line.description} onChange={(e) => setLine(line.id, { description: e.target.value })} disabled={readOnly} className="h-8" placeholder="Description" /></td>
                       <td className="px-2 py-1.5 w-20"><Input type="number" step="0.01" value={line.quantity} onChange={(e) => setLine(line.id, { quantity: Number(e.target.value) })} disabled={readOnly} className="h-8 text-right" /></td>
@@ -193,7 +207,7 @@ export function BillEditorDrawer({ open, billId, onClose }: Props) {
                     </tr>
                   ); }).flatMap((row, i) => showDimensions ? [row, (
                     <tr key={`${lines[i]!.id}-cc`}>
-                      <td colSpan={9} className="px-2 pb-2">
+                      <td colSpan={10} className="px-2 pb-2">
                         <div className="flex flex-wrap items-start gap-x-6 gap-y-2">
                           {showCostCenter && <CostCenterLineControl amount={calculateBillLine(lines[i]!).taxableAmount} costCenterId={lines[i]!.costCenterId} assignments={lines[i]!.costCenterAssignments} postingDate={billDate} currency={currency} disabled={readOnly} onChange={(patch) => setLine(lines[i]!.id, patch)} />}
                           {showProject && <div className="flex items-center gap-2"><span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Project</span><div className="w-52"><ProjectPicker value={lines[i]!.projectId ?? ''} projects={projects} postingDate={billDate} disabled={readOnly} onChange={(id) => setLine(lines[i]!.id, { projectId: id || undefined })} /></div></div>}

@@ -127,6 +127,7 @@ export const NAV_GROUPS: NavGroup[] = [
     id: 'master-data',
     label: 'Master Data',
     items: [
+      { key: 'inventory-items', label: 'Items', icon: Package, description: 'Products and services catalogue' },
       { key: 'entities', label: 'Business Entities', icon: Building2, description: 'Shared customer & supplier directory', requiredAnyModules: ['sales', 'purchases'] },
     ],
   },
@@ -166,7 +167,6 @@ export const NAV_GROUPS: NavGroup[] = [
     requiredAnyModules: ['inventory_basic'],
     items: [
       { key: 'inventory-dashboard', label: 'Dashboard', icon: Boxes, description: 'Inventory value, low & out-of-stock', requiredModule: 'inventory_basic' },
-      { key: 'inventory-items', label: 'Items', icon: Package, description: 'Stock items & valuation', requiredModule: 'inventory_basic' },
       { key: 'inventory-categories', label: 'Item Categories', icon: Layers, description: 'Hierarchical item categories', requiredModule: 'inventory_basic' },
       { key: 'inventory-units', label: 'Units of Measure', icon: Ruler, description: 'Units of measure', requiredModule: 'inventory_basic' },
       { key: 'inventory-warehouses', label: 'Warehouses', icon: Warehouse, description: 'Warehouses & stock locations', requiredModule: 'inventory_basic' },

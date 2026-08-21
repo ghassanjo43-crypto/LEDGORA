@@ -33,6 +33,10 @@ import { ProjectPicker } from '@/components/projects/ProjectPicker';
 import { useProjectStore } from '@/store/projectStore';
 import { useHasModule } from '@/store/entitlementHooks';
 import { InventoryLineControl } from '@/components/inventory/InventoryLineControl';
+import { ItemSelector } from '@/components/items/ItemSelector';
+import { salesItemDefaults } from '@/lib/itemCatalogue';
+import { useInventoryStore } from '@/store/inventoryStore';
+import { useTaxCodeStore } from '@/store/taxCodeStore';
 
 interface Props {
   open: boolean;
@@ -53,6 +57,8 @@ export function InvoiceEditorDrawer({ open, invoiceId, onClose }: Props) {
   const showCostCenter = useHasModule('cost_centers');
   const showProject = useHasModule('projects');
   const showInventory = useHasModule('inventory_basic');
+  const catalogueItems = useInventoryStore((s) => s.items);
+  const taxCodes = useTaxCodeStore((s) => s.taxCodes);
   const showDimensions = showCostCenter || showProject || showInventory;
   const setActiveView = useStore((s) => s.setActiveView);
   const entities = useEntityStore((s) => s.entities);
@@ -124,6 +130,14 @@ export function InvoiceEditorDrawer({ open, invoiceId, onClose }: Props) {
 
   const setLine = (id: string, patch: Partial<InvoiceLine>): void => {
     setLines((prev) => prev.map((l) => (l.id === id ? { ...l, ...patch } : l)));
+  };
+  const selectItem = (lineId: string, itemId?: string): void => {
+    if (!itemId) { setLine(lineId, { itemId: undefined }); return; }
+    const item = catalogueItems.find((candidate) => candidate.id === itemId);
+    if (!item) return;
+    const defaults = salesItemDefaults(item);
+    const tax = defaults.taxCodeId ? taxCodes.find((candidate) => candidate.id === defaults.taxCodeId) : undefined;
+    setLine(lineId, { ...defaults, taxRate: tax?.rate ?? 0 });
   };
   const addLine = (): void => setLines((prev) => [...prev, makeEmptyInvoiceLine(prev.length + 1)]);
   const removeLine = (id: string): void => setLines((prev) => (prev.length > 1 ? prev.filter((l) => l.id !== id) : prev));
@@ -251,6 +265,7 @@ export function InvoiceEditorDrawer({ open, invoiceId, onClose }: Props) {
             <table className="min-w-full text-xs">
               <thead className="bg-slate-50 text-[10px] uppercase tracking-wide text-slate-400 dark:bg-slate-800/40">
                 <tr>
+                  <th className="px-2 py-2 text-left">Item</th>
                   <th className="px-2 py-2 text-left">Revenue account</th>
                   <th className="px-2 py-2 text-left">Description</th>
                   <th className="px-2 py-2 text-right">Qty</th>
@@ -266,6 +281,7 @@ export function InvoiceEditorDrawer({ open, invoiceId, onClose }: Props) {
                   const c = calculateInvoiceLine(line);
                   return (
                     <tr key={line.id}>
+                      <td className="min-w-[12rem] px-2 py-1.5"><ItemSelector mode="sales" value={line.itemId} disabled={readOnly} onChange={(id) => selectItem(line.id, id)} /></td>
                       <td className="px-2 py-1.5 min-w-[12rem]"><AccountSelect value={line.accountId} accounts={accounts} onChange={(a) => setLine(line.id, { accountId: a.id })} disabled={readOnly} /></td>
                       <td className="px-2 py-1.5 min-w-[10rem]"><Input value={line.description} onChange={(e) => setLine(line.id, { description: e.target.value })} disabled={readOnly} className="h-8" placeholder="Description" /></td>
                       <td className="px-2 py-1.5 w-20"><Input type="number" step="0.01" value={line.quantity} onChange={(e) => setLine(line.id, { quantity: Number(e.target.value) })} disabled={readOnly} className="h-8 text-right" /></td>
@@ -278,7 +294,7 @@ export function InvoiceEditorDrawer({ open, invoiceId, onClose }: Props) {
                   );
                 }).flatMap((row, i) => showDimensions ? [row, (
                   <tr key={`${lines[i]!.id}-cc`}>
-                    <td colSpan={8} className="px-2 pb-2">
+                    <td colSpan={9} className="px-2 pb-2">
                       <div className="flex flex-wrap items-start gap-x-6 gap-y-2">
                         {showCostCenter && <CostCenterLineControl amount={calculateInvoiceLine(lines[i]!).taxableAmount} costCenterId={lines[i]!.costCenterId} assignments={lines[i]!.costCenterAssignments} postingDate={issueDate} currency={currency} disabled={readOnly} onChange={(patch) => setLine(lines[i]!.id, patch)} />}
                         {showProject && <div className="flex items-center gap-2"><span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Project</span><div className="w-52"><ProjectPicker value={lines[i]!.projectId ?? ''} projects={projects} postingDate={issueDate} disabled={readOnly} onChange={(id) => setLine(lines[i]!.id, { projectId: id || undefined })} /></div></div>}
@@ -290,7 +306,7 @@ export function InvoiceEditorDrawer({ open, invoiceId, onClose }: Props) {
               </tbody>
               <tfoot>
                 <tr className="border-t border-slate-200 dark:border-slate-700">
-                  <td colSpan={6} className="px-2 py-1.5 text-right text-slate-500">Subtotal · Tax · Total</td>
+                  <td colSpan={7} className="px-2 py-1.5 text-right text-slate-500">Subtotal · Tax · Total</td>
                   <td className="px-2 py-1.5 text-right font-mono font-semibold">{money(totals.subtotal)} · {money(totals.taxTotal)} · {money(totals.grandTotal)}</td>
                   <td />
                 </tr>

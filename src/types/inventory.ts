@@ -49,7 +49,10 @@ export interface InventoryItem extends ItemAccountMappings {
 
   code: string;
   name: string;
+  nameSecondary?: string;
   description?: string;
+  gtin?: string;
+  imageRef?: string;
 
   itemType: InventoryItemType;
   categoryId?: string;
@@ -72,6 +75,12 @@ export interface InventoryItem extends ItemAccountMappings {
   defaultCostCenterId?: string;
 
   standardCost?: number;
+  defaultSellingPrice?: number;
+  defaultPurchasePrice?: number;
+  salesDescription?: string;
+  purchaseDescription?: string;
+  salesTaxCodeId?: string;
+  purchaseTaxCodeId?: string;
   reorderLevel?: number;
   reorderQuantity?: number;
   safetyStock?: number;

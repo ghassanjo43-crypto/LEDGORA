@@ -1,8 +1,13 @@
 import { useMemo, useState } from 'react';
 import { useInventoryStore } from '@/store/inventoryStore';
-import type { InventoryItem, InventoryItemType } from '@/types/inventory';
+import { useStore } from '@/store/useStore';
+import { useTaxCodeStore } from '@/store/taxCodeStore';
+import { useEntityStore } from '@/store/useEntityStore';
+import { useHasModule } from '@/store/entitlementHooks';
+import type { InventoryItem } from '@/types/inventory';
 import { ENTITY } from '@/lib/inventorySeed';
 import { getInventoryBalance } from '@/lib/inventoryBalance';
+import { itemClassification } from '@/lib/itemCatalogue';
 import { generateId } from '@/lib/utils';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -13,12 +18,10 @@ import { Alert } from '@/components/ui/Alert';
 import { Drawer } from '@/components/ui/Drawer';
 import { money, qty } from './InventoryShared';
 
-const ITEM_TYPES: InventoryItemType[] = ['inventory', 'non-inventory', 'service', 'raw-material', 'component', 'subassembly', 'finished-good', 'packaging', 'consumable', 'spare-part', 'scrap'];
-
 function blankItem(baseUnitId: string): InventoryItem {
   return {
-    id: generateId('item'), entityId: ENTITY, code: '', name: '', itemType: 'inventory', baseUnitId,
-    isInventoryTracked: true, isPurchasable: true, isSellable: true, isManufacturable: false,
+    id: generateId('item'), entityId: ENTITY, code: '', name: '', itemType: 'non-inventory', baseUnitId,
+    isInventoryTracked: false, isPurchasable: true, isSellable: true, isManufacturable: false,
     trackingMode: 'none', valuationMethod: 'weighted-average', status: 'active', createdAt: '', updatedAt: '',
   };
 }
@@ -30,16 +33,19 @@ export function ItemsPage() {
   const movements = useInventoryStore((s) => s.movements);
   const saveItem = useInventoryStore((s) => s.saveItem);
   const archiveItem = useInventoryStore((s) => s.archiveItem);
-
+  const accounts = useStore((s) => s.accounts);
+  const taxCodes = useTaxCodeStore((s) => s.taxCodes);
+  const entities = useEntityStore((s) => s.entities);
+  const hasInventory = useHasModule('inventory_basic');
   const [editing, setEditing] = useState<InventoryItem | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const rows = useMemo(
-    () => items.map((item) => ({ item, bal: getInventoryBalance(movements, { entityId: ENTITY, itemId: item.id }) })),
-    [items, movements],
-  );
-  const unitOptions = useMemo(() => units.map((u) => ({ value: u.id, label: u.code })), [units]);
-  const categoryOptions = useMemo(() => [{ value: '', label: '—' }, ...categories.map((c) => ({ value: c.id, label: c.name }))], [categories]);
+  const rows = useMemo(() => items.filter((item) => item.entityId === ENTITY).map((item) => ({ item, bal: getInventoryBalance(movements, { entityId: ENTITY, itemId: item.id }) })), [items, movements]);
+  const unitOptions = units.filter((unit) => unit.status === 'active').map((unit) => ({ value: unit.id, label: `${unit.code} — ${unit.name}` }));
+  const categoryOptions = [{ value: '', label: 'None' }, ...categories.filter((category) => category.status === 'active').map((category) => ({ value: category.id, label: category.name }))];
+  const accountOptions = [{ value: '', label: 'Use account defaults' }, ...accounts.map((account) => ({ value: account.id, label: `${account.code} — ${account.name}` }))];
+  const taxOptions = [{ value: '', label: 'No default tax' }, ...taxCodes.filter((tax) => tax.status === 'active').map((tax) => ({ value: tax.id, label: `${tax.code} — ${tax.name}` }))];
+  const supplierOptions = [{ value: '', label: 'No preferred supplier' }, ...entities.filter((entity) => entity.entityType === 'supplier' || entity.entityType === 'both').map((entity) => ({ value: entity.id, label: entity.legalName }))];
 
   const save = (): void => {
     if (!editing) return;
@@ -47,74 +53,47 @@ export function ItemsPage() {
     if (!res.ok) { setError(res.error ?? 'Could not save item.'); return; }
     setEditing(null); setError(null);
   };
+  const set = <K extends keyof InventoryItem>(key: K, value: InventoryItem[K]): void => setEditing((item) => item ? { ...item, [key]: value } : item);
 
-  return (
-    <div className="space-y-4">
-      <div className="flex justify-end">
-        <Button onClick={() => { setError(null); setEditing(blankItem(units[0]?.id ?? '')); }}>New item</Button>
-      </div>
-
-      <Card className="overflow-hidden">
-        <table className="w-full text-sm">
-          <thead className="bg-slate-50 text-xs uppercase text-slate-500 dark:bg-slate-800/50">
-            <tr>
-              <th className="px-4 py-2 text-left">Code</th>
-              <th className="px-4 py-2 text-left">Name</th>
-              <th className="px-4 py-2 text-left">Type</th>
-              <th className="px-4 py-2 text-right">On hand</th>
-              <th className="px-4 py-2 text-right">Avg cost</th>
-              <th className="px-4 py-2 text-right">Value</th>
-              <th className="px-4 py-2"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map(({ item, bal }) => (
-              <tr key={item.id} className="border-t border-slate-100 dark:border-slate-800">
-                <td className="px-4 py-2 font-medium">{item.code}</td>
-                <td className="px-4 py-2">{item.name}</td>
-                <td className="px-4 py-2"><Badge tone="slate">{item.itemType}</Badge>{item.status === 'archived' && <Badge tone="red">archived</Badge>}</td>
-                <td className="px-4 py-2 text-right">{qty(bal.quantityOnHand)}</td>
-                <td className="px-4 py-2 text-right">{money(bal.averageUnitCost)}</td>
-                <td className="px-4 py-2 text-right font-medium">{money(bal.inventoryValue)}</td>
-                <td className="px-4 py-2 text-right">
-                  <Button size="sm" variant="ghost" onClick={() => { setError(null); setEditing({ ...item }); }}>Edit</Button>
-                  {item.status !== 'archived' && <Button size="sm" variant="ghost" onClick={() => archiveItem(item.id)}>Archive</Button>}
-                </td>
-              </tr>
-            ))}
-            {rows.length === 0 && <tr><td colSpan={7} className="px-4 py-8 text-center text-slate-400">No items yet.</td></tr>}
-          </tbody>
-        </table>
-      </Card>
-
-      <Drawer open={!!editing} onClose={() => setEditing(null)} title={editing?.code ? `Edit ${editing.code}` : 'New item'}>
-        {editing && (
-          <div className="space-y-4">
-            {error && <Alert variant="error">{error}</Alert>}
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="Code" required><Input value={editing.code} onChange={(e) => setEditing({ ...editing, code: e.target.value })} /></Field>
-              <Field label="Name" required><Input value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} /></Field>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="Type"><Select options={ITEM_TYPES.map((t) => ({ value: t, label: t }))} value={editing.itemType} onChange={(e) => setEditing({ ...editing, itemType: e.target.value as InventoryItemType })} /></Field>
-              <Field label="Base unit"><Select options={unitOptions} value={editing.baseUnitId} onChange={(e) => setEditing({ ...editing, baseUnitId: e.target.value })} /></Field>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="Category"><Select options={categoryOptions} value={editing.categoryId ?? ''} onChange={(e) => setEditing({ ...editing, categoryId: e.target.value || undefined })} /></Field>
-              <Field label="Valuation"><Select options={[{ value: 'weighted-average', label: 'Weighted average' }, { value: 'standard', label: 'Standard' }]} value={editing.valuationMethod} onChange={(e) => setEditing({ ...editing, valuationMethod: e.target.value as InventoryItem['valuationMethod'] })} /></Field>
-            </div>
-            <div className="flex flex-wrap gap-4 text-sm">
-              <label className="flex items-center gap-2"><input type="checkbox" checked={editing.isInventoryTracked} onChange={(e) => setEditing({ ...editing, isInventoryTracked: e.target.checked })} />Stock tracked</label>
-              <label className="flex items-center gap-2"><input type="checkbox" checked={editing.isPurchasable} onChange={(e) => setEditing({ ...editing, isPurchasable: e.target.checked })} />Purchasable</label>
-              <label className="flex items-center gap-2"><input type="checkbox" checked={editing.isSellable} onChange={(e) => setEditing({ ...editing, isSellable: e.target.checked })} />Sellable</label>
-            </div>
-            <div className="flex justify-end gap-2 pt-2">
-              <Button variant="ghost" onClick={() => setEditing(null)}>Cancel</Button>
-              <Button onClick={save}>Save item</Button>
-            </div>
-          </div>
-        )}
-      </Drawer>
+  return <div className="space-y-4">
+    <div className="flex items-center justify-between">
+      <p className="max-w-2xl text-sm text-slate-500">Products and services shared by sales and purchasing. Prices and descriptions are copied into document lines as editable snapshots; changing an item never changes previous transactions.</p>
+      <Button onClick={() => { setError(null); setEditing(blankItem(units[0]?.id ?? '')); }}>New item</Button>
     </div>
-  );
+    <Card className="overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm">
+      <thead className="bg-slate-50 text-xs uppercase text-slate-500 dark:bg-slate-800/50"><tr><th className="px-4 py-2 text-left">Code</th><th className="px-4 py-2 text-left">Name</th><th className="px-4 py-2 text-left">Kind</th><th className="px-4 py-2 text-right">Selling price</th><th className="px-4 py-2 text-right">Purchase price</th><th className="px-4 py-2 text-left">Status</th>{hasInventory && <><th className="px-4 py-2 text-right">On hand</th><th className="px-4 py-2 text-right">Stock value</th></>}<th /></tr></thead>
+      <tbody>{rows.map(({ item, bal }) => <tr key={item.id} className="border-t border-slate-100 dark:border-slate-800">
+        <td className="px-4 py-2 font-medium">{item.code}</td><td className="px-4 py-2">{item.name}</td><td className="px-4 py-2"><Badge tone="slate">{itemClassification(item)}</Badge>{item.isInventoryTracked && <Badge tone="blue">stock tracked</Badge>}</td>
+        <td className="px-4 py-2 text-right">{item.isSellable ? money(item.defaultSellingPrice ?? 0) : '—'}</td><td className="px-4 py-2 text-right">{item.isPurchasable ? money(item.defaultPurchasePrice ?? item.standardCost ?? 0) : '—'}</td><td className="px-4 py-2"><Badge tone={item.status === 'active' ? 'green' : item.status === 'archived' ? 'red' : 'slate'}>{item.status}</Badge></td>
+        {hasInventory && <><td className="px-4 py-2 text-right">{item.isInventoryTracked ? qty(bal.quantityOnHand) : '—'}</td><td className="px-4 py-2 text-right">{item.isInventoryTracked ? money(bal.inventoryValue) : '—'}</td></>}
+        <td className="whitespace-nowrap px-4 py-2 text-right"><Button size="sm" variant="ghost" onClick={() => { setError(null); setEditing({ ...item }); }}>Edit</Button>{item.status !== 'archived' && <Button size="sm" variant="ghost" onClick={() => archiveItem(item.id)}>Archive</Button>}</td>
+      </tr>)}{rows.length === 0 && <tr><td colSpan={hasInventory ? 9 : 7} className="px-4 py-8 text-center text-slate-400">No items yet.</td></tr>}</tbody>
+    </table></div></Card>
+
+    <Drawer open={!!editing} onClose={() => setEditing(null)} title={editing?.code ? `Edit ${editing.code}` : 'New item'} widthClassName="max-w-3xl">
+      {editing && <div className="space-y-6">{error && <Alert variant="error">{error}</Alert>}
+        <section className="space-y-3"><h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400">Item details</h3><div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Item code / SKU" required><Input value={editing.code} onChange={(e) => set('code', e.target.value)} /></Field><Field label="Primary name" required><Input value={editing.name} onChange={(e) => set('name', e.target.value)} /></Field>
+          <Field label="Secondary-language name"><Input value={editing.nameSecondary ?? ''} onChange={(e) => set('nameSecondary', e.target.value || undefined)} /></Field><Field label="Product or service"><Select value={itemClassification(editing)} options={[{ value: 'product', label: 'Product' }, { value: 'service', label: 'Service' }]} onChange={(e) => { const service = e.target.value === 'service'; setEditing({ ...editing, itemType: service ? 'service' : 'non-inventory', isInventoryTracked: service ? false : editing.isInventoryTracked }); }} /></Field>
+          <Field label="Unit of measure"><Select value={editing.baseUnitId} options={unitOptions} onChange={(e) => set('baseUnitId', e.target.value)} /></Field><Field label="Category"><Select value={editing.categoryId ?? ''} options={categoryOptions} onChange={(e) => set('categoryId', e.target.value || undefined)} /></Field>
+          <Field label="GTIN / barcode"><Input value={editing.gtin ?? ''} onChange={(e) => set('gtin', e.target.value || undefined)} /></Field><Field label="Status"><Select value={editing.status} options={[{ value: 'active', label: 'Active' }, { value: 'inactive', label: 'Inactive' }, { value: 'archived', label: 'Archived' }]} onChange={(e) => set('status', e.target.value as InventoryItem['status'])} /></Field>
+          <Field label="Image reference"><Input value={editing.imageRef ?? ''} onChange={(e) => set('imageRef', e.target.value || undefined)} /></Field>
+        </div><Field label="General description"><Input value={editing.description ?? ''} onChange={(e) => set('description', e.target.value || undefined)} /></Field></section>
+
+        <section className="space-y-3"><label className="flex items-center gap-2 text-sm font-medium"><input type="checkbox" checked={editing.isSellable} onChange={(e) => set('isSellable', e.target.checked)} />I sell this item</label>{editing.isSellable && <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Default selling price"><Input type="number" min="0" value={editing.defaultSellingPrice ?? 0} onChange={(e) => set('defaultSellingPrice', Number(e.target.value))} /></Field><Field label="Revenue account"><Select value={editing.salesAccountId ?? ''} options={accountOptions} onChange={(e) => set('salesAccountId', e.target.value || undefined)} /></Field>
+          <Field label="Sales tax code"><Select value={editing.salesTaxCodeId ?? ''} options={taxOptions} onChange={(e) => set('salesTaxCodeId', e.target.value || undefined)} /></Field><Field label="Sales description"><Input value={editing.salesDescription ?? ''} onChange={(e) => set('salesDescription', e.target.value || undefined)} /></Field>
+        </div>}</section>
+
+        <section className="space-y-3"><label className="flex items-center gap-2 text-sm font-medium"><input type="checkbox" checked={editing.isPurchasable} onChange={(e) => set('isPurchasable', e.target.checked)} />I purchase this item</label>{editing.isPurchasable && <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Default purchase price"><Input type="number" min="0" value={editing.defaultPurchasePrice ?? editing.standardCost ?? 0} onChange={(e) => set('defaultPurchasePrice', Number(e.target.value))} /></Field><Field label="Expense account"><Select value={editing.purchaseAccountId ?? ''} options={accountOptions} onChange={(e) => set('purchaseAccountId', e.target.value || undefined)} /></Field>
+          <Field label="Purchase tax code"><Select value={editing.purchaseTaxCodeId ?? ''} options={taxOptions} onChange={(e) => set('purchaseTaxCodeId', e.target.value || undefined)} /></Field><Field label="Preferred supplier"><Select value={editing.defaultSupplierId ?? ''} options={supplierOptions} onChange={(e) => set('defaultSupplierId', e.target.value || undefined)} /></Field><Field label="Purchase description"><Input value={editing.purchaseDescription ?? ''} onChange={(e) => set('purchaseDescription', e.target.value || undefined)} /></Field>
+        </div>}</section>
+
+        {hasInventory && itemClassification(editing) === 'product' && <section className="space-y-3"><h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400">Inventory settings</h3><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={editing.isInventoryTracked} onChange={(e) => setEditing({ ...editing, isInventoryTracked: e.target.checked, itemType: e.target.checked && editing.itemType === 'non-inventory' ? 'inventory' : editing.itemType })} />Track inventory for this product</label>{editing.isInventoryTracked && <div className="grid gap-3 sm:grid-cols-2"><Field label="Valuation method"><Select value={editing.valuationMethod} options={[{ value: 'weighted-average', label: 'Weighted average' }, { value: 'standard', label: 'Standard' }]} onChange={(e) => set('valuationMethod', e.target.value as InventoryItem['valuationMethod'])} /></Field><Field label="Tracking mode"><Select value={editing.trackingMode} options={[{ value: 'none', label: 'None' }, { value: 'lot', label: 'Lot' }, { value: 'serial', label: 'Serial' }]} onChange={(e) => set('trackingMode', e.target.value as InventoryItem['trackingMode'])} /></Field><Field label="Inventory asset account"><Select value={editing.inventoryAccountId ?? ''} options={accountOptions} onChange={(e) => set('inventoryAccountId', e.target.value || undefined)} /></Field><Field label="COGS account"><Select value={editing.costOfGoodsSoldAccountId ?? ''} options={accountOptions} onChange={(e) => set('costOfGoodsSoldAccountId', e.target.value || undefined)} /></Field><Field label="Reorder level"><Input type="number" min="0" value={editing.reorderLevel ?? 0} onChange={(e) => set('reorderLevel', Number(e.target.value))} /></Field><Field label="Reorder quantity"><Input type="number" min="0" value={editing.reorderQuantity ?? 0} onChange={(e) => set('reorderQuantity', Number(e.target.value))} /></Field></div>}</section>}
+        <Alert variant="info">Selling and purchase prices are defaults for new document lines. They do not change previous transactions and purchase price is not an inventory valuation or COGS source.</Alert>
+        <div className="flex justify-end gap-2"><Button variant="ghost" onClick={() => setEditing(null)}>Cancel</Button><Button onClick={save}>Save item</Button></div>
+      </div>}
+    </Drawer>
+  </div>;
 }
