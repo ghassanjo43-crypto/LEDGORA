@@ -9,7 +9,6 @@ import { ArrowRight, BookOpenCheck, LineChart, ShieldCheck, Sparkles } from 'luc
 import { useRouterStore } from '@/store/routerStore';
 import { ROUTES } from '@/lib/accessControl';
 import { Button } from '@/components/ui/Button';
-import { Brand } from '@/components/onboarding/OnboardingChrome';
 import { FreeDemoConfirmDialog } from '@/components/onboarding/FreeDemoConfirmDialog';
 import { FREE_DEMO_COPY } from '@/config/freeDemo';
 
@@ -31,6 +30,21 @@ const HIGHLIGHTS = [
   },
 ];
 
+function LandingHeaderBrand({ onClick }: { onClick: () => void }) {
+  return (
+    <button type="button" onClick={onClick} aria-label="Ledgora home" className="flex shrink-0 items-center">
+      <span
+        role="img"
+        aria-label="Ledgora"
+        className="h-11 w-[148px] rounded bg-center bg-[length:166.4px_auto] bg-no-repeat sm:w-[180px] sm:bg-[length:208px_auto] lg:w-[200px] lg:bg-[length:234px_auto]"
+        style={{
+          backgroundImage: "url('/ledgora-logo.png')",
+        }}
+      />
+    </button>
+  );
+}
+
 export function WelcomePage() {
   const navigate = useRouterStore((s) => s.navigate);
   const [demoOpen, setDemoOpen] = useState(false);
@@ -39,7 +53,7 @@ export function WelcomePage() {
     <div className="flex min-h-full flex-col bg-slate-50 dark:bg-slate-950">
       <header className="border-b border-slate-200 bg-white/80 backdrop-blur dark:border-slate-800 dark:bg-slate-900/80">
         <div className="mx-auto flex max-w-5xl items-center justify-between gap-3 px-4 py-3 sm:px-6">
-          <Brand />
+          <LandingHeaderBrand onClick={() => navigate(ROUTES.pricing)} />
           <nav className="flex items-center gap-2">
             <Button variant="ghost" size="sm" onClick={() => navigate(ROUTES.pricing)}>
               Pricing
