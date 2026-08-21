@@ -63,6 +63,7 @@ export function BillEditorDrawer({ open, billId, onClose }: Props) {
   /** The company's own currency — what a NEW bill is recorded in. */
   const companyCurrency = useTransactionCurrency();
   const [showPreview, setShowPreview] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
 
   const suppliers = useMemo(() => entities.filter((e) => e.entityType === 'supplier' || e.entityType === 'both'), [entities]);
 
@@ -123,7 +124,7 @@ export function BillEditorDrawer({ open, billId, onClose }: Props) {
   // `currency` and `exchangeRate` are deliberately absent: an edit must not be
   // able to re-denominate a bill, so the stored values are simply left alone.
   const collect = (): Partial<Bill> => ({ supplierId, supplierInvoiceNumber, billType, billDate, dueDate, purchaseOrderId: poRef || undefined, notes, lines });
-  const persist = (): boolean => { const res = updateDraft(bill.id, collect()); if (!res.ok) { notify(res.error ?? 'Could not save the bill.', 'error'); return false; } return true; };
+  const persist = (): boolean => { const res = updateDraft(bill.id, collect()); if (!res.ok) { const message = res.error ?? 'Could not save the bill.'; setFormError(message); notify(message, 'error'); requestAnimationFrame(() => document.querySelector<HTMLElement>('[aria-modal="true"] [aria-invalid="true"]')?.focus()); return false; } setFormError(null); return true; };
 
   const onSave = (): void => { if (persist()) { notify('Bill draft saved.', 'success'); onClose(); } };
   const onSubmit = (): void => { if (!persist()) return; const r = submitBill(bill.id); if (r.ok) notify('Bill submitted.', 'success'); else notify(r.error ?? 'Could not submit.', 'error'); };
@@ -146,9 +147,10 @@ export function BillEditorDrawer({ open, billId, onClose }: Props) {
       <Drawer open={open} onClose={onClose} widthClassName="max-w-5xl" title={`Bill ${bill.billNumber}`}
         description={readOnly ? `${bill.status} — read only` : 'Enter the supplier invoice, then submit/approve and post to Trade Payables'}
         footer={
-          <div className="flex w-full items-center justify-between gap-3">
+          <div className="flex w-full flex-wrap items-center justify-between gap-3">
             <div className="text-sm"><span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Bill total</span><span className="ml-2 font-mono text-base font-bold">{money(totals.grandTotal)}</span></div>
-            <div className="flex items-center gap-2">
+            {formError && <p role="alert" className="w-full text-xs text-red-600 dark:text-red-400">Please review the form: {formError}</p>}
+            <div className="flex flex-wrap items-center justify-end gap-2">
               <Button variant="outline" onClick={onClose}>Close</Button>
               {!readOnly && <Button variant="ghost" size="sm" onClick={onPreview}><Eye className="h-4 w-4" /> Preview</Button>}
               {!readOnly && <Button variant="secondary" onClick={onSave}><Save className="h-4 w-4" /> Save</Button>}
@@ -160,12 +162,14 @@ export function BillEditorDrawer({ open, billId, onClose }: Props) {
         }
       >
         <div className="space-y-6">
-          <section className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <section aria-labelledby="bill-details-heading" className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-5">
+            <h3 id="bill-details-heading" className="mb-4 text-xs font-semibold uppercase tracking-wide text-slate-500">Supplier and bill details</h3>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <Field label="Supplier" required><EntityPicker value={supplierId} entities={suppliers} onChange={(e: BusinessEntity | null) => setSupplierId(e?.id ?? '')} placeholder="Select supplier" disabled={readOnly} /></Field>
-            <Field label="Supplier invoice no." required><Input value={supplierInvoiceNumber} onChange={(e) => setSupplierInvoiceNumber(e.target.value)} disabled={readOnly} placeholder="SUP-INV-8842" /></Field>
+            <Field label="Supplier invoice no." required error={!readOnly && formError && !supplierInvoiceNumber.trim() ? 'Supplier invoice number is required.' : undefined}><Input aria-label="Supplier invoice number" aria-invalid={!readOnly && !!formError && !supplierInvoiceNumber.trim()} value={supplierInvoiceNumber} onChange={(e) => setSupplierInvoiceNumber(e.target.value)} disabled={readOnly} placeholder="SUP-INV-8842" /></Field>
             <Field label="Bill type"><Select options={TYPE_OPTIONS} value={billType} onChange={(e) => setBillType(e.target.value as BillType)} disabled={readOnly} /></Field>
-            <Field label="Bill date" required><Input type="date" value={billDate} onChange={(e) => setBillDate(e.target.value)} disabled={readOnly} /></Field>
-            <Field label="Due date" required><Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} disabled={readOnly} /></Field>
+            <Field label="Bill date" required error={!readOnly && formError && !billDate ? 'Bill date is required.' : undefined}><Input aria-label="Bill date" aria-invalid={!readOnly && !!formError && !billDate} type="date" value={billDate} onChange={(e) => setBillDate(e.target.value)} disabled={readOnly} /></Field>
+            <Field label="Due date" required error={!readOnly && formError && !dueDate ? 'Due date is required.' : undefined}><Input aria-label="Due date" aria-invalid={!readOnly && !!formError && !dueDate} type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} disabled={readOnly} /></Field>
             {/*
               The company's own currency, shown and not chosen. A bill is an
               ordinary purchase transaction, so it is recorded in the company's
@@ -176,6 +180,7 @@ export function BillEditorDrawer({ open, billId, onClose }: Props) {
               <ReadOnlyValue data-testid="bill-currency">{companyCurrencyForBill.label}</ReadOnlyValue>
             </Field>
             <Field label="PO reference"><Input value={poRef} onChange={(e) => setPoRef(e.target.value)} disabled={readOnly} placeholder="Purchase order" /></Field>
+            </div>
           </section>
 
           {duplicate.status !== 'ok' && (
@@ -184,34 +189,34 @@ export function BillEditorDrawer({ open, billId, onClose }: Props) {
             </p>
           )}
 
-          <section className="space-y-2">
-            <div className="flex items-center justify-between"><h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400">Bill lines</h3>{!readOnly && <Button type="button" variant="outline" size="sm" onClick={addLine}><Plus className="h-4 w-4" /> Add line</Button>}</div>
-            <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
-              <table className="min-w-full text-xs">
-                <thead className="bg-slate-50 text-[10px] uppercase tracking-wide text-slate-400 dark:bg-slate-800/40"><tr>
-                  <th className="px-2 py-2 text-left">Item</th><th className="px-2 py-2 text-left">Account</th><th className="px-2 py-2 text-left">Description</th><th className="px-2 py-2 text-right">Qty</th><th className="px-2 py-2 text-right">Unit price</th><th className="px-2 py-2 text-right">Disc %</th><th className="px-2 py-2 text-right">Tax %</th><th className="px-2 py-2 text-right">WHT %</th><th className="px-2 py-2 text-right">Line total</th><th />
-                </tr></thead>
-                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {lines.map((line) => { const c = calculateBillLine(line); return (
-                    <tr key={line.id}>
-                      <td className="min-w-[12rem] px-2 py-1.5"><ItemSelector mode="purchase" value={line.itemId} disabled={readOnly} onChange={(id) => selectItem(line.id, id)} /></td>
-                      <td className="px-2 py-1.5 min-w-[12rem]"><AccountSelect value={line.accountId} accounts={accounts} onChange={(a) => setLine(line.id, { accountId: a.id })} disabled={readOnly} /></td>
-                      <td className="px-2 py-1.5 min-w-[10rem]"><Input value={line.description} onChange={(e) => setLine(line.id, { description: e.target.value })} disabled={readOnly} className="h-8" placeholder="Description" /></td>
-                      <td className="px-2 py-1.5 w-20"><Input type="number" step="0.01" value={line.quantity} onChange={(e) => setLine(line.id, { quantity: Number(e.target.value) })} disabled={readOnly} className="h-8 text-right" /></td>
-                      <td className="px-2 py-1.5 w-24"><Input type="number" step="0.01" value={line.unitPrice} onChange={(e) => setLine(line.id, { unitPrice: Number(e.target.value) })} disabled={readOnly} className="h-8 text-right" /></td>
-                      <td className="px-2 py-1.5 w-20"><Input type="number" step="0.01" value={line.discountValue ?? 0} onChange={(e) => setLine(line.id, { discountType: 'percentage', discountValue: Number(e.target.value) })} disabled={readOnly} className="h-8 text-right" /></td>
-                      <td className="px-2 py-1.5 w-20"><Input type="number" step="0.01" value={line.taxRate} onChange={(e) => setLine(line.id, { taxRate: Number(e.target.value) })} disabled={readOnly} className="h-8 text-right" /></td>
-                      <td className="px-2 py-1.5 w-20"><Input type="number" step="0.01" value={line.withholdingTaxRate ?? 0} onChange={(e) => setLine(line.id, { withholdingTaxRate: Number(e.target.value) })} disabled={readOnly} className="h-8 text-right" /></td>
-                      <td className="px-2 py-1.5 text-right font-mono">{money(c.lineTotal)}</td>
-                      <td className="px-2 py-1.5">{!readOnly && <button type="button" onClick={() => removeLine(line.id)} className="text-slate-400 hover:text-red-600" aria-label="Remove line"><Trash2 className="h-4 w-4" /></button>}</td>
-                    </tr>
-                  ); }).flatMap((row, i) => showDimensions ? [row, (
-                    <tr key={`${lines[i]!.id}-cc`}>
-                      <td colSpan={10} className="px-2 pb-2">
-                        <div className="flex flex-wrap items-start gap-x-6 gap-y-2">
-                          {showCostCenter && <CostCenterLineControl amount={calculateBillLine(lines[i]!).taxableAmount} costCenterId={lines[i]!.costCenterId} assignments={lines[i]!.costCenterAssignments} postingDate={billDate} currency={currency} disabled={readOnly} onChange={(patch) => setLine(lines[i]!.id, patch)} />}
-                          {showProject && <div className="flex items-center gap-2"><span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Project</span><div className="w-52"><ProjectPicker value={lines[i]!.projectId ?? ''} projects={projects} postingDate={billDate} disabled={readOnly} onChange={(id) => setLine(lines[i]!.id, { projectId: id || undefined })} /></div></div>}
-                          {showInventory && <InventoryLineControl mode="receive" itemId={lines[i]!.inventoryItemId} warehouseId={lines[i]!.warehouseId} enabled={lines[i]!.inventoryReceiptMode === 'receive-on-bill'} disabled={readOnly} onChange={(p) => {
+          <section aria-labelledby="bill-lines-heading" className="space-y-3" data-testid="bill-line-cards">
+            <div className="flex flex-wrap items-center justify-between gap-2"><div><h3 id="bill-lines-heading" className="text-xs font-semibold uppercase tracking-wide text-slate-500">Bill lines</h3><p className="mt-1 text-xs text-slate-500">Choose a catalogue item to copy purchasing defaults, or leave it blank for a manual line.</p></div>{!readOnly && <Button type="button" variant="outline" size="sm" onClick={addLine}><Plus className="h-4 w-4" /> Add line</Button>}</div>
+            <div className="space-y-4">
+              {lines.map((line, i) => { const c = calculateBillLine(line); return (
+                <article key={line.id} aria-labelledby={`bill-line-${line.id}`} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-5" data-testid="bill-line-card">
+                  <div className="mb-4 flex items-center justify-between gap-3">
+                    <h4 id={`bill-line-${line.id}`} className="text-sm font-semibold text-slate-800 dark:text-slate-100">Line {i + 1}</h4>
+                    {!readOnly && <Button type="button" variant="ghost" size="sm" onClick={() => removeLine(line.id)} aria-label={`Remove line ${i + 1}`} disabled={lines.length <= 1}><Trash2 className="h-4 w-4" /> Remove</Button>}
+                  </div>
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <Field label="Catalogue item"><ItemSelector mode="purchase" value={line.itemId} disabled={readOnly} onChange={(id) => selectItem(line.id, id)} /></Field>
+                    <Field label="Purchase account" required><AccountSelect value={line.accountId} accounts={accounts} onChange={(a) => setLine(line.id, { accountId: a.id })} disabled={readOnly} /></Field>
+                    <div className="md:col-span-2"><Field label="Description" required><Input value={line.description} onChange={(e) => setLine(line.id, { description: e.target.value })} disabled={readOnly} placeholder="What was purchased?" /></Field></div>
+                  </div>
+                  <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                    <Field label="Quantity"><Input type="number" step="0.01" value={line.quantity} onChange={(e) => setLine(line.id, { quantity: Number(e.target.value) })} disabled={readOnly} className="text-right" /></Field>
+                    <Field label="Unit price"><Input type="number" step="0.01" value={line.unitPrice} onChange={(e) => setLine(line.id, { unitPrice: Number(e.target.value) })} disabled={readOnly} className="text-right" /></Field>
+                    <Field label="Discount %"><Input type="number" step="0.01" value={line.discountValue ?? 0} onChange={(e) => setLine(line.id, { discountType: 'percentage', discountValue: Number(e.target.value) })} disabled={readOnly} className="text-right" /></Field>
+                    <Field label="Tax %"><Input type="number" step="0.01" value={line.taxRate} onChange={(e) => setLine(line.id, { taxRate: Number(e.target.value) })} disabled={readOnly} className="text-right" /></Field>
+                    <Field label="Withholding %"><Input type="number" step="0.01" value={line.withholdingTaxRate ?? 0} onChange={(e) => setLine(line.id, { withholdingTaxRate: Number(e.target.value) })} disabled={readOnly} className="text-right" /></Field>
+                    <div className="rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-800/50"><p className="text-xs font-medium text-slate-500">Calculated line total</p><output aria-label={`Line ${i + 1} total`} className="mt-1 block text-right font-mono text-base font-semibold text-slate-900 dark:text-slate-100">{money(c.lineTotal)}</output></div>
+                  </div>
+                  {showDimensions && <div className="mt-5 border-t border-slate-100 pt-4 dark:border-slate-800">
+                    <h5 className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-400">Allocation and inventory</h5>
+                    <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                      {showCostCenter && <CostCenterLineControl amount={c.taxableAmount} costCenterId={line.costCenterId} assignments={line.costCenterAssignments} postingDate={billDate} currency={currency} disabled={readOnly} onChange={(patch) => setLine(line.id, patch)} />}
+                      {showProject && <Field label="Project"><ProjectPicker value={line.projectId ?? ''} projects={projects} postingDate={billDate} disabled={readOnly} onChange={(id) => setLine(line.id, { projectId: id || undefined })} /></Field>}
+                      {showInventory && <div className="lg:col-span-2 rounded-lg border border-slate-200 p-3 dark:border-slate-700"><InventoryLineControl mode="receive" itemId={line.inventoryItemId} warehouseId={line.warehouseId} enabled={line.inventoryReceiptMode === 'receive-on-bill'} disabled={readOnly} onChange={(p) => {
                             const patch: Partial<BillLine> = { inventoryItemId: p.itemId, warehouseId: p.warehouseId, inventoryReceiptMode: p.enabled ? 'receive-on-bill' : 'none' };
                             if (p.enabled && p.itemId) {
                               const st = useInventoryStore.getState();
@@ -220,27 +225,25 @@ export function BillEditorDrawer({ open, billId, onClose }: Props) {
                               const accId = item ? resolveInventoryAccounts({ accounts, item, category, settings: st.settings }).inventory : undefined;
                               if (accId) patch.accountId = accId; // bill journal debits inventory
                             }
-                            setLine(lines[i]!.id, patch);
-                          }} />}
-                        </div>
-                      </td>
-                    </tr>
-                  )] : [row])}
-                </tbody>
-              </table>
+                            setLine(line.id, patch);
+                          }} /><p className="mt-2 text-xs text-slate-500"><strong>Receive to stock</strong> records a physical inventory receipt. It is separate from the catalogue item above and never creates a duplicate receipt automatically.</p></div>}
+                    </div>
+                  </div>}
+                </article>
+              ); })}
             </div>
           </section>
 
-          <div className="grid grid-cols-2 gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs dark:border-slate-800 dark:bg-slate-800/40 sm:grid-cols-3 lg:grid-cols-6">
+          <section aria-labelledby="bill-totals-heading" className="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-800/40"><h3 id="bill-totals-heading" className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">Totals</h3><div className="grid grid-cols-2 gap-3 text-xs sm:grid-cols-3 lg:grid-cols-6">
             <Stat label="Subtotal" value={money(totals.subtotal)} />
             <Stat label="Input tax" value={money(totals.taxTotal)} />
             <Stat label="Withholding" value={money(totals.withholdingTaxTotal)} />
             <Stat label="Bill total" value={money(totals.grandTotal)} strong />
             <Stat label="Net payable" value={money(netPayable)} strong />
             <Stat label="Balance due" value={money(settlement.balanceDue)} />
-          </div>
+          </div></section>
 
-          <Field label="Notes"><Input value={notes} onChange={(e) => setNotes(e.target.value)} disabled={readOnly} placeholder="Optional internal notes" /></Field>
+          <section aria-labelledby="bill-notes-heading" className="rounded-xl border border-slate-200 p-4 dark:border-slate-800"><h3 id="bill-notes-heading" className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">Notes and accounting explanation</h3><Field label="Internal notes"><Input value={notes} onChange={(e) => setNotes(e.target.value)} disabled={readOnly} placeholder="Optional internal notes" /></Field></section>
 
           {readOnly ? (
             <BillSettlementSection billId={bill.id} money={money} />
