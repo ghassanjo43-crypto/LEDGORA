@@ -236,7 +236,7 @@ describe('posting validation', () => {
     });
     await expect(
       journals.postJournal(ctx.db, orgA, draft.id, { expectedVersion: draft.version }),
-    ).rejects.toThrow(/header account/i);
+    ).rejects.toThrow(/parent accounts cannot receive transactions/i);
   });
 
   it('refuses an entry that is all debits or all credits', async () => {
