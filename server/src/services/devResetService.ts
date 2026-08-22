@@ -282,6 +282,13 @@ const RESET_PLAN: readonly PlanEntry[] = [
     why: 'Deleted before their entries and before the accounts they point at.',
   },
   {
+    table: 'opening_balance_sets',
+    action: 'scoped_delete',
+    order: 33.5,
+    label: 'Opening balance migrations',
+    why: 'Deleted before the authoritative journal entries and users they reference.',
+  },
+  {
     table: 'journal_entries',
     action: 'scoped_delete',
     order: 34,

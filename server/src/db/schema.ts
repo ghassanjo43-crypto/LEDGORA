@@ -593,6 +593,7 @@ export interface Database {
   journal_lines: JournalLinesTable;
   journal_entry_versions: JournalEntryVersionsTable;
   accounting_audit_events: AccountingAuditEventsTable;
+  opening_balance_sets: OpeningBalanceSetsTable;
 }
 
 
@@ -719,6 +720,31 @@ export interface AccountingAuditEventsTable {
   detail: ColumnType<Record<string, unknown>, string | undefined, string>;
   request_id: string | null;
   at: Timestamp;
+}
+
+export interface OpeningBalanceSetsTable {
+  id: Generated<string>;
+  organization_id: string;
+  journal_entry_id: string;
+  bookkeeping_start_date: string;
+  opening_balance_date: string;
+  status: Generated<string>;
+  reference: Generated<string>;
+  description: Generated<string>;
+  version: Generated<number>;
+  prepared_by: string | null;
+  submitted_by: string | null;
+  submitted_at: Timestamp | null;
+  approved_by: string | null;
+  approved_at: Timestamp | null;
+  posted_by: string | null;
+  posted_at: Timestamp | null;
+  reversed_by: string | null;
+  reversed_at: Timestamp | null;
+  reversal_journal_entry_id: string | null;
+  replaces_opening_balance_id: string | null;
+  created_at: Timestamp;
+  updated_at: Timestamp;
 }
 
 export type User = Selectable<UsersTable>;

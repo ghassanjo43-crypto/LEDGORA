@@ -38,6 +38,7 @@ const SuppliersPage = lazy(() =>
 const JournalPage = lazy(() =>
   import('@/pages/JournalPage').then((m) => ({ default: m.JournalPage })),
 );
+const OpeningBalancesPage = lazy(() => import('@/pages/OpeningBalancesPage').then((m) => ({ default: m.OpeningBalancesPage })));
 const GeneralLedgerPage = lazy(() =>
   import('@/pages/GeneralLedgerPage').then((m) => ({ default: m.GeneralLedgerPage })),
 );
@@ -144,6 +145,8 @@ export default function App() {
         return <SuppliersPage />;
       case 'journal':
         return <JournalPage />;
+      case 'opening-balances':
+        return <OpeningBalancesPage />;
       case 'general-ledger':
         return <GeneralLedgerPage />;
       case 'trial-balance':

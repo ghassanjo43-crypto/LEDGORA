@@ -158,6 +158,7 @@ export type ViewKey =
   | 'customers'
   | 'suppliers'
   | 'journal'
+  | 'opening-balances'
   | 'import-export'
   | 'settings'
   // Future modules — routed to a "Coming soon" placeholder for now.

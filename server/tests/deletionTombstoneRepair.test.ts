@@ -99,7 +99,7 @@ async function breakTable(options: { unrecordMigration: boolean; keepColumns?: b
      * already exists". Their objects are dropped here so the replay is a true
      * replay rather than a collision.
      */
-    await sql`DROP TABLE IF EXISTS accounting_audit_events, journal_entry_versions,
+    await sql`DROP TABLE IF EXISTS opening_balance_sets, accounting_audit_events, journal_entry_versions,
               journal_lines, journal_entries, accounts, accounting_periods CASCADE`.execute(ctx.db);
   }
 }

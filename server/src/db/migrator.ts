@@ -26,6 +26,7 @@ import * as repairDeletionTombstoneStatusColumns from './migrations/012_repair_d
 import * as accountingFoundation from './migrations/013_accounting_foundation.js';
 import * as commercialPackageCatalogue from './migrations/014_commercial_package_catalogue.js';
 import * as accountPostingStates from './migrations/015_account_posting_states.js';
+import * as openingBalances from './migrations/016_opening_balances.js';
 
 const MIGRATIONS: Record<string, Migration> = {
   '001_initial_schema': initialSchema,
@@ -43,6 +44,7 @@ const MIGRATIONS: Record<string, Migration> = {
   '013_accounting_foundation': accountingFoundation,
   '014_commercial_package_catalogue': commercialPackageCatalogue,
   '015_account_posting_states': accountPostingStates,
+  '016_opening_balances': openingBalances,
 };
 
 class StaticMigrationProvider implements MigrationProvider {
