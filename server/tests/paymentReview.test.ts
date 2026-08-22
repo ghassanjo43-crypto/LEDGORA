@@ -140,7 +140,28 @@ describe('approval', () => {
     expect(response.statusCode).toBe(200);
     const body = response.json();
     expect(body.status).toBe('active');
-    expect(body.appliedModules).toContain('inventory_basic');
+
+    /*
+     * The entitlements applied are THIS plan's, whatever the catalogue happens
+     * to contain. This used to assert `inventory_basic`, which was a module of
+     * whichever package sat second in the seeded list — so changing the
+     * catalogue broke a test that was really about entitlement application.
+     * Asserting against the selected plan's own modules keeps the claim and
+     * removes the coupling to the seed's ordering.
+     */
+    const selectedPlan = await ctx.db
+      .selectFrom('subscription_plans')
+      .select('module_entitlements')
+      .where('code', '=', planCode)
+      .executeTakeFirstOrThrow();
+    const expectedModules: string[] =
+      typeof selectedPlan.module_entitlements === 'string'
+        ? JSON.parse(selectedPlan.module_entitlements)
+        : (selectedPlan.module_entitlements as string[]);
+    expect(expectedModules.length).toBeGreaterThan(0);
+    for (const module of expectedModules) {
+      expect(body.appliedModules, module).toContain(module);
+    }
 
     const subscription = await ctx.db.selectFrom('subscriptions').selectAll().executeTakeFirstOrThrow();
     const invoice = await ctx.db.selectFrom('subscription_invoices').selectAll().executeTakeFirstOrThrow();
