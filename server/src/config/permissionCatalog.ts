@@ -47,6 +47,7 @@ export const PERMISSION_ACTIONS = [
   'delete',
   'void',
   'approve',
+  'submit',
   'post',
   'unpost',
   'export',
@@ -64,6 +65,7 @@ export const ACTION_LABELS: Record<PermissionAction, string> = {
   delete: 'Delete',
   void: 'Void',
   approve: 'Approve',
+  submit: 'Submit',
   post: 'Post',
   unpost: 'Unpost',
   export: 'Export',
@@ -77,7 +79,7 @@ export const ACTION_LABELS: Record<PermissionAction, string> = {
 /** Read-only rights. The floor for anyone who can open a module at all. */
 const READ: PermissionAction[] = ['view', 'export'];
 /** Day-to-day authoring: bring a record into existence and correct it. */
-const AUTHOR: PermissionAction[] = ['create', 'edit'];
+const AUTHOR: PermissionAction[] = ['create', 'edit', 'submit'];
 /**
  * Acts that change the LEDGER or destroy a record. Posting an entry and voiding
  * a document are bookkeeping authority, deliberately separate from authoring.
@@ -152,6 +154,15 @@ export const PERMISSION_SUBJECTS: PermissionSubject[] = [
     requiredModule: 'accounting',
     actions: [...READ, ...AUTHOR, ...BOOKKEEPING, 'approve'],
     description: 'Journal entries and vouchers, including posting and reversal.',
+  },
+  {
+    id: 'opening_balances',
+    label: 'Opening Balances',
+    group: 'Accounting',
+    scope: 'organization',
+    requiredModule: 'accounting',
+    actions: ['view', 'create', 'edit', 'submit', 'approve', 'post', 'void', 'export'],
+    description: 'Prepare, approve, post and reverse the company migration opening balances.',
   },
   {
     id: 'general_ledger',

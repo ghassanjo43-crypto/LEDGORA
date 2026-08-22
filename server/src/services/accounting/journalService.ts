@@ -800,6 +800,7 @@ export async function createDraft(
   db: Kysely<Database>,
   actor: AccountingActor,
   input: JournalInput,
+  hooks: PostingHooks = {},
 ): Promise<JournalRecord> {
   const postingDate = resolveDates(input);
 
@@ -836,6 +837,7 @@ export async function createDraft(
 
     const journal = await loadJournal(trx, actor.organizationId, created.id);
     await writeVersion(trx, actor, journal, 'created', '');
+    await hooks.afterVersion?.(trx, journal);
     await writeAccountingAudit(trx, actor, {
       action: 'JOURNAL_CREATED',
       recordType: 'journal_entry',
@@ -853,6 +855,7 @@ export async function updateDraft(
   journalId: string,
   input: JournalInput,
   options: MutationOptions,
+  hooks: PostingHooks = {},
 ): Promise<JournalRecord> {
   return db.transaction().execute(async (trx) => {
     const existing = await lockAndVerify(trx, actor, journalId, options.expectedVersion);
@@ -894,6 +897,7 @@ export async function updateDraft(
 
     const updated = await loadJournal(trx, actor.organizationId, journalId);
     await writeVersion(trx, actor, updated, 'amended', options.reason ?? '');
+    await hooks.afterVersion?.(trx, updated);
     await writeAccountingAudit(trx, actor, {
       action: 'JOURNAL_UPDATED',
       recordType: 'journal_entry',
@@ -977,7 +981,7 @@ export async function postJournal(
 
     const posted = await loadJournal(trx, actor.organizationId, journalId);
     await writeVersion(trx, actor, posted, 'posted', options.reason ?? '');
-    await hooks.afterVersion?.(trx);
+    await hooks.afterVersion?.(trx, posted);
 
     await hooks.beforeAudit?.(trx);
     await writeAccountingAudit(trx, actor, {
@@ -1001,9 +1005,10 @@ export async function postJournal(
  * than by mocking the database so the transaction under test is the real one.
  */
 export interface PostingHooks {
-  afterVersion?: (trx: Trx) => Promise<void>;
+  afterVersion?: (trx: Trx, journal: JournalRecord) => Promise<void>;
   beforeAudit?: (trx: Trx) => Promise<void>;
   beforeReplacement?: (trx: Trx) => Promise<void>;
+  afterReversal?: (trx: Trx, original: JournalRecord, reversal: JournalRecord) => Promise<void>;
 }
 
 /* ══ Corrections ═══════════════════════════════════════════════════════════ */
@@ -1214,6 +1219,7 @@ export async function reverseJournal(
   actor: AccountingActor,
   journalId: string,
   options: MutationOptions & { postingDate?: string },
+  hooks: PostingHooks = {},
 ): Promise<{ original: JournalRecord; reversal: JournalRecord }> {
   const reason = requireReason(options.reason);
 
@@ -1246,6 +1252,8 @@ export async function reverseJournal(
 
     const withdrawn = await loadJournal(trx, actor.organizationId, journalId);
     await writeVersion(trx, actor, withdrawn, 'reversed', reason);
+    await hooks.afterVersion?.(trx, withdrawn);
+    await hooks.afterReversal?.(trx, withdrawn, reversal);
 
     await writeAccountingAudit(trx, actor, {
       action: 'JOURNAL_REVERSED',

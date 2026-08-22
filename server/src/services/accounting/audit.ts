@@ -44,7 +44,14 @@ export type AccountingAuditAction =
   | 'JOURNAL_POSTED'
   | 'JOURNAL_AMENDED'
   | 'JOURNAL_REVERSED'
-  | 'JOURNAL_REPLACED';
+  | 'JOURNAL_REPLACED'
+  | 'OPENING_BALANCE_CREATED'
+  | 'OPENING_BALANCE_UPDATED'
+  | 'OPENING_BALANCE_SUBMITTED'
+  | 'OPENING_BALANCE_APPROVED'
+  | 'OPENING_BALANCE_POSTED'
+  | 'OPENING_BALANCE_REVERSED'
+  | 'OPENING_BALANCE_REPLACEMENT_CREATED';
 
 /** Who is acting, carried from the route into every service call. */
 export interface AccountingActor {
@@ -57,7 +64,7 @@ export interface AccountingActor {
 
 export interface AccountingAuditInput {
   action: AccountingAuditAction;
-  recordType: 'account' | 'accounting_period' | 'journal_entry';
+  recordType: 'account' | 'accounting_period' | 'journal_entry' | 'opening_balance';
   recordId: string | null;
   reason?: string;
   previousVersion?: number | null;

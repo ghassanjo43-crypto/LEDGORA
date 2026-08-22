@@ -54,6 +54,7 @@ import type { AccountingActor } from '../services/accounting/audit.js';
 import * as accounts from '../services/accounting/accountService.js';
 import * as periods from '../services/accounting/periodService.js';
 import * as journals from '../services/accounting/journalService.js';
+import * as openingBalances from '../services/accounting/openingBalanceService.js';
 
 /**
  * Who is acting.
@@ -105,6 +106,13 @@ export async function accountingRoutes(app: FastifyInstance): Promise<void> {
   const deleteJournal = requireOwnOrganizationPermission('general_journal', 'delete');
   const postJournal = requireOwnOrganizationPermission('general_journal', 'post');
   const voidJournal = requireOwnOrganizationPermission('general_journal', 'void');
+  const viewOpening = requireOwnOrganizationPermission('opening_balances', 'view');
+  const createOpening = requireOwnOrganizationPermission('opening_balances', 'create');
+  const editOpening = requireOwnOrganizationPermission('opening_balances', 'edit');
+  const submitOpening = requireOwnOrganizationPermission('opening_balances', 'submit');
+  const approveOpening = requireOwnOrganizationPermission('opening_balances', 'approve');
+  const postOpening = requireOwnOrganizationPermission('opening_balances', 'post');
+  const reverseOpening = requireOwnOrganizationPermission('opening_balances', 'void');
 
   /*
    * Periods are read by anyone who may read the journal — the closed months are
@@ -176,6 +184,40 @@ export async function accountingRoutes(app: FastifyInstance): Promise<void> {
     );
     return reply.code(201).send({ period });
   });
+
+  /* Opening balances: lifecycle metadata wrapped around the authoritative journal. */
+  app.get('/api/accounting/opening-balances/current', { preHandler: viewOpening }, async (request, reply) =>
+    reply.send({ openingBalance: await openingBalances.getCurrent(app.db, actorOf(request)) }));
+  app.get('/api/accounting/opening-balances/accounts', { preHandler: viewOpening }, async (request, reply) =>
+    reply.send(await openingBalances.listEligibleAccounts(app.db, actorOf(request))));
+  app.get('/api/accounting/opening-balances/:id', { preHandler: viewOpening }, async (request, reply) =>
+    reply.send({ openingBalance: await openingBalances.getById(app.db, actorOf(request), idOf(request)) }));
+  app.get('/api/accounting/opening-balances/:id/history', { preHandler: viewOpening }, async (request, reply) =>
+    reply.send({ history: await openingBalances.auditHistory(app.db, actorOf(request), idOf(request)) }));
+  app.post('/api/accounting/opening-balances', { preHandler: createOpening }, async (request, reply) =>
+    reply.code(201).send({ openingBalance: await openingBalances.createOrLoadDraft(app.db, actorOf(request), request.body as openingBalances.OpeningBalanceInput) }));
+  app.patch('/api/accounting/opening-balances/:id', { preHandler: editOpening }, async (request, reply) => {
+    const body = request.body as openingBalances.OpeningBalanceInput & { expectedVersion?: number };
+    return reply.send({ openingBalance: await openingBalances.updateDraft(app.db, actorOf(request), idOf(request), body, body.expectedVersion) });
+  });
+  app.post('/api/accounting/opening-balances/:id/submit', { preHandler: submitOpening }, async (request, reply) => {
+    const body = (request.body ?? {}) as { expectedVersion?: number };
+    return reply.send({ openingBalance: await openingBalances.submit(app.db, actorOf(request), idOf(request), body.expectedVersion) });
+  });
+  app.post('/api/accounting/opening-balances/:id/approve', { preHandler: approveOpening }, async (request, reply) => {
+    const body = (request.body ?? {}) as { expectedVersion?: number };
+    return reply.send({ openingBalance: await openingBalances.approve(app.db, actorOf(request), idOf(request), body.expectedVersion) });
+  });
+  app.post('/api/accounting/opening-balances/:id/post', { preHandler: postOpening }, async (request, reply) => {
+    const body = (request.body ?? {}) as { expectedVersion?: number };
+    return reply.send({ openingBalance: await openingBalances.post(app.db, actorOf(request), idOf(request), body.expectedVersion) });
+  });
+  app.post('/api/accounting/opening-balances/:id/reverse', { preHandler: reverseOpening }, async (request, reply) => {
+    const body = (request.body ?? {}) as { expectedVersion?: number; reason?: string };
+    return reply.send({ openingBalance: await openingBalances.reverse(app.db, actorOf(request), idOf(request), body.expectedVersion, body.reason) });
+  });
+  app.post('/api/accounting/opening-balances/:id/replacement', { preHandler: [reverseOpening, createOpening] }, async (request, reply) =>
+    reply.code(201).send({ openingBalance: await openingBalances.createReplacement(app.db, actorOf(request), idOf(request), request.body as openingBalances.OpeningBalanceInput) }));
 
   /**
    * Change a period — including closing, locking and REOPENING it.

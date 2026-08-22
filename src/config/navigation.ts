@@ -96,6 +96,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, description: 'Overview & KPIs' },
       { key: 'tree', label: 'Chart of Accounts', icon: ListTree, description: 'Account hierarchy & editing', requiredModule: 'core_accounting' },
       { key: 'journal', label: 'General Journal', icon: BookOpenText, description: 'Double-entry transactions', requiredModule: 'core_accounting' },
+      { key: 'opening-balances', label: 'Opening Balances', icon: Database, description: 'Controlled initial company migration balances', requiredModule: 'core_accounting' },
       { key: 'journal-vouchers', label: 'Journal Vouchers', icon: FileSignature, description: 'Universal voucher workflow — drafts, approval, posting, templates', requiredModule: 'core_accounting' },
       { key: 'journal-voucher-reports', label: 'Voucher Reports', icon: FileBarChart2, description: 'Voucher registers, analysis & GL reconciliation', requiredModule: 'core_accounting' },
       { key: 'general-ledger', label: 'General Ledger', icon: Library, description: 'Account-level postings', requiredModule: 'core_accounting' },
