@@ -5,6 +5,7 @@ import type {
   JournalEntry,
 } from '@/types/journal';
 import { getPostingErrors } from '@/lib/journalValidation';
+import { roundToCompanyPrecision } from '@/lib/monetaryPrecision';
 
 /** Derived row status for the dense table (never mutates the entry). */
 export type JournalDisplayStatus = 'posted' | 'pending' | 'draft' | 'void';
@@ -98,7 +99,7 @@ export function journalSummary(entries: JournalEntry[]): JournalSummary {
       draftTotal += e.totalDebit;
     }
   }
-  const r = (n: number): number => Math.round((n + Number.EPSILON) * 100) / 100;
+  const r = (n: number): number => roundToCompanyPrecision(n + Number.EPSILON);
   return {
     totalDebit: r(totalDebit),
     totalCredit: r(totalCredit),

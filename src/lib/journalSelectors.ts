@@ -1,5 +1,7 @@
 import type { Account } from '@/types';
 import type { JournalEntry, JournalFilters } from '@/types/journal';
+import { companyMonetaryDecimals } from '@/lib/monetaryPrecision';
+import { roundToCompanyPrecision } from '@/lib/monetaryPrecision';
 
 export const DEFAULT_JOURNAL_FILTERS: JournalFilters = {
   status: 'ALL',
@@ -50,17 +52,23 @@ export function computeJournalStats(entries: JournalEntry[]): JournalStats {
     draftEntries,
     postedEntries,
     voidEntries,
-    totalDebits: Math.round((totalDebits + Number.EPSILON) * 100) / 100,
-    totalCredits: Math.round((totalCredits + Number.EPSILON) * 100) / 100,
+    totalDebits: roundToCompanyPrecision(totalDebits + Number.EPSILON),
+    totalCredits: roundToCompanyPrecision(totalCredits + Number.EPSILON),
     unbalancedDrafts,
   };
 }
 
-/** Format a monetary amount with grouping and exactly two decimals. */
+/**
+ * Format a monetary amount at the active company's precision.
+ *
+ * Was "exactly two decimals" — which showed a JOD ledger in hundredths and hid
+ * the fils that the entry actually carried.
+ */
 export function formatMoney(value: number): string {
+  const decimals = companyMonetaryDecimals();
   return new Intl.NumberFormat('en-US', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
   }).format(value || 0);
 }
 

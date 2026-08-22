@@ -26,12 +26,14 @@ import { Field, Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { useToast } from '@/components/ui/Toast';
 import { EntityPicker } from '@/components/shared/EntityPicker';
-import { eligiblePostingAccounts } from '@/lib/accountEligibility';
 import { AccountSelect } from '@/components/journal/AccountSelect';
+import { eligiblePostingAccounts } from '@/lib/accountEligibility';
 import { PaymentAllocationTable } from './PaymentAllocationTable';
 import { PaymentMethodFields } from './PaymentMethodFields';
 import { PaymentSummary } from './PaymentSummary';
 import { PaymentRenderer } from './PaymentRenderer';
+import { roundToCompanyPrecision } from '@/lib/monetaryPrecision';
+import { useMonetaryStep } from '@/lib/useMonetaryPrecision';
 
 interface Props {
   open: boolean;
@@ -43,6 +45,12 @@ const TYPE_OPTIONS = (Object.keys(PAYMENT_TYPE_LABELS) as PaymentType[]).map((k)
 const METHOD_OPTIONS = (Object.keys(PAYMENT_METHOD_LABELS) as PaymentMethod[]).map((k) => ({ value: k, label: PAYMENT_METHOD_LABELS[k] }));
 
 export function PaymentEditorDrawer({ open, paymentId, onClose }: Props) {
+  /*
+   * The company's smallest monetary unit — 0.001 for JOD, 0.01 for USD, 1 for
+   * JPY — so the stepper on every money field agrees with the ledger.
+   */
+  const moneyStep = useMonetaryStep();
+
   const accounts = useStore((s) => s.accounts);
   const entities = useEntityStore((s) => s.entities);
   const bills = useBillStore((s) => s.bills);
@@ -152,17 +160,17 @@ export function PaymentEditorDrawer({ open, paymentId, onClose }: Props) {
 
   // Live gross depends on the type (loan/lease derive from splits).
   const effectiveGross = isLoan
-    ? Math.round(((Number(principalAmount) || 0) + (Number(interestAmount) || 0)) * 100) / 100
+    ? roundToCompanyPrecision((Number(principalAmount) || 0) + (Number(interestAmount) || 0))
     : isLease
-      ? Math.round(((Number(leasePrincipalAmount) || 0) + (Number(financeCostAmount) || 0)) * 100) / 100
-      : Math.round((Number(grossAmount) || 0) * 100) / 100;
+      ? roundToCompanyPrecision((Number(leasePrincipalAmount) || 0) + (Number(financeCostAmount) || 0))
+      : roundToCompanyPrecision(Number(grossAmount) || 0);
 
-  const allocationTotal = Math.round(Object.values(alloc).reduce((s, n) => s + (Number(n) || 0), 0) * 100) / 100;
+  const allocationTotal = roundToCompanyPrecision(Object.values(alloc).reduce((s, n) => s + (Number(n) || 0), 0));
   const totals = calculatePaymentTotals({
     paymentType, grossAmount, exchangeRate, allocations: [], bankFeeAmount, withholdingTaxAmount, discountTakenAmount,
     principalAmount, interestAmount, leasePrincipalAmount, financeCostAmount,
   } as never);
-  const summaryTotals = { ...totals, allocationTotal, unappliedAmount: Math.round(Math.max(0, effectiveGross - allocationTotal) * 100) / 100 };
+  const summaryTotals = { ...totals, allocationTotal, unappliedAmount: roundToCompanyPrecision(Math.max(0, effectiveGross - allocationTotal)) };
 
   if (!payment) return null;
   const readOnly = !['draft', 'submitted', 'approved'].includes(payment.status);
@@ -181,7 +189,7 @@ export function PaymentEditorDrawer({ open, paymentId, onClose }: Props) {
         return {
           id: generateId('palloc'), entityId: payment.entityId, paymentId: payment.id, supplierId,
           billId, billNumber: bill?.billNumber, allocationType: 'bill' as const,
-          amount: Math.round(Number(amt) * 100) / 100, baseCurrencyAmount: Math.round(Number(amt) * exchangeRate * 100) / 100,
+          amount: roundToCompanyPrecision(Number(amt)), baseCurrencyAmount: roundToCompanyPrecision(Number(amt) * exchangeRate),
           allocationDate: paymentDate, createdAt: now, updatedAt: now,
         };
       });
@@ -267,7 +275,7 @@ export function PaymentEditorDrawer({ open, paymentId, onClose }: Props) {
             )}
             <Field label="Payment date" required><Input type="date" value={paymentDate} onChange={(e) => setPaymentDate(e.target.value)} disabled={readOnly} /></Field>
             {!isLoan && !isLease && (
-              <Field label={isSupplier ? 'Payment amount' : 'Amount'} required><Input type="number" step="0.01" value={grossAmount} onChange={(e) => setGrossAmount(Number(e.target.value))} disabled={readOnly} className="text-right" /></Field>
+              <Field label={isSupplier ? 'Payment amount' : 'Amount'} required><Input type="number" step={moneyStep} data-money="true" value={grossAmount} onChange={(e) => setGrossAmount(Number(e.target.value))} disabled={readOnly} className="text-right" /></Field>
             )}
             {/*
               Plain text rather than a disabled input. A payment settles a bill
@@ -323,8 +331,8 @@ export function PaymentEditorDrawer({ open, paymentId, onClose }: Props) {
             <section className="grid grid-cols-1 gap-4 rounded-lg border border-slate-200 p-3 dark:border-slate-800 sm:grid-cols-2">
               <Field label="Loan liability account" required><AccountSelect value={loanAccountId} accounts={accounts} onChange={(a) => setLoanAccountId(a.id)} disabled={readOnly} /></Field>
               <Field label="Interest expense account"><AccountSelect value={interestAccountId} accounts={accounts} onChange={(a) => setInterestAccountId(a.id)} disabled={readOnly || interestAmount <= 0} /></Field>
-              <Field label="Principal" required><Input type="number" step="0.01" value={principalAmount} onChange={(e) => setPrincipalAmount(Number(e.target.value))} disabled={readOnly} className="text-right" /></Field>
-              <Field label="Interest"><Input type="number" step="0.01" value={interestAmount} onChange={(e) => setInterestAmount(Number(e.target.value))} disabled={readOnly} className="text-right" /></Field>
+              <Field label="Principal" required><Input type="number" step={moneyStep} data-money="true" value={principalAmount} onChange={(e) => setPrincipalAmount(Number(e.target.value))} disabled={readOnly} className="text-right" /></Field>
+              <Field label="Interest"><Input type="number" step={moneyStep} data-money="true" value={interestAmount} onChange={(e) => setInterestAmount(Number(e.target.value))} disabled={readOnly} className="text-right" /></Field>
               <p className="sm:col-span-2 text-xs text-slate-500">Principal + interest + fees must equal net cash ({money(summaryTotals.netCashAmount)}).</p>
             </section>
           )}
@@ -334,8 +342,8 @@ export function PaymentEditorDrawer({ open, paymentId, onClose }: Props) {
             <section className="grid grid-cols-1 gap-4 rounded-lg border border-slate-200 p-3 dark:border-slate-800 sm:grid-cols-2">
               <Field label="Lease liability account" required><AccountSelect value={leaseLiabilityAccountId} accounts={accounts} onChange={(a) => setLeaseLiabilityAccountId(a.id)} disabled={readOnly} /></Field>
               <Field label="Finance cost account"><AccountSelect value={financeCostAccountId} accounts={accounts} onChange={(a) => setFinanceCostAccountId(a.id)} disabled={readOnly || financeCostAmount <= 0} /></Field>
-              <Field label="Lease principal" required><Input type="number" step="0.01" value={leasePrincipalAmount} onChange={(e) => setLeasePrincipalAmount(Number(e.target.value))} disabled={readOnly} className="text-right" /></Field>
-              <Field label="Finance cost"><Input type="number" step="0.01" value={financeCostAmount} onChange={(e) => setFinanceCostAmount(Number(e.target.value))} disabled={readOnly} className="text-right" /></Field>
+              <Field label="Lease principal" required><Input type="number" step={moneyStep} data-money="true" value={leasePrincipalAmount} onChange={(e) => setLeasePrincipalAmount(Number(e.target.value))} disabled={readOnly} className="text-right" /></Field>
+              <Field label="Finance cost"><Input type="number" step={moneyStep} data-money="true" value={financeCostAmount} onChange={(e) => setFinanceCostAmount(Number(e.target.value))} disabled={readOnly} className="text-right" /></Field>
               <p className="sm:col-span-2 text-xs italic text-slate-500">Use actual lease-schedule figures — the payment module does not fabricate a schedule.</p>
             </section>
           )}
@@ -343,19 +351,19 @@ export function PaymentEditorDrawer({ open, paymentId, onClose }: Props) {
           {/* Bank fee, withholding, discount, FX */}
           <section className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="grid grid-cols-2 gap-2 rounded-lg border border-slate-200 p-3 dark:border-slate-800">
-              <Field label="Bank fee"><Input type="number" step="0.01" value={bankFeeAmount} onChange={(e) => setBankFeeAmount(Number(e.target.value))} disabled={readOnly} className="text-right" /></Field>
+              <Field label="Bank fee"><Input type="number" step={moneyStep} data-money="true" value={bankFeeAmount} onChange={(e) => setBankFeeAmount(Number(e.target.value))} disabled={readOnly} className="text-right" /></Field>
               <Field label="Bank fee account"><AccountSelect value={bankFeeAccountId} accounts={accounts} onChange={(a) => setBankFeeAccountId(a.id)} disabled={readOnly || bankFeeAmount <= 0} /></Field>
             </div>
             <div className="grid grid-cols-2 gap-2 rounded-lg border border-slate-200 p-3 dark:border-slate-800">
-              <Field label="Withholding tax"><Input type="number" step="0.01" value={withholdingTaxAmount} onChange={(e) => setWithholdingTaxAmount(Number(e.target.value))} disabled={readOnly} className="text-right" /></Field>
+              <Field label="Withholding tax"><Input type="number" step={moneyStep} data-money="true" value={withholdingTaxAmount} onChange={(e) => setWithholdingTaxAmount(Number(e.target.value))} disabled={readOnly} className="text-right" /></Field>
               <Field label="WHT payable account"><AccountSelect value={withholdingTaxAccountId} accounts={accounts} onChange={(a) => setWithholdingTaxAccountId(a.id)} disabled={readOnly || withholdingTaxAmount <= 0} /></Field>
             </div>
             <div className="grid grid-cols-2 gap-2 rounded-lg border border-slate-200 p-3 dark:border-slate-800">
-              <Field label="Discount taken"><Input type="number" step="0.01" value={discountTakenAmount} onChange={(e) => setDiscountTakenAmount(Number(e.target.value))} disabled={readOnly} className="text-right" /></Field>
+              <Field label="Discount taken"><Input type="number" step={moneyStep} data-money="true" value={discountTakenAmount} onChange={(e) => setDiscountTakenAmount(Number(e.target.value))} disabled={readOnly} className="text-right" /></Field>
               <Field label="Discount account"><AccountSelect value={discountAccountId} accounts={accounts} onChange={(a) => setDiscountAccountId(a.id)} disabled={readOnly || discountTakenAmount <= 0} /></Field>
             </div>
             <div className="grid grid-cols-2 gap-2 rounded-lg border border-slate-200 p-3 dark:border-slate-800">
-              <Field label="Realised FX (+gain/−loss)"><Input type="number" step="0.01" value={realizedFxAmount} onChange={(e) => setRealizedFxAmount(Number(e.target.value))} disabled={readOnly} className="text-right" /></Field>
+              <Field label="Realised FX (+gain/−loss)"><Input type="number" step={moneyStep} data-money="true" value={realizedFxAmount} onChange={(e) => setRealizedFxAmount(Number(e.target.value))} disabled={readOnly} className="text-right" /></Field>
               <Field label="Realised FX account"><AccountSelect value={realizedFxAccountId} accounts={accounts} onChange={(a) => setRealizedFxAccountId(a.id)} disabled={readOnly || realizedFxAmount === 0} /></Field>
             </div>
           </section>

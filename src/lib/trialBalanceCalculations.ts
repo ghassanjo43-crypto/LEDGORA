@@ -10,6 +10,7 @@ import type {
   TrialBalanceTotals,
 } from '@/types/trialBalance';
 import { getPostedJournalLines, convertToBaseCurrency } from '@/lib/generalLedgerCalculations';
+import { roundToCompanyPrecision } from '@/lib/monetaryPrecision';
 
 export const BALANCE_TOLERANCE = 0.01;
 
@@ -18,7 +19,7 @@ export const convertLineToBaseCurrency = convertToBaseCurrency;
 export { getPostedJournalLines };
 
 function round2(n: number): number {
-  return Math.round((n + Number.EPSILON) * 100) / 100;
+  return roundToCompanyPrecision(n + Number.EPSILON);
 }
 
 /* ─────────────────────────── Per-account figures ─────────────────────────── */

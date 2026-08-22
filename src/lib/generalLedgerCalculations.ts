@@ -10,6 +10,30 @@ import type {
   LedgerSort,
 } from '@/types/generalLedger';
 import { resolveEntryType } from '@/lib/journalMeta';
+import { companyMonetaryDecimals, smallestUnit, companyCurrencyCode } from '@/lib/monetaryPrecision';
+import { roundToCompanyPrecision } from '@/lib/monetaryPrecision';
+
+/**
+ * A number formatter at the ACTIVE COMPANY's monetary precision.
+ *
+ * Built per call, never captured at module load: a captured formatter freezes
+ * the first company's precision for the whole session, so opening a USD company
+ * after a JOD one would keep showing three decimals (and the reverse would drop
+ * a fils).
+ */
+function moneyFormat(): Intl.NumberFormat {
+  const decimals = companyMonetaryDecimals();
+  return new Intl.NumberFormat('en-US', {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  });
+}
+
+/** Below half the currency's smallest unit — genuinely nothing to show. */
+function isEffectivelyZero(n: number): boolean {
+  return Math.abs(n) < smallestUnit(companyCurrencyCode()) / 2;
+}
+
 
 /* ─────────────────────────────── Currency ───────────────────────────────── */
 
@@ -21,7 +45,7 @@ export function convertToBaseCurrency(amount: number, currency: string, rate: nu
 }
 
 function round2(n: number): number {
-  return Math.round((n + Number.EPSILON) * 100) / 100;
+  return roundToCompanyPrecision(n + Number.EPSILON);
 }
 
 /* ─────────────────────────── Source of truth ─────────────────────────────── */
@@ -71,8 +95,8 @@ export function getBalanceSide(value: number, normalBalance: Account['normalBala
 /** Format a normal-oriented signed balance as "1,234.00 Dr". */
 export function formatBalanceLabel(value: number): string {
   const abs = Math.abs(value);
-  const num = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(abs);
-  if (abs < 0.005) return `${num}`;
+  const num = moneyFormat().format(abs);
+  if (isEffectivelyZero(abs)) return `${num}`;
   return `${num} ${value > 0 ? 'Dr' : 'Cr'}`;
 }
 
@@ -83,7 +107,7 @@ export function formatBalanceLabel(value: number): string {
 export function formatAccountBalance(signed: number, normalBalance: Account['normalBalance']): string {
   const side = getBalanceSide(signed, normalBalance);
   const abs = Math.abs(signed);
-  const num = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(abs);
+  const num = moneyFormat().format(abs);
   if (side === 'zero') return num;
   return `${num} ${side === 'debit' ? 'Dr' : 'Cr'}`;
 }

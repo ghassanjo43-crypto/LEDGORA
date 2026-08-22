@@ -1,6 +1,6 @@
 import type { JournalEntry } from '@/types/journal';
 import type { StatementCurrencyMode } from '@/types/statementOfAccount';
-import { roundMoney, BALANCE_TOLERANCE } from '@/lib/journalValidation';
+import { roundMoney, balanceToleranceFor } from '@/lib/journalValidation';
 
 export interface SubledgerBalanceParams {
   journalEntries: JournalEntry[];
@@ -44,7 +44,7 @@ export interface ReconciliationResult {
 export function validateStatementReconciliation(
   calculatedClosing: number,
   subledgerBalance: number,
-  tolerance = BALANCE_TOLERANCE,
+  tolerance = balanceToleranceFor(),
 ): ReconciliationResult {
   const difference = roundMoney(calculatedClosing - subledgerBalance);
   const isReconciled = Math.abs(difference) <= tolerance;

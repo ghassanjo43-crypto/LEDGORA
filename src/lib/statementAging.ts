@@ -3,7 +3,7 @@ import type { CreditNote } from '@/types/creditNote';
 import type { Receipt } from '@/types/receipt';
 import type { AgingBucket, AgingBucketId, AgingSummary, OutstandingInvoiceSummary } from '@/types/statementOfAccount';
 import { buildInvoiceSettlementSummary, creditNoteAppliedToInvoice, receiptAppliedToInvoice, deriveSettlementStatus } from '@/lib/invoiceSettlement';
-import { roundMoney, BALANCE_TOLERANCE } from '@/lib/journalValidation';
+import { roundMoney, balanceToleranceFor } from '@/lib/journalValidation';
 
 /** Whole days between two ISO dates (asOf − target), floored, never negative for aging. */
 export function daysBetween(fromIso: string, toIso: string): number {
@@ -55,7 +55,7 @@ export function buildOutstandingInvoiceSchedule(
   for (const inv of invoices) {
     const s = buildInvoiceSettlementSummary(inv, creditNotes, receipts);
     const outstanding = s.balanceDue;
-    if (!opts.includeSettled && outstanding <= BALANCE_TOLERANCE) continue;
+    if (!opts.includeSettled && outstanding <= balanceToleranceFor()) continue;
     const due = inv.dueDate || inv.issueDate;
     const od = daysOverdue(due, asOfDate);
     rows.push({
@@ -83,7 +83,7 @@ export function calculateAgingSummary(schedule: OutstandingInvoiceSummary[], asO
   ) as Record<AgingBucketId, AgingBucket>;
 
   for (const row of schedule) {
-    if (row.outstandingBalance <= BALANCE_TOLERANCE) continue;
+    if (row.outstandingBalance <= balanceToleranceFor()) continue;
     const b = buckets[row.agingBucket];
     b.amount = roundMoney(b.amount + row.outstandingBalance);
     b.invoiceIds.push(row.invoiceId);

@@ -15,8 +15,9 @@ import type {
   AssetCategoryAccounts,
   FixedAsset,
 } from '@/types/fixedAssets';
+import { roundToCompanyPrecision } from '@/lib/monetaryPrecision';
 
-export const round2 = (n: number): number => Math.round((n + Number.EPSILON) * 100) / 100;
+export const round2 = (n: number): number => roundToCompanyPrecision(n + Number.EPSILON);
 
 /* ── Register arithmetic ──────────────────────────────────────────────────── */
 

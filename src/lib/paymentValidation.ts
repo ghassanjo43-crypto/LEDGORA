@@ -5,6 +5,8 @@ import { isPostingAccount } from '@/lib/journalValidation';
 import { calculatePaymentTotals, resolveGrossAmount } from '@/lib/paymentCalculations';
 import { resolveCreditCashAccountId, resolveDebitAccountId } from '@/lib/paymentPosting';
 import { isSupplierPaymentType, isCustomerRefundType, requiresDebitAccount, PAYMENT_TYPE_LABELS } from '@/lib/paymentLabels';
+import { companyMonetaryDecimals } from '@/lib/monetaryPrecision';
+import { roundToCompanyPrecision } from '@/lib/monetaryPrecision';
 
 export interface PaymentIssue {
   severity: 'error' | 'warning';
@@ -87,7 +89,7 @@ export function validatePaymentForPosting(payment: Payment, ctx: PaymentPostingV
   if (payment.paymentType === 'loan-repayment') {
     if (!posting(payment.loanAccountId)) err('loan-account', 'Select a valid loan liability account.');
     if ((Number(payment.interestAmount) || 0) > 0 && !posting(payment.interestAccountId)) err('interest-account', 'Select a valid interest expense account.');
-    const netCheck = Math.round(((Number(payment.principalAmount) || 0) + (Number(payment.interestAmount) || 0) + t.bankFeeAmount) * 100) / 100;
+    const netCheck = roundToCompanyPrecision((Number(payment.principalAmount) || 0) + (Number(payment.interestAmount) || 0) + t.bankFeeAmount);
     if (Math.abs(netCheck - t.netCashAmount) > 0.01) err('loan-split', 'Principal + interest + fees must equal the net cash payment.');
   } else if (payment.paymentType === 'lease-payment') {
     if (!posting(payment.leaseLiabilityAccountId)) err('lease-account', 'Select a valid lease liability account.');
@@ -106,7 +108,7 @@ export function validatePaymentForPosting(payment: Payment, ctx: PaymentPostingV
   if ((Number(payment.realizedFxAmount) || 0) !== 0 && !posting(payment.realizedFxAccountId || ctx.config.realizedFxAccountId)) err('fx-account', 'Select a valid realised-FX account.');
 
   // Allocation rules.
-  if (t.allocationTotal > gross + 0.005) err('over-allocated', `Allocations (${t.allocationTotal.toFixed(2)}) exceed the payment amount (${gross.toFixed(2)}).`);
+  if (t.allocationTotal > gross + 0.005) err('over-allocated', `Allocations (${t.allocationTotal.toFixed(companyMonetaryDecimals())}) exceed the payment amount (${gross.toFixed(companyMonetaryDecimals())}).`);
   for (const a of payment.allocations.filter((x) => !x.reversed)) {
     if (!a.billId) continue;
     const bill = ctx.billsById.get(a.billId);
@@ -116,7 +118,7 @@ export function validatePaymentForPosting(payment: Payment, ctx: PaymentPostingV
     if (bill.supplierId !== payment.supplierId) err('allocation-supplier', `Bill ${bill.billNumber} belongs to a different supplier.`, a.id);
     if (bill.entityId !== payment.entityId) err('allocation-entity', `Bill ${bill.billNumber} belongs to a different entity.`, a.id);
     if (bill.currency !== payment.currency) err('allocation-currency', `Bill ${bill.billNumber} is in a different currency (FX allocation is not supported).`, a.id);
-    if (Number(a.amount) > bill.balanceDue + 0.005) err('allocation-over-balance', `Allocation to ${bill.billNumber} exceeds its balance due (${bill.balanceDue.toFixed(2)}).`, a.id);
+    if (Number(a.amount) > bill.balanceDue + 0.005) err('allocation-over-balance', `Allocation to ${bill.billNumber} exceeds its balance due (${bill.balanceDue.toFixed(companyMonetaryDecimals())}).`, a.id);
   }
 
   if (ctx.requireApproval && payment.status !== 'approved') err('approval', 'This payment must be approved before it can be posted.');

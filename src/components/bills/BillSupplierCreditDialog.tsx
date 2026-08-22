@@ -12,9 +12,17 @@ import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { AccountSelect } from '@/components/journal/AccountSelect';
 import { useToast } from '@/components/ui/Toast';
+import { roundToCompanyPrecision } from '@/lib/monetaryPrecision';
+import { useMonetaryStep } from '@/lib/useMonetaryPrecision';
 
 /** Raise a supplier credit against a bill (Dr trade payables / Cr expense + input tax). */
 export function BillSupplierCreditDialog({ bill, onClose }: { bill: Bill; onClose: () => void }) {
+  /*
+   * The company's smallest monetary unit — 0.001 for JOD, 0.01 for USD, 1 for
+   * JPY — so the stepper on every money field agrees with the ledger.
+   */
+  const moneyStep = useMonetaryStep();
+
   const accounts = useStore((s) => s.accounts);
   const createSupplierCredit = useBillStore((s) => s.createSupplierCredit);
   const { notify } = useToast();
@@ -38,7 +46,7 @@ export function BillSupplierCreditDialog({ bill, onClose }: { bill: Bill; onClos
   const warehouseOptions = useMemo(() => warehouses.filter((w) => w.status === 'active').map((w) => ({ value: w.id, label: `${w.code} — ${w.name}` })), [warehouses]);
 
   const money = (n: number): string => formatCurrency(n, bill.currency);
-  const total = Math.round((Number(netAmount) + Number(taxAmount)) * 100) / 100;
+  const total = roundToCompanyPrecision(Number(netAmount) + Number(taxAmount));
 
   const pickReturnItem = (id: string): void => {
     setReturnItemId(id);
@@ -67,8 +75,8 @@ export function BillSupplierCreditDialog({ bill, onClose }: { bill: Bill; onClos
         <p className="mt-0.5 text-xs text-slate-500">Balance due {money(bill.balanceDue)}. Posts Dr trade payables / Cr expense + input tax, reducing the balance.</p>
         <div className="mt-3 space-y-3">
           <div className="grid grid-cols-2 gap-2">
-            <label className="block text-xs text-slate-500">Net amount<Input type="number" step="0.01" value={netAmount} onChange={(e) => setNetAmount(Number(e.target.value))} className="mt-1" /></label>
-            <label className="block text-xs text-slate-500">Input tax<Input type="number" step="0.01" value={taxAmount} onChange={(e) => setTaxAmount(Number(e.target.value))} className="mt-1" /></label>
+            <label className="block text-xs text-slate-500">Net amount<Input type="number" step={moneyStep} data-money="true" value={netAmount} onChange={(e) => setNetAmount(Number(e.target.value))} className="mt-1" /></label>
+            <label className="block text-xs text-slate-500">Input tax<Input type="number" step={moneyStep} data-money="true" value={taxAmount} onChange={(e) => setTaxAmount(Number(e.target.value))} className="mt-1" /></label>
           </div>
           <label className="block text-xs text-slate-500">Reverses account<div className="mt-1"><AccountSelect value={creditAccountId} accounts={accounts} onChange={(a) => setCreditAccountId(a.id)} /></div></label>
           <label className="block text-xs text-slate-500">Date<Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="mt-1" /></label>
@@ -85,7 +93,7 @@ export function BillSupplierCreditDialog({ bill, onClose }: { bill: Bill; onClos
                   <div className="grid grid-cols-3 gap-2">
                     <Select options={warehouseOptions} value={returnWarehouseId} onChange={(e) => setReturnWarehouseId(e.target.value)} />
                     <Input type="number" step="0.01" placeholder="Qty" value={returnQuantity || ''} onChange={(e) => setReturnQuantity(Number(e.target.value))} />
-                    <Input type="number" step="0.01" placeholder="Unit cost" value={returnUnitCost || ''} onChange={(e) => setReturnUnitCost(Number(e.target.value))} />
+                    <Input type="number" step={moneyStep} data-money="true" placeholder="Unit cost" value={returnUnitCost || ''} onChange={(e) => setReturnUnitCost(Number(e.target.value))} />
                   </div>
                   <p className="text-[11px] text-slate-400">Records an outbound stock movement at the original receipt cost, linked to this credit's journal.</p>
                 </div>

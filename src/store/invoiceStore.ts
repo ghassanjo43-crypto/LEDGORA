@@ -37,6 +37,7 @@ import {
   ORDINARY_TRANSACTION_EXCHANGE_RATE,
   transactionCurrencyCode,
 } from '@/lib/transactionCurrency';
+import { roundToCompanyPrecision } from '@/lib/monetaryPrecision';
 
 const ACTOR = 'Finance Manager';
 
@@ -397,8 +398,8 @@ export const useInvoiceStore = create<InvoiceState>()(
         if (!posted.ok) return { ok: false, error: posted.error ?? 'Could not post the receipt.' };
         payment.journalEntryId = added.id;
 
-        const amountPaid = Math.round((existing.amountPaid + input.amount) * 100) / 100;
-        const balanceDue = Math.round((existing.grandTotal - amountPaid - (existing.creditsApplied ?? 0)) * 100) / 100;
+        const amountPaid = roundToCompanyPrecision(existing.amountPaid + input.amount);
+        const balanceDue = roundToCompanyPrecision(existing.grandTotal - amountPaid - (existing.creditsApplied ?? 0));
         const status = balanceDue <= 0.005 ? 'paid' : 'partially-paid';
         const now = nowIso();
         set({
@@ -418,12 +419,12 @@ export const useInvoiceStore = create<InvoiceState>()(
         const existing = invoices.find((i) => i.id === id);
         if (!existing) return { ok: false, error: 'Invoice not found.' };
         if (existing.status === 'void' || existing.status === 'draft') return { ok: false, error: 'Credit can only be applied to an issued invoice.' };
-        const amt = Math.round((Number(amount) || 0) * 100) / 100;
+        const amt = roundToCompanyPrecision(Number(amount) || 0);
         if (amt <= 0) return { ok: false, error: 'Credit amount must be positive.' };
         if (amt > existing.balanceDue + 0.005) return { ok: false, error: 'Credit exceeds the invoice balance due.' };
 
-        const creditsApplied = Math.round((existing.creditsApplied + amt) * 100) / 100;
-        const balanceDue = Math.round((existing.grandTotal - existing.amountPaid - creditsApplied) * 100) / 100;
+        const creditsApplied = roundToCompanyPrecision(existing.creditsApplied + amt);
+        const balanceDue = roundToCompanyPrecision(existing.grandTotal - existing.amountPaid - creditsApplied);
         const status = balanceDue <= 0.005 ? 'paid' : existing.amountPaid > 0 || creditsApplied > 0 ? 'partially-paid' : existing.status;
         const now = nowIso();
         set({ invoices: invoices.map((i) => (i.id === id ? { ...i, creditsApplied, balanceDue, status, auditTrail: [...i.auditTrail, audit('credit-applied', `${amt.toFixed(2)}${creditNoteNumber ? ` — ${creditNoteNumber}` : ''}`)], updatedAt: now } : i)) });
@@ -434,10 +435,10 @@ export const useInvoiceStore = create<InvoiceState>()(
         const { invoices } = get();
         const existing = invoices.find((i) => i.id === id);
         if (!existing) return { ok: false, error: 'Invoice not found.' };
-        const amt = Math.round((Number(amount) || 0) * 100) / 100;
+        const amt = roundToCompanyPrecision(Number(amount) || 0);
         if (amt <= 0) return { ok: true, id };
-        const creditsApplied = Math.round(Math.max(0, existing.creditsApplied - amt) * 100) / 100;
-        const balanceDue = Math.round((existing.grandTotal - existing.amountPaid - creditsApplied) * 100) / 100;
+        const creditsApplied = roundToCompanyPrecision(Math.max(0, existing.creditsApplied - amt));
+        const balanceDue = roundToCompanyPrecision(existing.grandTotal - existing.amountPaid - creditsApplied);
         const status =
           balanceDue <= 0.005 ? 'paid' : existing.amountPaid <= 0.005 && creditsApplied <= 0.005 ? 'issued' : 'partially-paid';
         const now = nowIso();
@@ -450,7 +451,7 @@ export const useInvoiceStore = create<InvoiceState>()(
         const existing = invoices.find((i) => i.id === id);
         if (!existing) return { ok: false, error: 'Invoice not found.' };
         if (existing.status === 'void' || existing.status === 'draft') return { ok: false, error: 'Receipts can only be allocated to an issued invoice.' };
-        const amt = Math.round((Number(input.amount) || 0) * 100) / 100;
+        const amt = roundToCompanyPrecision(Number(input.amount) || 0);
         if (amt <= 0) return { ok: false, error: 'Allocation amount must be positive.' };
         if (amt > existing.balanceDue + 0.005) return { ok: false, error: 'Allocation exceeds the invoice balance due.' };
 
@@ -458,8 +459,8 @@ export const useInvoiceStore = create<InvoiceState>()(
           id: generateId('ipay'), invoiceId: id, date: input.date, amount: amt, method: input.method,
           reference: input.reference, bankAccountId: input.bankAccountId ?? '', journalEntryId: input.journalEntryId, receiptId: input.receiptId, createdAt: nowIso(),
         };
-        const amountPaid = Math.round((existing.amountPaid + amt) * 100) / 100;
-        const balanceDue = Math.round((existing.grandTotal - amountPaid - existing.creditsApplied) * 100) / 100;
+        const amountPaid = roundToCompanyPrecision(existing.amountPaid + amt);
+        const balanceDue = roundToCompanyPrecision(existing.grandTotal - amountPaid - existing.creditsApplied);
         const status = balanceDue <= 0.005 ? 'paid' : 'partially-paid';
         const now = nowIso();
         set({ invoices: invoices.map((i) => (i.id === id ? { ...i, amountPaid, balanceDue, status, payments: [...i.payments, payment], paidAt: status === 'paid' ? now : i.paidAt, auditTrail: [...i.auditTrail, audit('receipt-allocated', `${amt.toFixed(2)} — ${input.reference ?? input.receiptId}`)], updatedAt: now } : i)) });
@@ -472,9 +473,9 @@ export const useInvoiceStore = create<InvoiceState>()(
         if (!existing) return { ok: false, error: 'Invoice not found.' };
         const linked = existing.payments.filter((p) => p.receiptId === receiptId);
         if (linked.length === 0) return { ok: true, id };
-        const removed = Math.round(linked.reduce((s, p) => s + p.amount, 0) * 100) / 100;
-        const amountPaid = Math.round(Math.max(0, existing.amountPaid - removed) * 100) / 100;
-        const balanceDue = Math.round((existing.grandTotal - amountPaid - existing.creditsApplied) * 100) / 100;
+        const removed = roundToCompanyPrecision(linked.reduce((s, p) => s + p.amount, 0));
+        const amountPaid = roundToCompanyPrecision(Math.max(0, existing.amountPaid - removed));
+        const balanceDue = roundToCompanyPrecision(existing.grandTotal - amountPaid - existing.creditsApplied);
         const status = balanceDue <= 0.005 ? 'paid' : amountPaid <= 0.005 && existing.creditsApplied <= 0.005 ? 'issued' : 'partially-paid';
         const now = nowIso();
         set({ invoices: invoices.map((i) => (i.id === id ? { ...i, amountPaid, balanceDue, status, payments: i.payments.filter((p) => p.receiptId !== receiptId), auditTrail: [...i.auditTrail, audit('receipt-allocation-reversed', `${removed.toFixed(2)}`)], updatedAt: now } : i)) });
@@ -514,7 +515,7 @@ export const useInvoiceStore = create<InvoiceState>()(
         const p = (persisted ?? {}) as { invoices?: Invoice[] };
         const invoices = (p.invoices ?? []).map((i) => {
           const creditsApplied = i.creditsApplied ?? 0;
-          return { ...i, creditsApplied, balanceDue: Math.round((i.grandTotal - i.amountPaid - creditsApplied) * 100) / 100 };
+          return { ...i, creditsApplied, balanceDue: roundToCompanyPrecision(i.grandTotal - i.amountPaid - creditsApplied) };
         });
         return { invoices };
       },

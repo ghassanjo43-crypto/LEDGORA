@@ -9,6 +9,7 @@
 import type { JournalEntry } from '@/types/journal';
 import type { ManufacturingWorkOrder } from '@/types/manufacturingDocuments';
 import { calculateWorkOrderWip, type WorkOrderActivity } from './manufacturingCosting';
+import { roundToCompanyPrecision } from '@/lib/monetaryPrecision';
 
 export interface MfgReconRow {
   accountId: string;
@@ -27,7 +28,7 @@ export interface ManufacturingReconciliation {
 }
 
 function r2(n: number): number {
-  return Math.round((n + Number.EPSILON) * 100) / 100;
+  return roundToCompanyPrecision(n + Number.EPSILON);
 }
 
 function glBalance(entries: JournalEntry[], accountId: string, asOf?: string): number {

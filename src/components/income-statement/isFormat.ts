@@ -1,13 +1,30 @@
 import type { NegativeFormat } from '@/types/incomeStatement';
+import { companyMonetaryDecimals, smallestUnit, companyCurrencyCode } from '@/lib/monetaryPrecision';
 
-const NF = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+/**
+ * Income-statement amount formatting.
+ *
+ * Built per call, for the reason given in `bsFormat`: a module-level formatter
+ * would fix one company's precision for the whole session, and this one was
+ * additionally fixed at two decimals regardless of currency.
+ */
+function formatter(): Intl.NumberFormat {
+  const decimals = companyMonetaryDecimals();
+  return new Intl.NumberFormat('en-US', {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  });
+}
 
 /** Financial-statement amount: zero as “—”, negatives per the chosen format. */
 export function isAmount(n: number, negativeFormat: NegativeFormat = 'parentheses'): string {
-  if (Math.abs(n) < 0.005) return '—';
-  if (n < 0) return negativeFormat === 'parentheses' ? `(${NF.format(-n)})` : `-${NF.format(-n)}`;
-  return NF.format(n);
+  if (Math.abs(n) < smallestUnit(companyCurrencyCode()) / 2) return '—';
+  const nf = formatter();
+  if (n < 0) return negativeFormat === 'parentheses' ? `(${nf.format(-n)})` : `-${nf.format(-n)}`;
+  return nf.format(n);
 }
+
+/* ── Percentages: NOT monetary, and deliberately left at one decimal ───────── */
 
 /** Signed percentage, e.g. “+19.0%”, or “N/M” when not meaningful (null). */
 export function isVariancePercent(v: number | null): string {

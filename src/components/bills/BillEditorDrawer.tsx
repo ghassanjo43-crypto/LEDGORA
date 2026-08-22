@@ -33,6 +33,8 @@ import { resolveInventoryAccounts } from '@/lib/inventoryAccounts';
 import { useProjectStore } from '@/store/projectStore';
 import { PrintDocument } from '@/components/ui/PrintDocument';
 import { BillRenderer } from './BillRenderer';
+import { roundToCompanyPrecision } from '@/lib/monetaryPrecision';
+import { useMonetaryStep } from '@/lib/useMonetaryPrecision';
 import { getCurrentUser } from '@/store/authStore';
 import { roleCanEditBills } from '@/lib/transactionDocumentPermissions';
 import { isPlatformAdminFullAccess } from '@/store/platformFullAccess';
@@ -46,6 +48,12 @@ interface Props {
 const TYPE_OPTIONS = (Object.keys(BILL_TYPE_LABELS) as BillType[]).map((k) => ({ value: k, label: BILL_TYPE_LABELS[k] }));
 
 export function BillEditorDrawer({ open, billId, onClose }: Props) {
+  /*
+   * The company's smallest monetary unit — 0.001 for JOD, 0.01 for USD, 1 for
+   * JPY — so the stepper on every money field agrees with the ledger.
+   */
+  const moneyStep = useMonetaryStep();
+
   const accounts = useStore((s) => s.accounts);
   const projects = useProjectStore((s) => s.projects);
   const showCostCenter = useHasModule('cost_centers');
@@ -104,7 +112,7 @@ export function BillEditorDrawer({ open, billId, onClose }: Props) {
 
   const money = (n: number): string => formatCurrency(n, currency);
   const totals = useMemo(() => calculateBillTotals(lines.map((l) => ({ ...l, discountAmount: 0, taxableAmount: 0, taxAmount: 0, lineSubtotal: 0, lineTotal: 0 })), 0), [lines]);
-  const netPayable = Math.round((totals.grandTotal - totals.withholdingTaxTotal) * 100) / 100;
+  const netPayable = roundToCompanyPrecision(totals.grandTotal - totals.withholdingTaxTotal);
 
   const duplicate = useMemo(
     () => (bill && supplierId && supplierInvoiceNumber ? checkDuplicateSupplierInvoiceNumber(bills, { entityId: bill.entityId, supplierId, supplierInvoiceNumber, excludeBillId: bill.id }) : { status: 'ok' as const }),
@@ -214,7 +222,7 @@ export function BillEditorDrawer({ open, billId, onClose }: Props) {
                   </div>
                   <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                     <Field label="Quantity"><Input type="number" step="0.01" value={line.quantity} onChange={(e) => setLine(line.id, { quantity: Number(e.target.value) })} disabled={readOnly} className="text-right" /></Field>
-                    <Field label="Unit price"><Input type="number" step="0.01" value={line.unitPrice} onChange={(e) => setLine(line.id, { unitPrice: Number(e.target.value) })} disabled={readOnly} className="text-right" /></Field>
+                    <Field label="Unit price"><Input type="number" step={moneyStep} data-money="true" value={line.unitPrice} onChange={(e) => setLine(line.id, { unitPrice: Number(e.target.value) })} disabled={readOnly} className="text-right" /></Field>
                     <Field label="Discount %"><Input type="number" step="0.01" value={line.discountValue ?? 0} onChange={(e) => setLine(line.id, { discountType: 'percentage', discountValue: Number(e.target.value) })} disabled={readOnly} className="text-right" /></Field>
                     <Field label="Tax %"><Input type="number" step="0.01" value={line.taxRate} onChange={(e) => setLine(line.id, { taxRate: Number(e.target.value) })} disabled={readOnly} className="text-right" /></Field>
                     <Field label="Withholding %"><Input type="number" step="0.01" value={line.withholdingTaxRate ?? 0} onChange={(e) => setLine(line.id, { withholdingTaxRate: Number(e.target.value) })} disabled={readOnly} className="text-right" /></Field>

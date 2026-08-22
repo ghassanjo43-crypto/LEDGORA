@@ -15,7 +15,7 @@ import { calculateCustomerUnappliedReceipts } from '@/lib/receiptAllocations';
 import { buildOutstandingInvoiceSchedule, calculateAgingSummary } from '@/lib/statementAging';
 import { calculateCustomerOpeningBalance } from '@/lib/statementOpeningBalance';
 import { calculateCustomerSubledgerBalance, validateStatementReconciliation } from '@/lib/statementReconciliation';
-import { roundMoney, BALANCE_TOLERANCE } from '@/lib/journalValidation';
+import { roundMoney, balanceToleranceFor } from '@/lib/journalValidation';
 import { generateId, nowIso } from '@/lib/utils';
 
 /* ─────────────────────────── Shared selectors ───────────────────────────── */
@@ -232,14 +232,14 @@ export function buildStatementOfAccount(input: StatementBuildInput): StatementOf
   if (openItem) {
     // Open-item ledger: current open invoice balances + available customer credit.
     const openLines: StatementLine[] = schedule
-      .filter((r) => r.outstandingBalance > BALANCE_TOLERANCE)
+      .filter((r) => r.outstandingBalance > balanceToleranceFor())
       .map((r) => ({
         id: generateId('stmt'), type: 'invoice', date: r.invoiceDate, dueDate: r.dueDate, documentNumber: r.invoiceNumber,
         description: `Invoice ${r.invoiceNumber} (outstanding)`, debit: r.outstandingBalance, credit: 0, runningBalance: 0,
         currency: r.currency, invoiceId: r.invoiceId, status: r.status, daysOverdue: r.daysOverdue, isOverdue: r.daysOverdue > 0,
       }));
     const credit = roundMoney(unappliedReceipts + advances);
-    if (options.includeUnappliedReceipts && credit > BALANCE_TOLERANCE) {
+    if (options.includeUnappliedReceipts && credit > balanceToleranceFor()) {
       openLines.push({ id: generateId('stmt'), type: 'receipt', date: options.periodEnd, documentNumber: 'Customer credit', description: 'Unapplied receipts & advances', debit: 0, credit, runningBalance: 0, currency: statementCurrency });
     }
     displayLines = calculateRunningBalances(sortStatementLines(openLines), 0);

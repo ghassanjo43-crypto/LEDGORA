@@ -24,9 +24,11 @@ import { Field, Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { useToast } from '@/components/ui/Toast';
 import { EntityPicker } from '@/components/shared/EntityPicker';
-import { eligiblePostingAccounts } from '@/lib/accountEligibility';
 import { AccountSelect } from '@/components/journal/AccountSelect';
+import { eligiblePostingAccounts } from '@/lib/accountEligibility';
 import { ReceiptRenderer } from './ReceiptRenderer';
+import { roundToCompanyPrecision } from '@/lib/monetaryPrecision';
+import { useMonetaryStep } from '@/lib/useMonetaryPrecision';
 
 interface Props {
   open: boolean;
@@ -38,6 +40,12 @@ const TYPE_OPTIONS = (Object.keys(RECEIPT_TYPE_LABELS) as ReceiptType[]).map((k)
 const METHOD_OPTIONS = (Object.keys(RECEIPT_METHOD_LABELS) as ReceiptMethod[]).map((k) => ({ value: k, label: RECEIPT_METHOD_LABELS[k] }));
 
 export function ReceiptEditorDrawer({ open, receiptId, onClose }: Props) {
+  /*
+   * The company's smallest monetary unit — 0.001 for JOD, 0.01 for USD, 1 for
+   * JPY — so the stepper on every money field agrees with the ledger.
+   */
+  const moneyStep = useMonetaryStep();
+
   const accounts = useStore((s) => s.accounts);
   const entities = useEntityStore((s) => s.entities);
   const invoices = useInvoiceStore((s) => s.invoices);
@@ -112,9 +120,9 @@ export function ReceiptEditorDrawer({ open, receiptId, onClose }: Props) {
   // Drafts and approved-but-not-yet-posted receipts stay editable and postable.
   const readOnly = receipt.status !== 'draft' && receipt.status !== 'approved';
 
-  const allocationTotal = Math.round(Object.values(alloc).reduce((s, n) => s + (Number(n) || 0), 0) * 100) / 100;
+  const allocationTotal = roundToCompanyPrecision(Object.values(alloc).reduce((s, n) => s + (Number(n) || 0), 0));
   const totals = calculateReceiptTotals({ amount, exchangeRate, allocations: [], bankFeeAmount, withholdingTaxAmount } as never);
-  const unapplied = Math.round(Math.max(0, amount - allocationTotal) * 100) / 100;
+  const unapplied = roundToCompanyPrecision(Math.max(0, amount - allocationTotal));
 
   const setAllocFor = (invoiceId: string, value: number): void => setAlloc((p) => ({ ...p, [invoiceId]: value }));
   const autoAllocate = (): void => {
@@ -133,7 +141,7 @@ export function ReceiptEditorDrawer({ open, receiptId, onClose }: Props) {
         return {
           id: generateId('ralloc'), entityId: receipt.entityId, receiptId: receipt.id, customerId,
           invoiceId, invoiceNumber: inv?.invoiceNumber, allocationType: 'invoice' as const,
-          amount: Math.round(Number(amt) * 100) / 100, baseCurrencyAmount: Math.round(Number(amt) * exchangeRate * 100) / 100,
+          amount: roundToCompanyPrecision(Number(amt)), baseCurrencyAmount: roundToCompanyPrecision(Number(amt) * exchangeRate),
           allocationDate: receiptDate, createdAt: now, updatedAt: now,
         };
       });
@@ -207,7 +215,7 @@ export function ReceiptEditorDrawer({ open, receiptId, onClose }: Props) {
               <Field label="Payer name"><Input value={payerName} onChange={(e) => setPayerName(e.target.value)} disabled={readOnly} placeholder="Who paid?" /></Field>
             )}
             <Field label="Receipt date" required><Input type="date" value={receiptDate} onChange={(e) => setReceiptDate(e.target.value)} disabled={readOnly} /></Field>
-            <Field label="Amount" required><Input type="number" step="0.01" value={amount} onChange={(e) => setAmount(Number(e.target.value))} disabled={readOnly} className="text-right" /></Field>
+            <Field label="Amount" required><Input type="number" step={moneyStep} data-money="true" value={amount} onChange={(e) => setAmount(Number(e.target.value))} disabled={readOnly} className="text-right" /></Field>
             {/* Plain text, not a disabled input: this is not a decision. */}
             <Field label="Currency">
               <ReadOnlyValue data-testid="receipt-currency">{receiptCurrency.label}</ReadOnlyValue>
@@ -239,11 +247,11 @@ export function ReceiptEditorDrawer({ open, receiptId, onClose }: Props) {
           {/* Bank fee & withholding tax */}
           <section className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="grid grid-cols-2 gap-2 rounded-lg border border-slate-200 p-3 dark:border-slate-800">
-              <Field label="Bank fee"><Input type="number" step="0.01" value={bankFeeAmount} onChange={(e) => setBankFeeAmount(Number(e.target.value))} disabled={readOnly} className="text-right" /></Field>
+              <Field label="Bank fee"><Input type="number" step={moneyStep} data-money="true" value={bankFeeAmount} onChange={(e) => setBankFeeAmount(Number(e.target.value))} disabled={readOnly} className="text-right" /></Field>
               <Field label="Bank fee account"><AccountSelect value={bankFeeAccountId} accounts={accounts} onChange={(a) => setBankFeeAccountId(a.id)} disabled={readOnly || bankFeeAmount <= 0} /></Field>
             </div>
             <div className="grid grid-cols-2 gap-2 rounded-lg border border-slate-200 p-3 dark:border-slate-800">
-              <Field label="Withholding tax"><Input type="number" step="0.01" value={withholdingTaxAmount} onChange={(e) => setWithholdingTaxAmount(Number(e.target.value))} disabled={readOnly} className="text-right" /></Field>
+              <Field label="Withholding tax"><Input type="number" step={moneyStep} data-money="true" value={withholdingTaxAmount} onChange={(e) => setWithholdingTaxAmount(Number(e.target.value))} disabled={readOnly} className="text-right" /></Field>
               <Field label="WHT account"><AccountSelect value={withholdingTaxAccountId} accounts={accounts} onChange={(a) => setWithholdingTaxAccountId(a.id)} disabled={readOnly || withholdingTaxAmount <= 0} /></Field>
             </div>
           </section>

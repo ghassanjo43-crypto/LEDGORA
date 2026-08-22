@@ -43,6 +43,7 @@ import {
   ORDINARY_TRANSACTION_EXCHANGE_RATE,
   transactionCurrencyCode,
 } from '@/lib/transactionCurrency';
+import { roundToCompanyPrecision } from '@/lib/monetaryPrecision';
 
 const ACTOR = 'Finance Manager';
 
@@ -400,7 +401,7 @@ export const useBillStore = create<BillState>()(
         const existing = bills.find((b) => b.id === id);
         if (!existing) return { ok: false, error: 'Bill not found.' };
         if (!['posted', 'partially-paid'].includes(existing.status)) return { ok: false, error: 'Only a posted bill can receive payments.' };
-        const amt = Math.round((Number(input.amount) || 0) * 100) / 100;
+        const amt = roundToCompanyPrecision(Number(input.amount) || 0);
         if (amt <= 0) return { ok: false, error: 'Payment amount must be positive.' };
         if (amt > existing.balanceDue + 0.005) return { ok: false, error: 'Payment exceeds the balance due.' };
         if (!input.bankAccountId) return { ok: false, error: 'Select the bank/cash account.' };
@@ -417,7 +418,7 @@ export const useBillStore = create<BillState>()(
         if (!posted.ok) return { ok: false, error: posted.error ?? 'Could not post the payment.' };
         payment.journalEntryId = added.id;
 
-        const amountPaid = Math.round((existing.amountPaid + amt) * 100) / 100;
+        const amountPaid = roundToCompanyPrecision(existing.amountPaid + amt);
         const balanceDue = calculateBillBalance({ grandTotal: existing.grandTotal, withholdingTaxTotal: existing.withholdingTaxTotal, supplierCreditsApplied: existing.supplierCreditsApplied, amountPaid });
         const status = balanceDue <= 0.005 ? 'paid' : 'partially-paid';
         const now = nowIso();
@@ -430,7 +431,7 @@ export const useBillStore = create<BillState>()(
         const existing = bills.find((b) => b.id === id);
         if (!existing) return { ok: false, error: 'Bill not found.' };
         if (!['posted', 'partially-paid'].includes(existing.status)) return { ok: false, error: 'Payments can only be allocated to a posted bill.' };
-        const amt = Math.round((Number(input.amount) || 0) * 100) / 100;
+        const amt = roundToCompanyPrecision(Number(input.amount) || 0);
         if (amt <= 0) return { ok: false, error: 'Allocation amount must be positive.' };
         if (amt > existing.balanceDue + 0.005) return { ok: false, error: 'Allocation exceeds the bill balance due.' };
 
@@ -438,7 +439,7 @@ export const useBillStore = create<BillState>()(
           id: generateId('bpay'), billId: id, date: input.date, amount: amt, method: input.method ?? 'bank-transfer',
           reference: input.reference, bankAccountId: input.bankAccountId ?? '', journalEntryId: input.journalEntryId, paymentId: input.paymentId, createdAt: nowIso(),
         };
-        const amountPaid = Math.round((existing.amountPaid + amt) * 100) / 100;
+        const amountPaid = roundToCompanyPrecision(existing.amountPaid + amt);
         const balanceDue = calculateBillBalance({ grandTotal: existing.grandTotal, withholdingTaxTotal: existing.withholdingTaxTotal, supplierCreditsApplied: existing.supplierCreditsApplied, amountPaid });
         const status = balanceDue <= 0.005 ? 'paid' : 'partially-paid';
         const now = nowIso();
@@ -452,8 +453,8 @@ export const useBillStore = create<BillState>()(
         if (!existing) return { ok: false, error: 'Bill not found.' };
         const linked = existing.payments.filter((p) => p.paymentId === paymentId);
         if (linked.length === 0) return { ok: true, id };
-        const removed = Math.round(linked.reduce((s, p) => s + p.amount, 0) * 100) / 100;
-        const amountPaid = Math.round(Math.max(0, existing.amountPaid - removed) * 100) / 100;
+        const removed = roundToCompanyPrecision(linked.reduce((s, p) => s + p.amount, 0));
+        const amountPaid = roundToCompanyPrecision(Math.max(0, existing.amountPaid - removed));
         const balanceDue = calculateBillBalance({ grandTotal: existing.grandTotal, withholdingTaxTotal: existing.withholdingTaxTotal, supplierCreditsApplied: existing.supplierCreditsApplied, amountPaid });
         const status = balanceDue <= 0.005 && amountPaid > 0.005 ? 'paid' : amountPaid <= 0.005 && existing.supplierCreditsApplied <= 0.005 ? 'posted' : 'partially-paid';
         const now = nowIso();
@@ -466,9 +467,9 @@ export const useBillStore = create<BillState>()(
         const existing = bills.find((b) => b.id === id);
         if (!existing) return { ok: false, error: 'Bill not found.' };
         if (!['posted', 'partially-paid'].includes(existing.status)) return { ok: false, error: 'A supplier credit can only be raised against a posted bill.' };
-        const net = Math.round((Number(input.netAmount) || 0) * 100) / 100;
-        const tax = Math.round((Number(input.taxAmount) || 0) * 100) / 100;
-        const amount = Math.round((net + tax) * 100) / 100;
+        const net = roundToCompanyPrecision(Number(input.netAmount) || 0);
+        const tax = roundToCompanyPrecision(Number(input.taxAmount) || 0);
+        const amount = roundToCompanyPrecision(net + tax);
         if (amount <= 0) return { ok: false, error: 'Supplier credit amount must be positive.' };
         if (amount > existing.balanceDue + 0.005) return { ok: false, error: 'Supplier credit exceeds the balance due.' };
         if (!input.creditAccountId) return { ok: false, error: 'Select the account the credit reverses.' };
@@ -500,7 +501,7 @@ export const useBillStore = create<BillState>()(
           }
         }
 
-        const supplierCreditsApplied = Math.round((existing.supplierCreditsApplied + amount) * 100) / 100;
+        const supplierCreditsApplied = roundToCompanyPrecision(existing.supplierCreditsApplied + amount);
         const balanceDue = calculateBillBalance({ grandTotal: existing.grandTotal, withholdingTaxTotal: existing.withholdingTaxTotal, supplierCreditsApplied, amountPaid: existing.amountPaid });
         const status = balanceDue <= 0.005 ? 'paid' : existing.amountPaid > 0 ? 'partially-paid' : 'partially-paid';
         const now = nowIso();

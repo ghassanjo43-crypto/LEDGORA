@@ -26,6 +26,8 @@ import { useHasModule } from '@/store/entitlementHooks';
 import { CreditNoteReturnControl } from '@/components/inventory/CreditNoteReturnControl';
 import { PrintDocument } from '@/components/ui/PrintDocument';
 import { CreditNoteRenderer } from './CreditNoteRenderer';
+import { roundToCompanyPrecision } from '@/lib/monetaryPrecision';
+import { useMonetaryStep } from '@/lib/useMonetaryPrecision';
 
 interface Props {
   open: boolean;
@@ -39,6 +41,12 @@ const REASON_OPTIONS = (Object.keys(CREDIT_NOTE_REASON_LABELS) as CreditNoteReas
 const TYPE_OPTIONS = (Object.keys(CREDIT_TYPE_LABELS) as CreditType[]).map((k) => ({ value: k, label: CREDIT_TYPE_LABELS[k] }));
 
 export function CreditNoteEditorDrawer({ open, creditNoteId, onClose, onReplace }: Props) {
+  /*
+   * The company's smallest monetary unit — 0.001 for JOD, 0.01 for USD, 1 for
+   * JPY — so the stepper on every money field agrees with the ledger.
+   */
+  const moneyStep = useMonetaryStep();
+
   const accounts = useStore((s) => s.accounts);
   const projects = useProjectStore((s) => s.projects);
   const showCostCenter = useHasModule('cost_centers');
@@ -150,8 +158,8 @@ export function CreditNoteEditorDrawer({ open, creditNoteId, onClose, onReplace 
     else notify(res.error ?? 'Could not correct the credit note.', 'error');
   };
 
-  const remainingAfter = summary ? Math.max(0, Math.round((summary.availableToCredit - totals.grandTotal) * 100) / 100) : null;
-  const invoiceBalanceAfter = invoice ? Math.max(0, Math.round((invoice.balanceDue - Math.min(totals.grandTotal, invoice.balanceDue)) * 100) / 100) : null;
+  const remainingAfter = summary ? Math.max(0, roundToCompanyPrecision(summary.availableToCredit - totals.grandTotal)) : null;
+  const invoiceBalanceAfter = invoice ? Math.max(0, roundToCompanyPrecision(invoice.balanceDue - Math.min(totals.grandTotal, invoice.balanceDue))) : null;
   const snap = showPreview && creditNoteId ? previewSnapshot(creditNoteId) : null;
   const previewCn = showPreview && creditNoteId ? useCreditNoteStore.getState().getCreditNoteById(creditNoteId) : undefined;
   const previewReference = showPreview && creditNoteId ? useCreditNoteStore.getState().invoiceReference(creditNoteId) : null;
@@ -243,7 +251,7 @@ export function CreditNoteEditorDrawer({ open, creditNoteId, onClose, onReplace 
                         <td className="px-2 py-1.5 min-w-[10rem]"><Input value={line.description} onChange={(e) => setLine(line.id, { description: e.target.value })} disabled={readOnly} className="h-8" placeholder="Description" /></td>
                         <td className="px-2 py-1.5 text-right text-slate-400">{avail !== undefined ? avail : '—'}</td>
                         <td className="px-2 py-1.5 w-20"><Input type="number" step="0.01" value={line.quantity} onChange={(e) => setLine(line.id, { quantity: Number(e.target.value) })} disabled={readOnly} className={cx('h-8 text-right', over && 'border-red-400 text-red-600')} /></td>
-                        <td className="px-2 py-1.5 w-24"><Input type="number" step="0.01" value={line.unitPrice} onChange={(e) => setLine(line.id, { unitPrice: Number(e.target.value) })} disabled={readOnly} className="h-8 text-right" /></td>
+                        <td className="px-2 py-1.5 w-24"><Input type="number" step={moneyStep} data-money="true" value={line.unitPrice} onChange={(e) => setLine(line.id, { unitPrice: Number(e.target.value) })} disabled={readOnly} className="h-8 text-right" /></td>
                         <td className="px-2 py-1.5 w-20"><Input type="number" step="0.01" value={line.discountValue ?? 0} onChange={(e) => setLine(line.id, { discountType: 'percentage', discountValue: Number(e.target.value) })} disabled={readOnly} className="h-8 text-right" /></td>
                         <td className="px-2 py-1.5 w-20"><Input type="number" step="0.01" value={line.taxRate} onChange={(e) => setLine(line.id, { taxRate: Number(e.target.value) })} disabled={readOnly} className="h-8 text-right" /></td>
                         <td className="px-2 py-1.5 text-right font-mono">{money(c.lineTotal)}</td>

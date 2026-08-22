@@ -109,6 +109,24 @@ export function multiply(amount: Amount, rate: Amount): Amount {
   return negative ? -rounded : rounded;
 }
 
+/**
+ * Does this amount carry more decimal places than `decimals` allows?
+ *
+ * Asked of the exact BigInt value rather than of any text, so it cannot be
+ * fooled by formatting: an amount is within a currency's precision exactly when
+ * it is a whole multiple of that currency's smallest unit. JOD allows 3, so
+ * 100.1230000000 is a multiple of 10^7 scale-units and 100.1234000000 is not.
+ *
+ * Note what this does NOT do: it does not round, and it does not alter the
+ * value. Storage stays at full SCALE and stays exact — this only answers a
+ * question about the number.
+ */
+export function exceedsPrecision(amount: Amount, decimals: number): boolean {
+  const allowed = Math.max(0, Math.min(SCALE, Math.trunc(decimals)));
+  const unit = 10n ** BigInt(SCALE - allowed);
+  return amount % unit !== 0n;
+}
+
 /** Format for a human-readable message. Never used for arithmetic. */
 export function describe(amount: Amount): string {
   return toDecimalString(amount).replace(/0+$/, '').replace(/\.$/, '');

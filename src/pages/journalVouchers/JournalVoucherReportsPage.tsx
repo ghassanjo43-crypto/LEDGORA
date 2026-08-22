@@ -20,8 +20,13 @@ import { Field } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { Alert } from '@/components/ui/Alert';
 import { Badge } from '@/components/ui/Badge';
+import { companyMonetaryDecimals } from '@/lib/monetaryPrecision';
 
-const money = (n: number): string => n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+/** Voucher-report amounts at the company's monetary precision. */
+const money = (n: number): string => {
+  const d = companyMonetaryDecimals();
+  return n.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
+};
 
 type ReportKey =
   | 'register' | 'by-type' | 'by-account' | 'by-user' | 'by-cost-center' | 'by-project' | 'by-company'

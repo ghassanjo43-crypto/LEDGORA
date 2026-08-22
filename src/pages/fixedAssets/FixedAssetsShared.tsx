@@ -9,10 +9,14 @@ import type { FixedAssetStatus } from '@/types/fixedAssets';
 import { Card } from '@/components/ui/Card';
 import { Alert } from '@/components/ui/Alert';
 import { Badge } from '@/components/ui/Badge';
+import { companyMonetaryDecimals } from '@/lib/monetaryPrecision';
 import { postingAccountOptions } from '@/lib/accountEligibility';
 
 export const money = (n: number): string =>
-  n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  n.toLocaleString(undefined, {
+    minimumFractionDigits: companyMonetaryDecimals(),
+    maximumFractionDigits: companyMonetaryDecimals(),
+  });
 
 export function Table({ head, minWidth = 640, children }: { head: string[]; minWidth?: number; children: React.ReactNode }) {
   return (

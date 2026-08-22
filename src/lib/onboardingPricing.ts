@@ -14,6 +14,10 @@ export interface SubscriptionCart {
   extraCompanies: number;
 }
 
+/**
+ * Two decimals, deliberately fixed: this prices Ledgora's own subscription in
+ * the platform's billing currency, not the subscriber's books.
+ */
 function round2(n: number): number {
   return Math.round((n + Number.EPSILON) * 100) / 100;
 }

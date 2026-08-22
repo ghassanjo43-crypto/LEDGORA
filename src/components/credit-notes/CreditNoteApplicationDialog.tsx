@@ -8,9 +8,17 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { useToast } from '@/components/ui/Toast';
+import { roundToCompanyPrecision } from '@/lib/monetaryPrecision';
+import { useMonetaryStep } from '@/lib/useMonetaryPrecision';
 
 /** Allocate remaining credit to one of the customer's open invoices (subledger — no new journal). */
 export function CreditNoteApplicationDialog({ creditNote, onClose }: { creditNote: CreditNote; onClose: () => void }) {
+  /*
+   * The company's smallest monetary unit — 0.001 for JOD, 0.01 for USD, 1 for
+   * JPY — so the stepper on every money field agrees with the ledger.
+   */
+  const moneyStep = useMonetaryStep();
+
   const invoices = useInvoiceStore((s) => s.invoices);
   const applyCreditNote = useCreditNoteStore((s) => s.applyCreditNote);
   const { notify } = useToast();
@@ -23,7 +31,7 @@ export function CreditNoteApplicationDialog({ creditNote, onClose }: { creditNot
   const [invoiceId, setInvoiceId] = useState(openInvoices.find((i) => i.id === creditNote.originalInvoiceId)?.id ?? openInvoices[0]?.id ?? '');
   const target = openInvoices.find((i) => i.id === invoiceId);
   const suggested = target ? Math.min(creditNote.remainingCredit, target.balanceDue) : creditNote.remainingCredit;
-  const [amount, setAmount] = useState(Math.round(suggested * 100) / 100);
+  const [amount, setAmount] = useState(roundToCompanyPrecision(suggested));
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
 
   const money = (n: number): string => formatCurrency(n, creditNote.currency);
@@ -46,9 +54,9 @@ export function CreditNoteApplicationDialog({ creditNote, onClose }: { creditNot
         ) : (
           <div className="mt-3 space-y-3">
             <label className="block text-xs text-slate-500">Apply to invoice
-              <Select className="mt-1" options={openInvoices.map((i) => ({ value: i.id, label: `${i.invoiceNumber} · balance ${money(i.balanceDue)}` }))} value={invoiceId} onChange={(e) => { setInvoiceId(e.target.value); const inv = openInvoices.find((x) => x.id === e.target.value); if (inv) setAmount(Math.round(Math.min(creditNote.remainingCredit, inv.balanceDue) * 100) / 100); }} />
+              <Select className="mt-1" options={openInvoices.map((i) => ({ value: i.id, label: `${i.invoiceNumber} · balance ${money(i.balanceDue)}` }))} value={invoiceId} onChange={(e) => { setInvoiceId(e.target.value); const inv = openInvoices.find((x) => x.id === e.target.value); if (inv) setAmount(roundToCompanyPrecision(Math.min(creditNote.remainingCredit, inv.balanceDue))); }} />
             </label>
-            <label className="block text-xs text-slate-500">Amount<Input type="number" step="0.01" value={amount} onChange={(e) => setAmount(Number(e.target.value))} className="mt-1" /></label>
+            <label className="block text-xs text-slate-500">Amount<Input type="number" step={moneyStep} data-money="true" value={amount} onChange={(e) => setAmount(Number(e.target.value))} className="mt-1" /></label>
             <label className="block text-xs text-slate-500">Application date<Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="mt-1" /></label>
           </div>
         )}

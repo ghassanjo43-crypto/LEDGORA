@@ -31,6 +31,7 @@ import { useJournalStore } from './journalStore';
 import { useBillStore } from './billStore';
 import { useInvoiceTemplateStore, INVOICE_ENTITY_ID } from './invoiceTemplateStore';
 import { transactionCurrencyCode } from '@/lib/transactionCurrency';
+import { roundToCompanyPrecision } from '@/lib/monetaryPrecision';
 
 const ACTOR = 'Finance Manager';
 const WHT_POLICY: PaymentWithholdingPolicy = { recognition: 'payment' };
@@ -396,7 +397,7 @@ export const usePaymentStore = create<PaymentState>()(
         const payment = payments.find((p) => p.id === id);
         if (!payment) return { ok: false, error: 'Payment not found.' };
         if (!['posted', 'partially-allocated'].includes(payment.status)) return { ok: false, error: 'Only a posted payment with an unapplied balance can be applied.' };
-        const total = Math.round(allocations.reduce((s, a) => s + (Number(a.amount) || 0), 0) * 100) / 100;
+        const total = roundToCompanyPrecision(allocations.reduce((s, a) => s + (Number(a.amount) || 0), 0));
         if (total <= 0) return { ok: false, error: 'Enter an allocation amount.' };
         if (total > payment.unappliedAmount + 0.005) return { ok: false, error: 'Allocation exceeds the unapplied payment amount.' };
 
@@ -417,7 +418,7 @@ export const usePaymentStore = create<PaymentState>()(
           newAllocations.push({
             id: generateId('palloc'), entityId: payment.entityId, paymentId: payment.id, supplierId: payment.supplierId,
             billId: bill.id, billNumber: bill.billNumber, allocationType: 'bill',
-            amount: Math.round((Number(alloc.amount) || 0) * 100) / 100, baseCurrencyAmount: toBaseCurrency(alloc.amount, payment.exchangeRate),
+            amount: roundToCompanyPrecision(Number(alloc.amount) || 0), baseCurrencyAmount: toBaseCurrency(alloc.amount, payment.exchangeRate),
             allocationDate: date ?? payment.paymentDate, createdAt: now, updatedAt: now,
           });
         }

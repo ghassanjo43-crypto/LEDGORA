@@ -1,6 +1,7 @@
 import type { StatementLine, StatementOfAccount } from '@/types/statementOfAccount';
 import { escapeCsv } from '@/lib/csv';
 import { STATEMENT_LINE_TYPE_LABELS } from '@/lib/statementLabels';
+import { roundToCompanyPrecision } from '@/lib/monetaryPrecision';
 
 const CSV_HEADERS = [
   'Date', 'Posting date', 'Type', 'Document number', 'Reference', 'Description',
@@ -8,7 +9,7 @@ const CSV_HEADERS = [
 ] as const;
 
 function amount(n: number | undefined): string {
-  return n === undefined ? '' : (Math.round((Number(n) || 0) * 100) / 100).toFixed(2);
+  return n === undefined ? '' : (roundToCompanyPrecision(Number(n) || 0)).toFixed(2);
 }
 
 function row(line: StatementLine): string[] {

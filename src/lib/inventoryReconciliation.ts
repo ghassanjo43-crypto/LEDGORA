@@ -9,6 +9,7 @@
 import type { StockMovement } from '@/types/inventory';
 import type { JournalEntry } from '@/types/journal';
 import { getInventoryValue } from './inventoryBalance';
+import { roundToCompanyPrecision } from '@/lib/monetaryPrecision';
 
 export interface ReconciliationAccountRow {
   accountId: string;
@@ -39,7 +40,7 @@ export interface ReconciliationInput {
 }
 
 function round2(n: number): number {
-  return Math.round((n + Number.EPSILON) * 100) / 100;
+  return roundToCompanyPrecision(n + Number.EPSILON);
 }
 
 /** The inventory account an item posts to (from its movement snapshots). */

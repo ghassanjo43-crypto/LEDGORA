@@ -10,10 +10,13 @@ import { ENTITY } from '@/lib/inventorySeed';
 import { getInventoryBalance, getSubledgerValue } from '@/lib/inventoryBalance';
 import { ordered } from '@/lib/inventoryValuation';
 import type { StockMovement } from '@/types/inventory';
+import { roundToCompanyPrecision } from '@/lib/monetaryPrecision';
+import { companyMonetaryDecimals } from '@/lib/monetaryPrecision';
 
 export function money(n: number, currency?: string): string {
   const cur = currency ?? useStore.getState().settings.baseCurrency ?? 'USD';
-  return `${cur} ${(n ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const d = companyMonetaryDecimals();
+  return `${cur} ${(n ?? 0).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d })}`;
 }
 
 export function qty(n: number): string {
@@ -79,7 +82,7 @@ export function useMovementLedger(filter?: { itemId?: string; warehouseId?: stri
       const dq = m.direction === 'in' ? m.quantity : -m.quantity;
       const dv = m.direction === 'in' ? m.totalCostBase : -m.totalCostBase;
       runQty.set(m.itemId, (runQty.get(m.itemId) ?? 0) + dq);
-      runVal.set(m.itemId, Math.round(((runVal.get(m.itemId) ?? 0) + dv) * 100) / 100);
+      runVal.set(m.itemId, roundToCompanyPrecision((runVal.get(m.itemId) ?? 0) + dv));
       rows.push({ movement: m, runningQty: runQty.get(m.itemId)!, runningValue: runVal.get(m.itemId)! });
     }
     return rows.reverse();

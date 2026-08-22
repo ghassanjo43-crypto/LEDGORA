@@ -11,11 +11,13 @@ import { DEFAULT_CASH_FLOW_POLICY } from '@/types/cashFlow';
 import { getPostedJournalLines, convertToBaseCurrency } from '@/lib/generalLedgerCalculations';
 import { selectPostedBalancesAsOf } from '@/lib/balanceSheetCalculations';
 import { buildIncomeStatement } from '@/lib/incomeStatementCalculations';
+import { companyMonetaryDecimals } from '@/lib/monetaryPrecision';
+import { roundToCompanyPrecision } from '@/lib/monetaryPrecision';
 
 export const CASH_TOLERANCE = 0.01;
 
 function round2(n: number): number {
-  return Math.round((n + Number.EPSILON) * 100) / 100;
+  return roundToCompanyPrecision(n + Number.EPSILON);
 }
 function addDays(iso: string, days: number): string {
   const d = new Date(`${iso}T00:00:00Z`);
@@ -298,12 +300,12 @@ export function buildCashFlowStatement(accounts: Account[], entries: JournalEntr
   const unclassifiedItems: CashFlowWarning[] = core.unclassified.map((u) => ({
     id: `unclassified-${u.accountId}-${u.journalEntryId}`,
     severity: 'warning',
-    message: `Cash movement of ${u.amount.toFixed(2)} could not be classified (${accountsById.get(u.accountId)?.code ?? u.accountId}).`,
+    message: `Cash movement of ${u.amount.toFixed(companyMonetaryDecimals())} could not be classified (${accountsById.get(u.accountId)?.code ?? u.accountId}).`,
     reference: accountsById.get(u.accountId)?.code,
   }));
   const warnings: CashFlowWarning[] = [...unclassifiedItems];
   if (!isReconciled) {
-    warnings.unshift({ id: 'reconciliation', severity: 'error', message: `Cash-flow reconciliation difference of ${Math.abs(reconciliationDifference).toFixed(2)}.` });
+    warnings.unshift({ id: 'reconciliation', severity: 'error', message: `Cash-flow reconciliation difference of ${Math.abs(reconciliationDifference).toFixed(companyMonetaryDecimals())}.` });
   }
 
   const statement: CashFlowStatement = {

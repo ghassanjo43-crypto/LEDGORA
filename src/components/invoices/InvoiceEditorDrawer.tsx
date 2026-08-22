@@ -37,6 +37,7 @@ import { ItemSelector } from '@/components/items/ItemSelector';
 import { salesItemDefaults } from '@/lib/itemCatalogue';
 import { useInventoryStore } from '@/store/inventoryStore';
 import { useTaxCodeStore } from '@/store/taxCodeStore';
+import { useMonetaryStep } from '@/lib/useMonetaryPrecision';
 
 interface Props {
   open: boolean;
@@ -52,6 +53,12 @@ const SOURCE_LABEL: Record<string, string> = {
 };
 
 export function InvoiceEditorDrawer({ open, invoiceId, onClose }: Props) {
+  /*
+   * The company's smallest monetary unit — 0.001 for JOD, 0.01 for USD, 1 for
+   * JPY — so the stepper on every money field agrees with the ledger.
+   */
+  const moneyStep = useMonetaryStep();
+
   const accounts = useStore((s) => s.accounts);
   const projects = useProjectStore((s) => s.projects);
   const showCostCenter = useHasModule('cost_centers');
@@ -285,7 +292,7 @@ export function InvoiceEditorDrawer({ open, invoiceId, onClose }: Props) {
                       <td className="px-2 py-1.5 min-w-[12rem]"><AccountSelect value={line.accountId} accounts={accounts} onChange={(a) => setLine(line.id, { accountId: a.id })} disabled={readOnly} /></td>
                       <td className="px-2 py-1.5 min-w-[10rem]"><Input value={line.description} onChange={(e) => setLine(line.id, { description: e.target.value })} disabled={readOnly} className="h-8" placeholder="Description" /></td>
                       <td className="px-2 py-1.5 w-20"><Input type="number" step="0.01" value={line.quantity} onChange={(e) => setLine(line.id, { quantity: Number(e.target.value) })} disabled={readOnly} className="h-8 text-right" /></td>
-                      <td className="px-2 py-1.5 w-24"><Input type="number" step="0.01" value={line.unitPrice} onChange={(e) => setLine(line.id, { unitPrice: Number(e.target.value) })} disabled={readOnly} className="h-8 text-right" /></td>
+                      <td className="px-2 py-1.5 w-24"><Input type="number" step={moneyStep} data-money="true" value={line.unitPrice} onChange={(e) => setLine(line.id, { unitPrice: Number(e.target.value) })} disabled={readOnly} className="h-8 text-right" /></td>
                       <td className="px-2 py-1.5 w-20"><Input type="number" step="0.01" value={line.discountValue ?? 0} onChange={(e) => setLine(line.id, { discountType: 'percentage', discountValue: Number(e.target.value) })} disabled={readOnly} className="h-8 text-right" /></td>
                       <td className="px-2 py-1.5 w-20"><Input type="number" step="0.01" value={line.taxRate} onChange={(e) => setLine(line.id, { taxRate: Number(e.target.value) })} disabled={readOnly} className="h-8 text-right" /></td>
                       <td className="px-2 py-1.5 text-right font-mono">{money(c.lineTotal)}</td>

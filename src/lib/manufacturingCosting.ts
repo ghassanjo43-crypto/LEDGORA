@@ -17,9 +17,10 @@ import type {
   WorkOrderOperationSnapshot,
   WorkOrderOperationCostEntry,
 } from '@/types/manufacturingDocuments';
+import { roundToCompanyPrecision } from '@/lib/monetaryPrecision';
 
 function r2(n: number): number {
-  return Math.round((n + Number.EPSILON) * 100) / 100;
+  return roundToCompanyPrecision(n + Number.EPSILON);
 }
 
 /* ── Standard cost ────────────────────────────────────────────────────────── */

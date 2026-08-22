@@ -9,6 +9,7 @@ import { generateId, nowIso } from '@/lib/utils';
 import { PRIMARY_ENTITY_ID } from '@/data/costCenterSeed';
 import { useStore } from './useStore';
 import { useJournalStore } from './journalStore';
+import { roundToCompanyPrecision } from '@/lib/monetaryPrecision';
 
 export interface AllocationActionResult {
   ok: boolean;
@@ -80,7 +81,7 @@ export const useCostCenterAllocationStore = create<AllocationState>()(
         if (input.sourceAmountOverride === undefined && rule.method !== 'fixed-amount' && rule.sourceCostCenterId && rule.allocationAccountId) {
           const actuals = costCenterActuals(useJournalStore.getState().entries, accountsById(), { costCenterIds: new Set([rule.sourceCostCenterId]), from: input.periodStart, to: input.periodEnd, base: useStore.getState().settings.baseCurrency });
           const a = actuals.get(rule.allocationAccountId);
-          sourceAmount = a ? Math.round((a.debit - a.credit) * 100) / 100 : 0;
+          sourceAmount = a ? roundToCompanyPrecision(a.debit - a.credit) : 0;
         }
 
         const built = buildCostCenterAllocationRun({ rule, sourceAmount, periodStart: input.periodStart, periodEnd: input.periodEnd, postingDate: input.postingDate });

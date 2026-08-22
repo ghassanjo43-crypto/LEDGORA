@@ -8,10 +8,12 @@ import { useManufacturingStore } from '@/store/manufacturingStore';
 import { useInventoryStore } from '@/store/inventoryStore';
 import { useStore } from '@/store/useStore';
 import { calculateWorkOrderWip, calculateActualWorkOrderCost, calculateVariance } from '@/lib/manufacturingCosting';
+import { companyMonetaryDecimals } from '@/lib/monetaryPrecision';
 
 export function money(n: number): string {
   const cur = useStore.getState().settings.baseCurrency ?? 'USD';
-  return `${cur} ${(n ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const d = companyMonetaryDecimals();
+  return `${cur} ${(n ?? 0).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d })}`;
 }
 export function qty(n: number): string {
   return (n ?? 0).toLocaleString(undefined, { maximumFractionDigits: 3 });

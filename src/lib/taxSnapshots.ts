@@ -1,6 +1,7 @@
 import type { TaxCode, TaxSnapshot } from '@/types/taxCode';
 import type { ResolvedRateVersion } from '@/lib/taxResolution';
 import { calculateTaxLine, calculateRecoverableTax } from '@/lib/taxCalculations';
+import { roundToCompanyPrecision } from '@/lib/monetaryPrecision';
 
 export interface CreateSnapshotInput {
   code: TaxCode;
@@ -66,13 +67,13 @@ export function createTaxSnapshot(input: CreateSnapshotInput): TaxSnapshot {
  */
 export function createReversalSnapshot(original: TaxSnapshot, reversedTaxableAmount: number, capturedAt: string): TaxSnapshot {
   const taxableAmount = reversedTaxableAmount;
-  const taxAmount = original.taxableAmount === 0 ? 0 : Math.round((taxableAmount / original.taxableAmount) * original.taxAmount * 100) / 100;
+  const taxAmount = original.taxableAmount === 0 ? 0 : roundToCompanyPrecision((taxableAmount / original.taxableAmount) * original.taxAmount);
   const { recoverableTaxAmount, nonRecoverableTaxAmount } = calculateRecoverableTax(taxAmount, original.recoverabilityPercent ?? 100, original.precision);
   return {
     ...original,
     taxableAmount,
     taxAmount,
-    grossAmount: Math.round((taxableAmount + taxAmount) * 100) / 100,
+    grossAmount: roundToCompanyPrecision(taxableAmount + taxAmount),
     recoverableTaxAmount,
     nonRecoverableTaxAmount,
     capturedAt,

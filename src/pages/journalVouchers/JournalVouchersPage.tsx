@@ -39,8 +39,13 @@ import { Drawer } from '@/components/ui/Drawer';
 import { Toggle } from '@/components/ui/Toggle';
 import { Tabs, type TabItem } from '@/components/ui/Tabs';
 import { ArrowDown, ArrowUp, Copy, Plus, Printer, Trash2 } from 'lucide-react';
+import { companyMonetaryDecimals } from '@/lib/monetaryPrecision';
 
-const money = (n: number): string => n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+/** Voucher amounts at the company's monetary precision. */
+const money = (n: number): string => {
+  const d = companyMonetaryDecimals();
+  return n.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
+};
 const today = (): string => new Date().toISOString().slice(0, 10);
 
 const STATUS_TONE: Record<JournalVoucherStatus, 'slate' | 'amber' | 'red' | 'green' | 'blue' | 'violet'> = {
@@ -340,7 +345,14 @@ function VoucherEditor({ voucher, onChange, baseCurrency, onSave, onSaveAndSubmi
                       />
                     </td>
                     <td className="px-2 py-1">
+                      {/*
+                        AmountInput stays generic - it is used for non-monetary
+                        numbers elsewhere - so the company's monetary precision
+                        is passed in explicitly rather than assumed inside it.
+                      */}
                       <AmountInput
+                        decimals={companyCurrency.decimalPlaces}
+                        data-money="true"
                         data-testid={`jv-debit-${idx}`}
                         aria-label={`Line ${l.lineNumber} debit`}
                         value={l.debit}
@@ -350,6 +362,8 @@ function VoucherEditor({ voucher, onChange, baseCurrency, onSave, onSaveAndSubmi
                     </td>
                     <td className="px-2 py-1">
                       <AmountInput
+                        decimals={companyCurrency.decimalPlaces}
+                        data-money="true"
                         data-testid={`jv-credit-${idx}`}
                         aria-label={`Line ${l.lineNumber} credit`}
                         value={l.credit}

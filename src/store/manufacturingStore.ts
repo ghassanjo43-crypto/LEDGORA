@@ -59,6 +59,7 @@ import { validatePlant, validateProductionLine, validateWorkCenter } from '@/lib
 import { nextMfgNumber } from '@/lib/manufacturingNumbering';
 import { MFG_ENTITY, makeMfgItems, makeMfgMasterData, makeMfgOpeningStock, makeMfgSettings, makeMfgWarehouses } from '@/lib/manufacturingSeed';
 import { generateId, nowIso } from '@/lib/utils';
+import { roundToCompanyPrecision } from '@/lib/monetaryPrecision';
 
 export interface MfgResult {
   ok: boolean;
@@ -149,7 +150,7 @@ function blank(): Pick<MfgState, 'settings' | 'plants' | 'lines' | 'workCenters'
   return { settings: makeMfgSettings(), plants: [], lines: [], workCenters: [], boms: [], routings: [], workOrders: [], standardCostVersions: [], materialIssues: [], materialReturns: [], productionReceipts: [], operationCosts: [], scraps: [], auditTrail: [], seeded: false };
 }
 
-function r2(n: number): number { return Math.round((n + Number.EPSILON) * 100) / 100; }
+function r2(n: number): number { return roundToCompanyPrecision(n + Number.EPSILON); }
 
 export const useManufacturingStore = create<MfgState>()(
   persist(

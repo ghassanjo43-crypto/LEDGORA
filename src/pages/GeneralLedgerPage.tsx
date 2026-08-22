@@ -55,7 +55,7 @@ export function GeneralLedgerPage() {
   const clearLedgerFocus = useLedgerFocus((s) => s.clearLedgerFocus);
 
   const base = settings.baseCurrency;
-  const postingAccounts = useMemo(() => accounts.filter((a) => a.isPostingAccount), [accounts]);
+  const postingAccounts = useMemo(() => accounts, [accounts]);
 
   const [mode, setMode] = useState<Mode>('detail');
   const [accountId, setAccountId] = useState<string>('');
@@ -191,7 +191,7 @@ export function GeneralLedgerPage() {
           </div>
           {mode === 'detail' && (
             <div className="min-w-[16rem] flex-1">
-              <AccountSelect value={accountId} accounts={accounts} onChange={(a) => { setAccountId(a.id); setPage(1); }} />
+              <AccountSelect value={accountId} accounts={accounts} selectionMode="all" onChange={(a) => { setAccountId(a.id); setPage(1); }} />
             </div>
           )}
           <DateRangeFilter value={{ dateFrom: period.from, dateTo: period.to }} onChange={(v) => { setPeriod({ from: v.dateFrom || period.from, to: v.dateTo || period.to }); setPage(1); }} />

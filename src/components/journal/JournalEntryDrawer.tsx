@@ -45,6 +45,7 @@ import { CostCenterPicker } from '@/components/cost-centers/CostCenterPicker';
 import { useProjectStore } from '@/store/projectStore';
 import { ProjectPicker } from '@/components/projects/ProjectPicker';
 import { useHasModule } from '@/store/entitlementHooks';
+import { useMonetaryPrecision } from '@/lib/useMonetaryPrecision';
 import { EntityPicker } from '@/components/shared/EntityPicker';
 
 export type JournalFormMode =
@@ -702,6 +703,15 @@ function LineRow({
 }: LineRowProps) {
   const debitReg = register(`lines.${index}.debit`);
   const creditReg = register(`lines.${index}.credit`);
+  /*
+   * The company's monetary precision drives the stepper and the placeholder, so
+   * a JOD line offers thousandths (step 0.001, "0.000") and a JPY line whole
+   * units. The schema refuses anything finer; this makes the field agree with
+   * it rather than inviting a value the save would reject.
+   */
+  const moneyDecimals = useMonetaryPrecision();
+  const moneyStep = 10 ** -moneyDecimals;
+  const moneyPlaceholder = moneyDecimals > 0 ? `0.${'0'.repeat(moneyDecimals)}` : '0';
   const costCenters = useCostCenterStore((s) => s.costCenters);
   const projects = useProjectStore((s) => s.projects);
   // Only expose a dimension field when the organization owns its module.
@@ -748,9 +758,9 @@ function LineRow({
 
         <Input
           type="number"
-          step="0.01"
+          step={moneyStep} data-money="true"
           min={0}
-          placeholder="0.00"
+          placeholder={moneyPlaceholder}
           data-line={index}
           data-col="debit"
           hasError={hasAmountError}
@@ -769,9 +779,9 @@ function LineRow({
         />
         <Input
           type="number"
-          step="0.01"
+          step={moneyStep} data-money="true"
           min={0}
-          placeholder="0.00"
+          placeholder={moneyPlaceholder}
           data-line={index}
           data-col="credit"
           hasError={hasAmountError}
@@ -830,7 +840,8 @@ function LineRow({
         )}
         <div className="flex gap-2">
           <Input placeholder="Tax" className="h-8 text-xs" {...register(`lines.${index}.taxCode`)} />
-          <Input type="number" step="0.01" min={0} placeholder="Tax amt" className="h-8 w-20 text-right font-mono text-xs" {...register(`lines.${index}.taxAmount`)} />
+          {/* Tax amount is money too, so it follows the same precision. */}
+          <Input type="number" step={moneyStep} data-money="true" min={0} placeholder="Tax amt" className="h-8 w-20 text-right font-mono text-xs" {...register(`lines.${index}.taxAmount`)} />
         </div>
       </div>
     </div>

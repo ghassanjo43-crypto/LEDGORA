@@ -1,6 +1,7 @@
 import type { JournalStatus } from '@/types/journal';
 import { Badge } from '@/components/ui/Badge';
 import type { BadgeTone } from '@/data/ifrsOptions';
+import { companyMonetaryDecimals } from '@/lib/monetaryPrecision';
 
 const STATUS_META: Record<JournalStatus, { label: string; tone: BadgeTone }> = {
   draft: { label: 'Draft', tone: 'amber' },
@@ -34,7 +35,7 @@ export function BalanceBadge({ difference }: { difference: number }) {
   const balanced = Math.abs(difference) < 0.005;
   return (
     <Badge tone={balanced ? 'green' : 'red'}>
-      {balanced ? 'Balanced' : `Off by ${Math.abs(difference).toFixed(2)}`}
+      {balanced ? 'Balanced' : `Off by ${Math.abs(difference).toFixed(companyMonetaryDecimals())}`}
     </Badge>
   );
 }

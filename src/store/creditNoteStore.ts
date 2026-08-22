@@ -28,6 +28,7 @@ import { useEntityStore } from './useEntityStore';
 import { useJournalStore } from './journalStore';
 import { useInvoiceStore } from './invoiceStore';
 import { useInvoiceTemplateStore, INVOICE_ENTITY_ID } from './invoiceTemplateStore';
+import { roundToCompanyPrecision } from '@/lib/monetaryPrecision';
 
 const ACTOR = 'Finance Manager';
 
@@ -279,7 +280,7 @@ export const useCreditNoteStore = create<CreditNoteState>()(
         const requiresOriginalInvoice = cn.creditType !== 'general-credit';
         const summary = invoice ? calculateInvoiceCreditSummary(invoice, creditNotes, cn.id) : { availableToCredit: Infinity, originalTotal: 0, previouslyCredited: 0 };
         const otherNotes = invoice ? creditNotes.filter((c) => c.originalInvoiceId === invoice.id && c.id !== cn.id && c.status !== 'draft' && c.status !== 'void') : [];
-        const remainingTax = invoice ? Math.max(0, Math.round((invoice.taxTotal - otherNotes.reduce((s, c) => s + c.taxTotal, 0)) * 100) / 100) : Infinity;
+        const remainingTax = invoice ? Math.max(0, roundToCompanyPrecision(invoice.taxTotal - otherNotes.reduce((s, c) => s + c.taxTotal, 0))) : Infinity;
         const remainingQuantityByInvoiceLine = new Map<string, number>();
         if (invoice) {
           for (const line of invoice.lines) {
@@ -364,7 +365,7 @@ export const useCreditNoteStore = create<CreditNoteState>()(
         if (autoApply && invoice && invoice.status !== 'void') {
           const fresh = useInvoiceStore.getState().getInvoice(invoice.id);
           const applyAmount = Math.min(issued.remainingCredit, fresh?.balanceDue ?? 0);
-          if (applyAmount > 0.005) get().applyCreditNote(id, invoice.id, Math.round(applyAmount * 100) / 100, now.slice(0, 10));
+          if (applyAmount > 0.005) get().applyCreditNote(id, invoice.id, roundToCompanyPrecision(applyAmount), now.slice(0, 10));
         }
         return { ok: true, id };
       },
@@ -398,7 +399,7 @@ export const useCreditNoteStore = create<CreditNoteState>()(
         const cn = creditNotes.find((c) => c.id === creditNoteId);
         if (!cn) return { ok: false, error: 'Credit note not found.' };
         if (!['issued', 'applied', 'partially-applied'].includes(cn.status)) return { ok: false, error: 'Only an issued credit note can be applied.' };
-        const amt = Math.round((Number(amount) || 0) * 100) / 100;
+        const amt = roundToCompanyPrecision(Number(amount) || 0);
         if (amt <= 0) return { ok: false, error: 'Application amount must be positive.' };
         if (amt > cn.remainingCredit + 0.005) return { ok: false, error: 'Application exceeds the remaining credit.' };
 
@@ -416,7 +417,7 @@ export const useCreditNoteStore = create<CreditNoteState>()(
           id: generateId('cnapp'), entityId: cn.entityId, customerId: cn.customerId, creditNoteId, invoiceId,
           amount: amt, applicationDate: date ?? now.slice(0, 10), createdAt: now,
         };
-        const amountApplied = Math.round((cn.amountApplied + amt) * 100) / 100;
+        const amountApplied = roundToCompanyPrecision(cn.amountApplied + amt);
         const remainingCredit = calculateRemainingCredit({ grandTotal: cn.grandTotal, amountApplied, amountRefunded: cn.amountRefunded });
         const status = deriveIssuedStatus({ grandTotal: cn.grandTotal, amountApplied, amountRefunded: cn.amountRefunded });
         const sameInvoice = invoiceId === cn.originalInvoiceId;
@@ -437,7 +438,7 @@ export const useCreditNoteStore = create<CreditNoteState>()(
         const cn = creditNotes.find((c) => c.id === id);
         if (!cn) return { ok: false, error: 'Credit note not found.' };
         if (!['issued', 'applied', 'partially-applied'].includes(cn.status)) return { ok: false, error: 'Only an issued credit note can be refunded.' };
-        const amt = Math.round((Number(input.amount) || 0) * 100) / 100;
+        const amt = roundToCompanyPrecision(Number(input.amount) || 0);
         if (amt <= 0) return { ok: false, error: 'Refund amount must be positive.' };
         if (amt > cn.remainingCredit + 0.005) return { ok: false, error: 'Refund exceeds the remaining credit.' };
         if (!input.bankAccountId) return { ok: false, error: 'Select the bank/cash account for the refund.' };
@@ -455,7 +456,7 @@ export const useCreditNoteStore = create<CreditNoteState>()(
         if (!posted.ok) return { ok: false, error: posted.error ?? 'Could not post the refund.' };
         refund.journalEntryId = added.id;
 
-        const amountRefunded = Math.round((cn.amountRefunded + amt) * 100) / 100;
+        const amountRefunded = roundToCompanyPrecision(cn.amountRefunded + amt);
         const remainingCredit = calculateRemainingCredit({ grandTotal: cn.grandTotal, amountApplied: cn.amountApplied, amountRefunded });
         const status = deriveIssuedStatus({ grandTotal: cn.grandTotal, amountApplied: cn.amountApplied, amountRefunded });
         set({
