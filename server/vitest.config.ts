@@ -1,6 +1,5 @@
 import { defineConfig } from 'vitest/config';
 import path from 'node:path';
-import { availableParallelism } from 'node:os';
 
 export default defineConfig({
   resolve: {
@@ -17,13 +16,15 @@ export default defineConfig({
      * FIRST hook in each file starves past its timeout — a failure that is
      * purely about scheduling and says nothing about the code under test.
      *
-     * Cap the pool at half the available cores (at least two) and give the
-     * database-bootstrapping hooks room to finish under that contention.
+     * PGlite is memory- and CPU-intensive enough that deriving this from the
+     * logical core count is unsafe: concurrent engines on a 12-thread
+     * workstation starve migration hooks past 120 seconds. One fork keeps
+     * isolation while allowing every database to boot and close normally.
      *
      * Vitest 4 removed the per-pool `poolOptions.forks.maxForks` in favour of
      * this top-level cap, which applies to whichever `pool` is selected.
      */
-    maxWorkers: Math.max(2, Math.floor(availableParallelism() / 2)),
+    maxWorkers: 1,
     testTimeout: 60_000,
     hookTimeout: 120_000,
   },

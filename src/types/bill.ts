@@ -123,6 +123,8 @@ export interface BillAttachment {
 
 export interface Bill {
   id: string;
+  /** Monotonic optimistic-concurrency token. Legacy persisted bills default to 0. */
+  revision?: number;
   entityId: string;
   supplierId: string;
 

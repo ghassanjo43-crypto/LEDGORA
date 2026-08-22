@@ -97,6 +97,15 @@ export function billPostingConfig(supplierId: string): BillPostingConfig {
 
 function audit(action: string, detail?: string): BillAuditEvent { return { id: generateId('baud'), at: nowIso(), action, detail }; }
 
+/** Persisted v1 bills predate optimistic-concurrency revisions. */
+export function billRevision(bill: Pick<Bill, 'revision'>): number {
+  return Number.isSafeInteger(bill.revision) && (bill.revision ?? -1) >= 0 ? bill.revision! : 0;
+}
+
+function normalizeBillRevision(bill: Bill): Bill {
+  return bill.revision === billRevision(bill) ? bill : { ...bill, revision: billRevision(bill) };
+}
+
 /** Recompute derived totals + balance at the DOCUMENT currency's configured precision. */
 function withTotals(bill: Bill): Bill {
   const dp = useCurrencyStore.getState().getCurrency(bill.currency)?.decimalPlaces ?? 2;
@@ -125,7 +134,7 @@ interface BillState {
   takeBillNumber: (entityId: string, usedNumbers: Set<string>, date: string) => string;
 
   createDraft: (input?: { supplierId?: string; billType?: BillType; billDate?: string; dueDate?: string; currency?: string }) => BillActionResult;
-  updateDraft: (id: string, patch: Partial<Bill>, opts?: { expectedUpdatedAt?: string }) => BillActionResult;
+  updateDraft: (id: string, patch: Partial<Bill>, opts?: { expectedRevision?: number }) => BillActionResult;
   deleteDraft: (id: string) => BillActionResult;
   duplicateBill: (id: string) => BillActionResult;
 
@@ -154,7 +163,10 @@ export const useBillStore = create<BillState>()(
       bills: [],
       numbering: { [INVOICE_ENTITY_ID]: makeDefaultBillNumberingConfig(INVOICE_ENTITY_ID) },
 
-      getBill: (id) => get().bills.find((b) => b.id === id),
+      getBill: (id) => {
+        const bill = get().bills.find((b) => b.id === id);
+        return bill ? normalizeBillRevision(bill) : undefined;
+      },
       getBillsForSupplier: (supplierId) => get().bills.filter((b) => b.supplierId === supplierId),
       usedNumbers: () => new Set(get().bills.map((b) => b.billNumber).filter(Boolean)),
 
@@ -196,7 +208,7 @@ export const useBillStore = create<BillState>()(
         const id = generateId('bill');
         const now = nowIso();
         const bill: Bill = {
-          id, entityId: INVOICE_ENTITY_ID, supplierId: input?.supplierId ?? '',
+          id, revision: 0, entityId: INVOICE_ENTITY_ID, supplierId: input?.supplierId ?? '',
           billNumber: number, supplierInvoiceNumber: '',
           billType: input?.billType ?? 'expense', status: 'draft',
           billDate, dueDate: input?.dueDate ?? billDate,
@@ -238,13 +250,14 @@ export const useBillStore = create<BillState>()(
         if (existing.entityId !== INVOICE_ENTITY_ID) return { ok: false, error: 'Bill not found in the current entity.' };
         if (existing.status !== 'draft') return { ok: false, error: existing.status === 'posted' || existing.journalEntryId ? 'Posted bills cannot be edited because they have affected the ledger. Reverse or void this bill and create a corrected bill.' : 'Return this bill to draft before editing it.' };
         if (existing.journalEntryId || existing.goodsReceiptId || existing.payments.length > 0 || existing.amountPaid > 0 || existing.supplierCreditsApplied > 0) return { ok: false, error: 'This bill has accounting, inventory, credit or payment activity and cannot be edited directly.' };
-        if (opts?.expectedUpdatedAt && opts.expectedUpdatedAt !== existing.updatedAt) return { ok: false, error: 'This bill was changed in another session. Reload it before saving.' };
+        if (opts?.expectedRevision !== undefined && opts.expectedRevision !== billRevision(existing)) return { ok: false, error: 'This bill was changed in another session. Reload it before saving.' };
         const allowed = ['supplierId', 'supplierInvoiceNumber', 'billType', 'billDate', 'dueDate', 'purchaseOrderId', 'notes', 'lines'] as const;
         const clean: Partial<Bill> = {};
         for (const key of allowed) if (Object.prototype.hasOwnProperty.call(patch, key)) (clean as Record<string, unknown>)[key] = patch[key];
         const changed = Object.keys(clean).some((key) => JSON.stringify(existing[key as keyof Bill]) !== JSON.stringify(clean[key as keyof Bill]));
         if (!changed) return { ok: true, id };
         const merged = withTotals({ ...existing, ...clean, lines: (clean.lines ?? existing.lines).map((l) => ({ ...l, billId: id })) });
+        merged.revision = billRevision(existing) + 1;
         merged.auditTrail = [...existing.auditTrail, audit('bill-draft-updated')];
         set({ bills: bills.map((b) => (b.id === id ? merged : b)) });
         return { ok: true, id };
@@ -269,7 +282,7 @@ export const useBillStore = create<BillState>()(
         const now = nowIso();
         const copy: Bill = {
           ...structuredCopy(src),
-          id: newId, billNumber: number, supplierInvoiceNumber: '', status: 'draft', billDate, dueDate: billDate,
+          id: newId, revision: 0, billNumber: number, supplierInvoiceNumber: '', status: 'draft', billDate, dueDate: billDate,
           templateSnapshot: undefined, journalEntryId: undefined, reversalJournalEntryId: undefined,
           amountPaid: 0, supplierCreditsApplied: 0, payments: [], supplierCredits: [], attachments: [],
           submittedAt: undefined, approvedAt: undefined, postedAt: undefined, paidAt: undefined, voidedAt: undefined, reversedAt: undefined, approvedBy: undefined, voidReason: undefined, reversalReason: undefined,
@@ -526,10 +539,18 @@ export const useBillStore = create<BillState>()(
         return { ok: true, id };
       },
 
-      replaceAll: (bills) => set({ bills }),
+      replaceAll: (bills) => set({ bills: bills.map(normalizeBillRevision) }),
       resetToDefault: () => set({ bills: [], numbering: { [INVOICE_ENTITY_ID]: makeDefaultBillNumberingConfig(INVOICE_ENTITY_ID) } }),
     }),
-    { name: 'ledgerly-bills', storage: businessJSONStorage, version: 1 },
+    {
+      name: 'ledgerly-bills',
+      storage: businessJSONStorage,
+      version: 2,
+      migrate: (persisted) => {
+        const state = persisted as Partial<BillState>;
+        return { ...state, bills: (state.bills ?? []).map(normalizeBillRevision) } as BillState;
+      },
+    },
   ),
 );
 

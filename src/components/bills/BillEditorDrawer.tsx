@@ -80,14 +80,14 @@ export function BillEditorDrawer({ open, billId, onClose }: Props) {
   const [notes, setNotes] = useState(bill?.notes ?? '');
 
   const [loadedId, setLoadedId] = useState<string | null>(null);
-  const [loadedVersion, setLoadedVersion] = useState<string | undefined>(undefined);
+  const [loadedVersion, setLoadedVersion] = useState<number | undefined>(undefined);
   if (bill && bill.id !== loadedId) {
     setLoadedId(bill.id);
     setLines(bill.lines.length ? bill.lines : [makeEmptyBillLine(bill.id, 1)]);
     setSupplierId(bill.supplierId); setSupplierInvoiceNumber(bill.supplierInvoiceNumber); setBillType(bill.billType);
     setBillDate(bill.billDate); setDueDate(bill.dueDate);
     setPoRef(bill.purchaseOrderId ?? ''); setNotes(bill.notes ?? '');
-    setLoadedVersion(bill.updatedAt);
+    setLoadedVersion(bill.revision ?? 0);
   }
 
   /*
@@ -130,7 +130,7 @@ export function BillEditorDrawer({ open, billId, onClose }: Props) {
   // `currency` and `exchangeRate` are deliberately absent: an edit must not be
   // able to re-denominate a bill, so the stored values are simply left alone.
   const collect = (): Partial<Bill> => ({ supplierId, supplierInvoiceNumber, billType, billDate, dueDate, purchaseOrderId: poRef || undefined, notes, lines });
-  const persist = (): boolean => { const res = updateDraft(bill.id, collect(), { expectedUpdatedAt: loadedVersion }); if (!res.ok) { const message = res.error ?? 'Could not save the bill.'; setFormError(message); notify(message, 'error'); requestAnimationFrame(() => document.querySelector<HTMLElement>('[aria-modal="true"] [aria-invalid="true"]')?.focus()); return false; } setLoadedVersion(useBillStore.getState().getBill(bill.id)?.updatedAt); setFormError(null); return true; };
+  const persist = (): boolean => { const res = updateDraft(bill.id, collect(), { expectedRevision: loadedVersion }); if (!res.ok) { const message = res.error ?? 'Could not save the bill.'; setFormError(message); notify(message, 'error'); requestAnimationFrame(() => document.querySelector<HTMLElement>('[aria-modal="true"] [aria-invalid="true"]')?.focus()); return false; } setLoadedVersion(useBillStore.getState().getBill(bill.id)?.revision ?? 0); setFormError(null); return true; };
 
   const dirty = !readOnly && JSON.stringify(collect()) !== JSON.stringify({ supplierId: bill.supplierId, supplierInvoiceNumber: bill.supplierInvoiceNumber, billType: bill.billType, billDate: bill.billDate, dueDate: bill.dueDate, purchaseOrderId: bill.purchaseOrderId, notes: bill.notes, lines: bill.lines });
   const requestClose = (): void => { if (!dirty || window.confirm('Discard unsaved changes to this bill?')) onClose(); };

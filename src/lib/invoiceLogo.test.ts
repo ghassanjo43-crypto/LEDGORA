@@ -31,14 +31,15 @@ describe('resolveTemplateLogoUrl', () => {
 describe('snapshot freezes the effective logo', () => {
   const seed = buildSeedInvoiceTemplates('ent1');
   const template = seed.templates.find((t) => t.id === BLUE_TEMPLATE_ID)!;
-  const version = { ...seed.versions.find((v) => v.id === BLUE_VERSION_2_ID)!, contentConfig: { ...baseContent(), logo: { ...DEFAULT_LOGO_CONFIG, mode: 'custom' as const, customLogoUrl: CUSTOM } } };
+  const customVersion = () => ({ ...seed.versions.find((v) => v.id === BLUE_VERSION_2_ID)!, contentConfig: { ...baseContent(), logo: { ...DEFAULT_LOGO_CONFIG, mode: 'custom' as const, customLogoUrl: CUSTOM } } });
 
   it('captures the custom template logo into the company snapshot', () => {
-    const snap = createInvoiceTemplateSnapshot(template, version, { legalName: 'Acme', logoUrl: COMPANY }, { name: 'Cust' });
+    const snap = createInvoiceTemplateSnapshot(template, customVersion(), { legalName: 'Acme', logoUrl: COMPANY }, { name: 'Cust' });
     expect(snap.companySnapshot.logoUrl).toBe(CUSTOM); // custom overrides the company default
   });
 
   it('a later template logo change does not alter the already-issued snapshot', () => {
+    const version = customVersion();
     const snap = createInvoiceTemplateSnapshot(template, version, { legalName: 'Acme', logoUrl: COMPANY }, { name: 'Cust' });
     // mutate the live version's logo afterwards
     version.contentConfig.logo!.customLogoUrl = 'data:image/png;base64,ZZZZ';
@@ -50,7 +51,7 @@ describe('snapshot freezes the effective logo', () => {
   });
 
   it('entity-default logo is captured from the company default at issue time', () => {
-    const v2 = { ...version, contentConfig: baseContent() };
+    const v2 = { ...customVersion(), contentConfig: baseContent() };
     const snap = createInvoiceTemplateSnapshot(template, v2, { legalName: 'Acme', logoUrl: COMPANY }, { name: 'Cust' });
     expect(snap.companySnapshot.logoUrl).toBe(COMPANY);
   });

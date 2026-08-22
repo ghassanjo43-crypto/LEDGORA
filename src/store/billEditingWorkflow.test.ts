@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it } from 'vitest';
-import { useBillStore } from './billStore';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { billRevision, useBillStore } from './billStore';
 import { useJournalStore } from './journalStore';
 import { useInventoryStore } from './inventoryStore';
 import { useInvoiceTemplateStore, INVOICE_ENTITY_ID } from './invoiceTemplateStore';
@@ -19,6 +19,10 @@ beforeEach(() => {
   useInventoryStore.setState({ movements: [], documents: [], auditTrail: [] });
 });
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe('bill draft editing boundary', () => {
   it('updates the same bill ID and number without creating accounting or inventory activity', () => {
     const id = createDraft();
@@ -27,7 +31,7 @@ describe('bill draft editing boundary', () => {
     const movements = useInventoryStore.getState().movements.length;
 
     const receiptLine = { ...before.lines[0]!, inventoryItemId: 'item_goods', warehouseId: 'wh_main', inventoryReceiptMode: 'receive-on-bill' as const };
-    const result = useBillStore.getState().updateDraft(id, { supplierInvoiceNumber: 'SUP-42', notes: 'updated', lines: [receiptLine] }, { expectedUpdatedAt: before.updatedAt });
+    const result = useBillStore.getState().updateDraft(id, { supplierInvoiceNumber: 'SUP-42', notes: 'updated', lines: [receiptLine] }, { expectedRevision: billRevision(before) });
 
     const after = useBillStore.getState().getBill(id)!;
     expect(result.ok).toBe(true);
@@ -54,15 +58,32 @@ describe('bill draft editing boundary', () => {
     expect(after.templateSnapshot).toBe(snapshot);
   });
 
-  it('rejects stale and cross-entity updates', () => {
+  it('rejects stale and cross-entity updates even within the same millisecond', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-21T12:00:00.000Z'));
     const id = createDraft();
-    const version = useBillStore.getState().getBill(id)!.updatedAt;
-    expect(useBillStore.getState().updateDraft(id, { notes: 'new' }, { expectedUpdatedAt: version }).ok).toBe(true);
-    expect(useBillStore.getState().updateDraft(id, { notes: 'stale' }, { expectedUpdatedAt: version }).error).toMatch(/another session/i);
+    const version = billRevision(useBillStore.getState().getBill(id)!);
+    expect(useBillStore.getState().updateDraft(id, { notes: 'new' }, { expectedRevision: version }).ok).toBe(true);
+    expect(useBillStore.getState().getBill(id)!.revision).toBe(version + 1);
+    expect(useBillStore.getState().updateDraft(id, { notes: 'stale' }, { expectedRevision: version }).error).toMatch(/another session/i);
 
     const current = useBillStore.getState().getBill(id)!;
     useBillStore.setState({ bills: [{ ...current, entityId: `${INVOICE_ENTITY_ID}-other` }] });
     expect(useBillStore.getState().updateDraft(id, { notes: 'cross tenant' }).error).toMatch(/current entity/i);
+  });
+
+  it('loads legacy bills without a revision at zero and preserves revisions across reloads', () => {
+    const id = createDraft();
+    const legacy = { ...useBillStore.getState().getBill(id)! };
+    delete legacy.revision;
+    useBillStore.getState().replaceAll([legacy]);
+    expect(useBillStore.getState().getBill(id)!.revision).toBe(0);
+
+    expect(useBillStore.getState().updateDraft(id, { notes: 'persisted' }, { expectedRevision: 0 }).ok).toBe(true);
+    const persistedCopy = structuredClone(useBillStore.getState().bills);
+    useBillStore.getState().resetToDefault();
+    useBillStore.getState().replaceAll(persistedCopy);
+    expect(useBillStore.getState().getBill(id)!.revision).toBe(1);
   });
 
   it('does not permit a viewer to edit', () => {

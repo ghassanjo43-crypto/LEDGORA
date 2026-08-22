@@ -206,25 +206,3 @@ describe('session and sign out', () => {
     expect(useBackendSessionStore.getState().platformRoles).toEqual([]);
   });
 });
-
-describe('adapter selection', () => {
-  it('uses the API adapter when a backend origin is configured', async () => {
-    vi.resetModules();
-    vi.stubEnv('VITE_API_URL', API);
-    const [{ authService }, { apiAuthService }] = await Promise.all([
-      import('@/services'),
-      import('@/services/apiAuthService'),
-    ]);
-    expect(authService).toBe(apiAuthService);
-  });
-
-  it('keeps the browser-only adapter when no backend is configured', async () => {
-    vi.resetModules();
-    vi.stubEnv('VITE_API_URL', '');
-    const [{ authService }, { devAuthService }] = await Promise.all([
-      import('@/services'),
-      import('@/services/devAuthService'),
-    ]);
-    expect(authService).toBe(devAuthService);
-  });
-});

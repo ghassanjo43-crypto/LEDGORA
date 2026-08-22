@@ -10,7 +10,7 @@
     "start": "node dist/index.js",
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "node scripts/run-test-files.mjs",
     "db:migrate": "tsx src/cli/migrate.ts up",
     "db:migrate:down": "tsx src/cli/migrate.ts down",
     "db:reconcile-applicants": "tsx src/cli/reconcileApplicants.ts",
