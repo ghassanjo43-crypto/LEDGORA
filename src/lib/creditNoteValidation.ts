@@ -1,6 +1,7 @@
 import type { CreditNote, CreditNoteLine } from '@/types/creditNote';
 import { calculateCreditNoteLine, calculateCreditNoteTotals } from '@/lib/creditNoteCalculations';
 import { roundMoney } from '@/lib/journalValidation';
+import { companyMonetaryDecimals } from '@/lib/monetaryPrecision';
 
 export interface CreditNoteIssue {
   severity: 'error' | 'warning';
@@ -94,13 +95,13 @@ export function validateCreditNoteForIssue(cn: CreditNote, ctx: CreditNoteIssueC
 
   // Invoice-level over-credit.
   if (ctx.requiresOriginalInvoice && totals.grandTotal > ctx.availableToCredit + 0.005) {
-    err('over-credit', `This credit (${totals.grandTotal.toFixed(2)}) exceeds the invoice's remaining creditable value (${ctx.availableToCredit.toFixed(2)}).`);
+    err('over-credit', `This credit (${totals.grandTotal.toFixed(companyMonetaryDecimals())}) exceeds the invoice's remaining creditable value (${ctx.availableToCredit.toFixed(companyMonetaryDecimals())}).`);
   }
 
   // Tax reversal cannot exceed the invoice's remaining output tax.
   const taxTotal = roundMoney(cn.lines.reduce((sum, l) => sum + calculateCreditNoteLine(l).taxAmount, 0));
   if (ctx.requiresOriginalInvoice && taxTotal > ctx.remainingTax + 0.005) {
-    err('tax-over-credit', `Tax reversal (${taxTotal.toFixed(2)}) exceeds the remaining original tax (${ctx.remainingTax.toFixed(2)}).`);
+    err('tax-over-credit', `Tax reversal (${taxTotal.toFixed(companyMonetaryDecimals())}) exceeds the remaining original tax (${ctx.remainingTax.toFixed(companyMonetaryDecimals())}).`);
   }
 
   return issues;

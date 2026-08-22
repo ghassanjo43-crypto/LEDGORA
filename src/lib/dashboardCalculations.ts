@@ -17,6 +17,8 @@ import type {
 import { validateChart } from '@/lib/validation';
 import { getWarnings } from '@/lib/journalValidation';
 import { timeAgo, formatDate } from '@/lib/utils';
+import { companyMonetaryDecimals } from '@/lib/monetaryPrecision';
+import { roundToCompanyPrecision } from '@/lib/monetaryPrecision';
 
 /* ─────────────────────────────── Currency ───────────────────────────────── */
 
@@ -37,7 +39,7 @@ export function convertToBase(
 }
 
 function round2(n: number): number {
-  return Math.round((n + Number.EPSILON) * 100) / 100;
+  return roundToCompanyPrecision(n + Number.EPSILON);
 }
 
 /* ───────────────────────────── Period helpers ───────────────────────────── */
@@ -591,7 +593,7 @@ export function getDashboardAttentionItems(
       items.push({
         id: `unbal-${d.id}`,
         severity: 'error',
-        message: `${d.entryNumber} is unbalanced by ${Math.abs(d.difference).toFixed(2)}`,
+        message: `${d.entryNumber} is unbalanced by ${Math.abs(d.difference).toFixed(companyMonetaryDecimals())}`,
         record: d.entryNumber,
         action: 'journal',
       });

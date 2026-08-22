@@ -9,6 +9,7 @@ import { cn as cx } from '@/lib/utils';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { useToast } from '@/components/ui/Toast';
+import { roundToCompanyPrecision } from '@/lib/monetaryPrecision';
 
 /** Apply a posted receipt's unapplied balance to open invoices (subledger — no new cash journal). */
 export function ReceiptApplyDialog({ receipt, onClose }: { receipt: Receipt; onClose: () => void }) {
@@ -22,7 +23,7 @@ export function ReceiptApplyDialog({ receipt, onClose }: { receipt: Receipt; onC
   );
   const [alloc, setAlloc] = useState<Record<string, number>>(() => Object.fromEntries(autoAllocateReceipt(eligible, receipt.unappliedAmount, 'oldest-due')));
   const money = (n: number): string => formatCurrency(n, receipt.currency);
-  const total = Math.round(Object.values(alloc).reduce((s, n) => s + (Number(n) || 0), 0) * 100) / 100;
+  const total = roundToCompanyPrecision(Object.values(alloc).reduce((s, n) => s + (Number(n) || 0), 0));
 
   const submit = (): void => {
     const allocations = Object.entries(alloc).filter(([, a]) => Number(a) > 0).map(([invoiceId, amount]) => ({ invoiceId, amount: Number(amount) }));

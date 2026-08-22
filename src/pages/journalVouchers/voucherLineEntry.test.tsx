@@ -299,7 +299,7 @@ describe('the account cell', () => {
     fireEvent.click(accountTrigger(0));
     typeSearch('xyz');
     expect(optionTexts()).toHaveLength(0);
-    expect(panel()!.textContent).toMatch(/no active posting accounts match/i);
+    expect(panel()!.textContent).toMatch(/no valid posting accounts match/i);
     expect(panel()!.textContent).toContain('xyz');
   });
 

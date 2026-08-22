@@ -1,12 +1,43 @@
 import { z } from 'zod';
 import type { Account, BusinessEntity } from '@/types';
 import type { JournalIssue, JournalLine } from '@/types/journal';
+import {
+  companyCurrencyCode,
+  companyMonetaryDecimals,
+  roundToCompanyPrecision,
+  smallestUnit,
+  validateCompanyMonetaryDecimals,
+} from '@/lib/monetaryPrecision';
+import { postingAccountEligibility } from '@/lib/accountEligibility';
 
 /* ────────────────────────────── Money helpers ───────────────────────────── */
 
-/** Round to 2 decimal places, avoiding binary FP drift. */
+/**
+ * Round to the ACTIVE COMPANY's monetary precision, avoiding binary FP drift.
+ *
+ * This used to be `roundToCompanyPrecision(value)` — two decimals, always. In a
+ * JOD company that silently destroyed the third decimal of every subtotal before
+ * the balance check ever saw it, so an entry genuinely out by one fils summed to
+ * zero and was reported as balanced.
+ *
+ * Precision now comes from the company's functional currency through the
+ * canonical resolver, and the rounding itself is the existing exact engine
+ * rather than a second implementation.
+ */
 export function roundMoney(value: number): number {
-  return Math.round((value + Number.EPSILON) * 100) / 100;
+  return roundToCompanyPrecision(value);
+}
+
+/**
+ * The tolerance a balance check may allow: HALF the currency's smallest unit.
+ *
+ * USD 0.005, JOD 0.0005, JPY 0.5 — always half of what the currency can express,
+ * so the check accepts binary-floating-point noise and nothing else. A fixed
+ * 0.005 was five times the smallest JOD unit, which meant a real one-fils
+ * difference fell inside "close enough".
+ */
+export function balanceToleranceFor(currencyCode?: string): number {
+  return (currencyCode ? smallestUnit(currencyCode) : smallestUnit(companyCurrencyCode())) / 2;
 }
 
 export interface LineTotals {
@@ -33,11 +64,19 @@ export function computeTotals(
 /** True when debits equal credits (within rounding tolerance) and non-zero. */
 export function isBalanced(lines: Pick<JournalLine, 'debit' | 'credit'>[]): boolean {
   const { totalDebit, totalCredit } = computeTotals(lines);
-  return totalDebit > 0 && Math.abs(totalDebit - totalCredit) < 0.005;
+  return totalDebit > 0 && Math.abs(totalDebit - totalCredit) < balanceToleranceFor();
 }
 
-/** Currency rounding tolerance shared by the balance checks. */
-export const BALANCE_TOLERANCE = 0.005;
+/**
+ * Default balance tolerance, resolved from the active company's currency.
+ *
+ * A getter rather than a constant: a constant would be evaluated once at module
+ * load and would then carry the FIRST company's precision into every company
+ * opened afterwards.
+ */
+export function defaultBalanceTolerance(): number {
+  return balanceToleranceFor();
+}
 
 /** Coerce any form value (number or string) to a finite amount, defaulting 0. */
 export function toAmount(value: unknown): number {
@@ -51,7 +90,7 @@ export type BalanceStatus = 'not-started' | 'unbalanced' | 'balanced';
  * Footer balance state. Zero/zero is "not started" (a brand-new entry), NOT
  * "unbalanced" — only a non-zero entry whose sides disagree is unbalanced.
  */
-export function balanceStatus(totals: LineTotals, tolerance = BALANCE_TOLERANCE): BalanceStatus {
+export function balanceStatus(totals: LineTotals, tolerance = defaultBalanceTolerance()): BalanceStatus {
   if (totals.totalDebit === 0 && totals.totalCredit === 0) return 'not-started';
   return Math.abs(totals.difference) < tolerance ? 'balanced' : 'unbalanced';
 }
@@ -130,6 +169,22 @@ export const journalLineFormSchema = z
         path: ['debit'],
         message: 'A line cannot have both a debit and a credit.',
       });
+    }
+
+    /*
+     * Monetary precision, from the company's functional currency.
+     *
+     * Refused, never truncated. Quietly dropping the fourth decimal of a JOD
+     * amount would post a figure the user never typed and never saw — and the
+     * difference would only surface when something failed to balance later. The
+     * message names the currency and its limit so the answer to "why?" is on
+     * screen.
+     */
+    for (const field of ['debit', 'credit', 'taxAmount'] as const) {
+      const check = validateCompanyMonetaryDecimals(line[field]);
+      if (!check.ok) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: [field], message: check.error! });
+      }
     }
   });
 
@@ -293,19 +348,12 @@ export function getPostingErrors(
         lineNumber: line.lineNumber,
       });
     } else {
-      if (!isPostingAccount(account)) {
+      const eligibility = postingAccountEligibility(account, { accounts: [...accountsById.values()] });
+      if (!eligibility.eligible) {
         issues.push({
           severity: 'error',
-          rule: 'header-account',
-          message: `Line ${line.lineNumber}: "${account.name}" is a header account and cannot receive postings.`,
-          lineNumber: line.lineNumber,
-        });
-      }
-      if (!account.isActive) {
-        issues.push({
-          severity: 'error',
-          rule: 'inactive-account',
-          message: `Line ${line.lineNumber}: "${account.name}" is inactive and cannot be posted to.`,
+          rule: eligibility.reason === 'inactive' ? 'inactive-account' : 'header-account',
+          message: `Line ${line.lineNumber}: ${eligibility.message}`,
           lineNumber: line.lineNumber,
         });
       }
@@ -338,11 +386,14 @@ export function getPostingErrors(
   }
 
   const { totalDebit, totalCredit, difference } = computeTotals(lines);
-  if (Math.abs(difference) >= 0.005) {
+  // The figures are reported at the company's own precision: telling a JOD
+  // bookkeeper the entry is out by "0.00" would be worse than saying nothing.
+  const dp = companyMonetaryDecimals();
+  if (Math.abs(difference) >= balanceToleranceFor()) {
     issues.push({
       severity: 'error',
       rule: 'unbalanced',
-      message: `Entry is out of balance by ${roundMoney(difference).toFixed(2)} (debits ${totalDebit.toFixed(2)} vs credits ${totalCredit.toFixed(2)}).`,
+      message: `Entry is out of balance by ${roundMoney(difference).toFixed(dp)} (debits ${totalDebit.toFixed(dp)} vs credits ${totalCredit.toFixed(dp)}).`,
       lineNumber: null,
     });
   } else if (totalDebit === 0) {

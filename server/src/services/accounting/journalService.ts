@@ -39,6 +39,8 @@ import { errors } from '../../lib/errors.js';
 import { writeAccountingAudit, type AccountingActor } from './audit.js';
 import { assertPeriodAccepts } from './periodService.js';
 import { loadAccountsForPosting } from './accountService.js';
+import { assessPostingAccount } from './accountEligibility.js';
+import { monetaryDecimalsFor } from './currencyPrecision.js';
 import * as Money from './money.js';
 
 type Executor = Kysely<Database> | Transaction<Database>;
@@ -402,6 +404,7 @@ async function validateForPosting(
   trx: Trx,
   organizationId: string,
   journal: JournalRecord,
+  options: { enforceCurrentAccountEligibility?: boolean } = {},
 ): Promise<void> {
   const issues: ValidationIssue[] = [];
   const lines = journal.lines;
@@ -437,13 +440,11 @@ async function validateForPosting(
       });
       continue;
     }
-    if (!account.active) {
-      issues.push({ rule: 'account-inactive', message: `Line ${at}: "${account.accountName}" is inactive.`, lineNumber: at });
-    }
-    if (!account.isPostable) {
+    const eligibility = assessPostingAccount(account, account.hasChildren);
+    if (options.enforceCurrentAccountEligibility !== false && !eligibility.eligible) {
       issues.push({
-        rule: 'account-header',
-        message: `Line ${at}: "${account.accountName}" is a header account and cannot receive postings.`,
+        rule: `account-${eligibility.reason}`,
+        message: `Line ${at}: ${eligibility.message}`,
         lineNumber: at,
       });
     }
@@ -633,9 +634,45 @@ async function insertLines(
   journalId: string,
   lines: JournalLineInput[],
   rate: Money.Amount,
+  /**
+   * The currency whose monetary precision these amounts must respect, or `null`
+   * to skip the check.
+   *
+   * `null` is passed only when the lines are COPIED from an entry already in the
+   * books — a reversal mirrors what it withdraws. A legacy record carrying more
+   * decimals than its currency allows must still be reversible, or it could
+   * never be corrected; refusing there would trap it in the ledger for ever.
+   */
+  precisionCurrency: string | null,
 ): Promise<void> {
   const meaningful = lines.filter(isMeaningful);
   if (meaningful.length === 0) return;
+
+  /*
+   * ── Monetary precision, enforced on the server ────────────────────────────
+   *
+   * A JOD company's posted amounts carry at most three decimals. The browser
+   * validates this too, but the browser is not a boundary: this is what stops
+   * `{"debit":"100.1234"}` posted straight to the API from entering the ledger.
+   *
+   * Refused, never rounded. Silently turning 100.1234 into 100.123 would accept
+   * a figure the caller did not send and then report success for it.
+   */
+  if (precisionCurrency !== null) {
+    const decimals = monetaryDecimalsFor(precisionCurrency);
+    meaningful.forEach((line, index) => {
+      for (const [field, raw] of [['debit', line.debit], ['credit', line.credit]] as const) {
+        const value = amount(raw, `line ${index + 1} ${field}`);
+        if (Money.exceedsPrecision(value, decimals)) {
+          throw errors.validation(
+            decimals === 0
+              ? `Line ${index + 1}: ${precisionCurrency} does not support decimal places, but ${field} is ${String(raw)}.`
+              : `Line ${index + 1}: ${precisionCurrency} supports a maximum of ${decimals} decimal place${decimals === 1 ? '' : 's'}, but ${field} is ${String(raw)}.`,
+          );
+        }
+      }
+    });
+  }
 
   /*
    * An account id is checked against THIS organization even on a draft.
@@ -795,7 +832,7 @@ export async function createDraft(
       .returning('id')
       .executeTakeFirstOrThrow();
 
-    await insertLines(trx, actor.organizationId, created.id, input.lines ?? [], rate);
+    await insertLines(trx, actor.organizationId, created.id, input.lines ?? [], rate, transactionCurrency);
 
     const journal = await loadJournal(trx, actor.organizationId, created.id);
     await writeVersion(trx, actor, journal, 'created', '');
@@ -853,7 +890,7 @@ export async function updateDraft(
       .where('organization_id', '=', actor.organizationId)
       .where('journal_entry_id', '=', journalId)
       .execute();
-    await insertLines(trx, actor.organizationId, journalId, input.lines ?? [], rate);
+    await insertLines(trx, actor.organizationId, journalId, input.lines ?? [], rate, transactionCurrency);
 
     const updated = await loadJournal(trx, actor.organizationId, journalId);
     await writeVersion(trx, actor, updated, 'amended', options.reason ?? '');
@@ -1090,7 +1127,7 @@ export async function amendPostedJournal(
       .where('organization_id', '=', actor.organizationId)
       .where('journal_entry_id', '=', journalId)
       .execute();
-    await insertLines(trx, actor.organizationId, journalId, input.lines ?? [], rate);
+    await insertLines(trx, actor.organizationId, journalId, input.lines ?? [], rate, existing.transactionCurrency);
 
     const amended = await loadJournal(trx, actor.organizationId, journalId);
     // A correction to a POSTED entry must still be a valid posting.
@@ -1159,11 +1196,14 @@ async function insertReversal(
     .returning('id')
     .executeTakeFirstOrThrow();
 
-  await insertLines(trx, actor.organizationId, created.id, reverseLines(original), rate);
+  // null: a reversal copies figures already in the books. See insertLines.
+  await insertLines(trx, actor.organizationId, created.id, reverseLines(original), rate, null);
 
   const reversal = await loadJournal(trx, actor.organizationId, created.id);
-  // The reversal is itself a posting and must satisfy every posting rule.
-  await validateForPosting(trx, actor.organizationId, reversal);
+  // A reversal withdraws an already-recorded posting. Re-check its balance and
+  // tenant-owned references, but do not strand history because an account was
+  // subsequently retired or blocked.
+  await validateForPosting(trx, actor.organizationId, reversal, { enforceCurrentAccountEligibility: false });
   // It is born posted, so its first version is the posted one.
   await writeVersion(trx, actor, reversal, 'posted', reason);
   return reversal;
@@ -1289,7 +1329,7 @@ export async function reverseAndReplace(
       .returning('id')
       .executeTakeFirstOrThrow();
 
-    await insertLines(trx, actor.organizationId, createdReplacement.id, input.lines ?? [], rate);
+    await insertLines(trx, actor.organizationId, createdReplacement.id, input.lines ?? [], rate, replacementCurrency);
     const replacement = await loadJournal(trx, actor.organizationId, createdReplacement.id);
     await validateForPosting(trx, actor.organizationId, replacement);
     await writeVersion(trx, actor, replacement, 'posted', reason);

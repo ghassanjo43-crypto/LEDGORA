@@ -31,6 +31,9 @@ export function AppLayout({ children }: { children: ReactNode }) {
     useCompanyStore.getState().ensureInitialized();
     useBillingStore.getState().ensureSeeded();
     useMeteringConfigStore.getState().ensureSeeded();
+    // Units are shared catalogue reference data, even when stock operations are
+    // not licensed. This never creates sample items or inventory movements.
+    useInventoryStore.getState().ensureCatalogueInitialized();
     // Seed inventory master data only for organizations entitled to it.
     // Deliberately the REAL owned modules (not the operator full-access
     // override): viewing a subscriber must never seed module data they

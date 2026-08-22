@@ -49,6 +49,9 @@ import {
   Cpu,
   Workflow,
   FileSignature,
+  Calculator,
+  Database,
+  ShieldCheck,
 } from 'lucide-react';
 import type { ViewKey } from '@/types';
 import type { LedgoraModule } from '@/types/entitlements';
@@ -73,6 +76,7 @@ export interface NavItem {
 export interface NavGroup {
   id: string;
   label: string;
+  icon: LucideIcon;
   items: NavItem[];
   /** Optional group-level requirement (in addition to per-item requirements). */
   requiredAnyModules?: LedgoraModule[];
@@ -87,6 +91,7 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     id: 'accounting',
     label: 'Accounting',
+    icon: Calculator,
     items: [
       { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, description: 'Overview & KPIs' },
       { key: 'tree', label: 'Chart of Accounts', icon: ListTree, description: 'Account hierarchy & editing', requiredModule: 'core_accounting' },
@@ -95,18 +100,25 @@ export const NAV_GROUPS: NavGroup[] = [
       { key: 'journal-voucher-reports', label: 'Voucher Reports', icon: FileBarChart2, description: 'Voucher registers, analysis & GL reconciliation', requiredModule: 'core_accounting' },
       { key: 'general-ledger', label: 'General Ledger', icon: Library, description: 'Account-level postings', requiredModule: 'core_accounting' },
       { key: 'trial-balance', label: 'Trial Balance', icon: Scale, description: 'Debits vs credits by account', requiredModule: 'core_accounting' },
-      { key: 'income-statement', label: 'Income Statement', icon: TrendingUp, description: 'Statement of profit or loss', requiredModule: 'core_accounting' },
-      { key: 'balance-sheet', label: 'Balance Sheet', icon: Landmark, description: 'Statement of financial position', requiredModule: 'core_accounting' },
-      { key: 'cash-flow', label: 'Cash Flow Statement', icon: Waves, description: 'Statement of cash flows (indirect)', requiredModule: 'core_accounting' },
-      { key: 'financial-statements', label: 'Financial Statements', icon: FileBarChart2, description: 'Changes in equity & notes', comingSoon: true, requiredModule: 'core_accounting' },
       { key: 'mapping', label: 'IFRS Mapping', icon: Layers, description: 'Accounts by financial statement', requiredModule: 'core_accounting' },
+    ],
+  },
+  {
+    id: 'financial-statements',
+    label: 'Financial Statements',
+    icon: FileBarChart2,
+    items: [
+      { key: 'income-statement', label: 'Statement of Profit or Loss', icon: TrendingUp, description: 'Statement of profit or loss', requiredModule: 'core_accounting' },
+      { key: 'balance-sheet', label: 'Statement of Financial Position', icon: Landmark, description: 'Statement of financial position', requiredModule: 'core_accounting' },
+      { key: 'cash-flow', label: 'Cash Flow Statement', icon: Waves, description: 'Statement of cash flows (indirect)', requiredModule: 'core_accounting' },
+      { key: 'financial-statements', label: 'Changes in Equity & Notes', icon: FileBarChart2, description: 'Changes in equity & notes', comingSoon: true, requiredModule: 'core_accounting' },
     ],
   },
   {
     id: 'sales',
     label: 'Sales',
+    icon: ReceiptText,
     items: [
-      { key: 'customers', label: 'Customers', icon: Users, description: 'Entities we invoice', requiredModule: 'sales' },
       { key: 'invoices', label: 'Invoices', icon: FileText, description: 'Sales invoices', requiredModule: 'sales' },
       { key: 'invoice-templates', label: 'Invoice Templates', icon: LayoutTemplate, description: 'Invoice formats & versions', requiredModule: 'sales' },
       { key: 'credit-notes', label: 'Credit Notes', icon: ReceiptText, description: 'Customer credit notes', requiredModule: 'sales' },
@@ -117,8 +129,8 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     id: 'purchasing',
     label: 'Purchasing',
+    icon: Truck,
     items: [
-      { key: 'suppliers', label: 'Suppliers', icon: Truck, description: 'Entities who invoice us', requiredModule: 'purchases' },
       { key: 'bills', label: 'Bills', icon: ReceiptEuro, description: 'Supplier bills', requiredModule: 'purchases' },
       { key: 'payments', label: 'Payments Made', icon: Banknote, description: 'Supplier & other payments', comingSoon: false, requiredModule: 'purchases' },
     ],
@@ -126,13 +138,18 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     id: 'master-data',
     label: 'Master Data',
+    icon: Database,
     items: [
+      { key: 'inventory-items', label: 'Items', icon: Package, description: 'Products and services catalogue' },
+      { key: 'customers', label: 'Customers', icon: Users, description: 'Entities we invoice', requiredModule: 'sales' },
+      { key: 'suppliers', label: 'Suppliers', icon: Truck, description: 'Entities who invoice us', requiredModule: 'purchases' },
       { key: 'entities', label: 'Business Entities', icon: Building2, description: 'Shared customer & supplier directory', requiredAnyModules: ['sales', 'purchases'] },
     ],
   },
   {
     id: 'projects',
     label: 'Projects',
+    icon: FolderKanban,
     items: [
       { key: 'projects', label: 'Projects', icon: FolderKanban, description: 'Projects, jobs & contracts', requiredModule: 'projects' },
       { key: 'project-delivery', label: 'Project Delivery', icon: ListChecks, description: 'Time, expenses, commitments, milestones & billing', requiredModule: 'project_time_expenses' },
@@ -142,6 +159,7 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     id: 'cost-centers',
     label: 'Cost Centers',
+    icon: Target,
     items: [
       { key: 'cost-centers', label: 'Cost Centers', icon: Target, description: 'Cost-center hierarchy & master data', requiredModule: 'cost_centers' },
       { key: 'cost-center-budgets', label: 'Budgets', icon: FileBarChart2, description: 'Cost-center budgets & vs-actual', requiredModule: 'cost_center_budgets' },
@@ -152,6 +170,7 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     id: 'fixed-assets',
     label: 'Fixed Assets',
+    icon: Landmark,
     requiredAnyModules: ['fixed_assets'],
     items: [
       { key: 'fixed-assets', label: 'Asset Register', icon: Landmark, description: 'Fixed asset register & transactions', requiredModule: 'fixed_assets' },
@@ -163,10 +182,10 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     id: 'inventory',
     label: 'Inventory',
+    icon: Boxes,
     requiredAnyModules: ['inventory_basic'],
     items: [
       { key: 'inventory-dashboard', label: 'Dashboard', icon: Boxes, description: 'Inventory value, low & out-of-stock', requiredModule: 'inventory_basic' },
-      { key: 'inventory-items', label: 'Items', icon: Package, description: 'Stock items & valuation', requiredModule: 'inventory_basic' },
       { key: 'inventory-categories', label: 'Item Categories', icon: Layers, description: 'Hierarchical item categories', requiredModule: 'inventory_basic' },
       { key: 'inventory-units', label: 'Units of Measure', icon: Ruler, description: 'Units of measure', requiredModule: 'inventory_basic' },
       { key: 'inventory-warehouses', label: 'Warehouses', icon: Warehouse, description: 'Warehouses & stock locations', requiredModule: 'inventory_basic' },
@@ -182,6 +201,7 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     id: 'manufacturing',
     label: 'Manufacturing',
+    icon: Factory,
     requiredAnyModules: ['manufacturing_core'],
     items: [
       { key: 'manufacturing-dashboard', label: 'Dashboard', icon: Gauge, description: 'Production, cost & WIP KPIs', requiredModule: 'manufacturing_core' },
@@ -202,6 +222,7 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     id: 'currency',
     label: 'Financial Settings',
+    icon: Coins,
     items: [
       { key: 'currencies', label: 'Currencies', icon: Coins, description: 'Currency Master — standard & custom currencies, precision, base currency', requiredModule: 'currency_basic' },
       { key: 'exchange-rates', label: 'Exchange Rates', icon: ArrowLeftRight, description: 'Effective-dated rates & converter', requiredModule: 'currency_basic' },
@@ -212,6 +233,7 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     id: 'tax',
     label: 'Tax',
+    icon: Percent,
     items: [
       { key: 'tax-codes', label: 'Tax Codes', icon: Percent, description: 'VAT & sales-tax codes, rate versions', requiredModule: 'tax_basic' },
       { key: 'tax-summary', label: 'Tax Summary', icon: BarChart3, description: 'Tax by code, direction and box', requiredModule: 'tax_basic' },
@@ -225,6 +247,7 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     id: 'system',
     label: 'System',
+    icon: ShieldCheck,
     items: [
       { key: 'import-export', label: 'Import / Export', icon: ArrowLeftRight, description: 'Accounts CSV & JSON', requiredModule: 'core_accounting' },
       { key: 'members', label: 'Users & Roles', icon: Users, description: 'Invite people, set roles and manage seats in your organization' },

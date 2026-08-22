@@ -3,7 +3,7 @@ import type { Bill, BillSettlementStatus, BillSettlementSummary } from '@/types/
 import type { AgingBucket, AgingBucketId, AgingSummary } from '@/types/statementOfAccount';
 import { calculateBillBalance } from '@/lib/billCalculations';
 import { agingBucketFor, daysOverdue } from '@/lib/statementAging';
-import { roundMoney, BALANCE_TOLERANCE } from '@/lib/journalValidation';
+import { roundMoney, balanceToleranceFor } from '@/lib/journalValidation';
 
 /**
  * Accounts Payable account resolution (§12):
@@ -16,7 +16,7 @@ export function resolveAccountsPayableAccount(supplier: BusinessEntity | undefin
 
 /** Bills whose balance still contributes to what is owed (posted / partially-paid). */
 export function isOpenBill(b: Bill): boolean {
-  return (b.status === 'posted' || b.status === 'partially-paid') && b.balanceDue > BALANCE_TOLERANCE;
+  return (b.status === 'posted' || b.status === 'partially-paid') && b.balanceDue > balanceToleranceFor();
 }
 
 /**
@@ -32,9 +32,9 @@ export function buildBillSettlementSummary(bill: Bill): BillSettlementSummary {
 }
 
 export function deriveBillSettlementStatus(s: { balanceDue: number; supplierCreditsApplied: number; paymentsApplied: number }): BillSettlementStatus {
-  const settled = s.balanceDue <= BALANCE_TOLERANCE;
-  const hasCredits = s.supplierCreditsApplied > BALANCE_TOLERANCE;
-  const hasPayments = s.paymentsApplied > BALANCE_TOLERANCE;
+  const settled = s.balanceDue <= balanceToleranceFor();
+  const hasCredits = s.supplierCreditsApplied > balanceToleranceFor();
+  const hasPayments = s.paymentsApplied > balanceToleranceFor();
   if (settled) {
     if (hasPayments) return 'paid';
     if (hasCredits) return 'fully-credited';

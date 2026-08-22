@@ -8,6 +8,7 @@ import { cn as cx } from '@/lib/utils';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { CostCenterPicker } from './CostCenterPicker';
+import { useMonetaryStep } from '@/lib/useMonetaryPrecision';
 
 interface Props {
   amount: number;
@@ -28,6 +29,12 @@ type Mode = 'percentage' | 'fixed-amount';
  * credit-note, bill and supplier-credit line editors.
  */
 export function CostCenterSplitEditor({ amount, currency = 'USD', assignments, onChange, costCenters, postingDate, disabled }: Props) {
+  /*
+   * The company's smallest monetary unit — 0.001 for JOD, 0.01 for USD, 1 for
+   * JPY — so the stepper on every money field agrees with the ledger.
+   */
+  const moneyStep = useMonetaryStep();
+
   const initialMode: Mode = assignments.some((a) => a.amount !== undefined && a.percentage === undefined) ? 'fixed-amount' : 'percentage';
   const [mode, setMode] = useState<Mode>(initialMode);
   const money = (n: number): string => formatCurrency(n, currency);
@@ -73,7 +80,7 @@ export function CostCenterSplitEditor({ amount, currency = 'USD', assignments, o
             {mode === 'percentage' ? (
               <Input type="number" step="0.01" value={r.percentage ?? 0} onChange={(e) => update(idx, { percentage: Number(e.target.value) })} disabled={disabled} className="h-9 w-20 text-right" />
             ) : (
-              <Input type="number" step="0.01" value={r.amount ?? 0} onChange={(e) => update(idx, { amount: Number(e.target.value) })} disabled={disabled} className="h-9 w-24 text-right" />
+              <Input type="number" step={moneyStep} data-money="true" value={r.amount ?? 0} onChange={(e) => update(idx, { amount: Number(e.target.value) })} disabled={disabled} className="h-9 w-24 text-right" />
             )}
             <span className="w-24 shrink-0 text-right font-mono text-xs text-slate-500">{line ? money(line.amount) : '—'}</span>
             <button type="button" onClick={() => removeRow(idx)} disabled={disabled || rows.length <= 1} className="rounded p-1 text-slate-400 hover:bg-slate-100 disabled:opacity-40 dark:hover:bg-slate-800"><Trash2 className="h-4 w-4" /></button>

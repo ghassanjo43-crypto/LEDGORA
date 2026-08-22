@@ -37,6 +37,16 @@ export interface AmountInputProps {
   'data-testid'?: string;
   id?: string;
   onKeyDown?: (e: React.KeyboardEvent<HTMLInputElement>) => void;
+  /**
+   * Marks this instance as holding COMPANY MONEY.
+   *
+   * The component itself stays generic — it is used for quantities and rates
+   * too — so this is a statement by the caller, not a behaviour of the field.
+   * It surfaces the classification in the DOM, which is what lets a test tell a
+   * correctly-configured USD money field from a quantity field that happens to
+   * share its two decimals.
+   */
+  'data-money'?: 'true';
 }
 
 function format(value: number, decimals: number): string {
@@ -56,6 +66,8 @@ export const AmountInput = forwardRef<HTMLInputElement, AmountInputProps>(functi
   const [draft, setDraft] = useState('');
 
   const display = editing ? draft : format(value, decimals);
+  // Reflected so the precision this field is using is visible, not inferred.
+  const moneyDecimals = rest['data-money'] ? { 'data-money-decimals': decimals } : {};
 
   return (
     <input
@@ -86,6 +98,7 @@ export const AmountInput = forwardRef<HTMLInputElement, AmountInputProps>(functi
         className,
       )}
       {...rest}
+      {...moneyDecimals}
     />
   );
 });

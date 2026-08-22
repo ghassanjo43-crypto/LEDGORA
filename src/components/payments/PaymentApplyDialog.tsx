@@ -9,6 +9,7 @@ import { cn as cx } from '@/lib/utils';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { useToast } from '@/components/ui/Toast';
+import { roundToCompanyPrecision } from '@/lib/monetaryPrecision';
 
 /** Apply a posted payment's unapplied balance (advance) to open bills — subledger only, no new cash journal. */
 export function PaymentApplyDialog({ payment, onClose }: { payment: Payment; onClose: () => void }) {
@@ -22,7 +23,7 @@ export function PaymentApplyDialog({ payment, onClose }: { payment: Payment; onC
   );
   const [alloc, setAlloc] = useState<Record<string, number>>(() => Object.fromEntries(autoAllocatePayment(eligible, payment.unappliedAmount, 'oldest-due')));
   const money = (n: number): string => formatCurrency(n, payment.currency);
-  const total = Math.round(Object.values(alloc).reduce((s, n) => s + (Number(n) || 0), 0) * 100) / 100;
+  const total = roundToCompanyPrecision(Object.values(alloc).reduce((s, n) => s + (Number(n) || 0), 0));
 
   const submit = (): void => {
     const allocations = Object.entries(alloc).filter(([, a]) => Number(a) > 0).map(([billId, amount]) => ({ billId, amount: Number(amount) }));

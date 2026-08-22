@@ -15,13 +15,14 @@ import type {
 } from '@/types/incomeStatement';
 import { PROFIT_OR_LOSS_TYPES } from '@/types/incomeStatement';
 import { getPostedJournalLines, convertToBaseCurrency } from '@/lib/generalLedgerCalculations';
+import { roundToCompanyPrecision } from '@/lib/monetaryPrecision';
 
 export const FINANCIAL_STATEMENT_TOLERANCE = 0.01;
 export const convertToBaseCurrency2 = convertToBaseCurrency;
 export { getPostedJournalLines };
 
 function round2(n: number): number {
-  return Math.round((n + Number.EPSILON) * 100) / 100;
+  return roundToCompanyPrecision(n + Number.EPSILON);
 }
 
 /** True when an account participates in the primary statement of profit or loss. */

@@ -24,6 +24,7 @@ import { useJournalStore } from './journalStore';
 import { useInvoiceStore } from './invoiceStore';
 import { useInvoiceTemplateStore, INVOICE_ENTITY_ID } from './invoiceTemplateStore';
 import { transactionCurrencyCode } from '@/lib/transactionCurrency';
+import { roundToCompanyPrecision } from '@/lib/monetaryPrecision';
 
 const ACTOR = 'Finance Manager';
 
@@ -347,7 +348,7 @@ export const useReceiptStore = create<ReceiptState>()(
         const receipt = receipts.find((r) => r.id === id);
         if (!receipt) return { ok: false, error: 'Receipt not found.' };
         if (!['posted', 'partially-allocated'].includes(receipt.status)) return { ok: false, error: 'Only a posted receipt with an unapplied balance can be applied.' };
-        const total = Math.round(allocations.reduce((s, a) => s + (Number(a.amount) || 0), 0) * 100) / 100;
+        const total = roundToCompanyPrecision(allocations.reduce((s, a) => s + (Number(a.amount) || 0), 0));
         if (total <= 0) return { ok: false, error: 'Enter an allocation amount.' };
         if (total > receipt.unappliedAmount + 0.005) return { ok: false, error: 'Allocation exceeds the unapplied receipt amount.' };
 
@@ -368,7 +369,7 @@ export const useReceiptStore = create<ReceiptState>()(
           newAllocations.push({
             id: generateId('ralloc'), entityId: receipt.entityId, receiptId: receipt.id, customerId: receipt.customerId,
             invoiceId: inv.id, invoiceNumber: inv.invoiceNumber, allocationType: 'invoice',
-            amount: Math.round((Number(alloc.amount) || 0) * 100) / 100, baseCurrencyAmount: toBaseCurrency(alloc.amount, receipt.exchangeRate),
+            amount: roundToCompanyPrecision(Number(alloc.amount) || 0), baseCurrencyAmount: toBaseCurrency(alloc.amount, receipt.exchangeRate),
             allocationDate: date ?? receipt.receiptDate, createdAt: now, updatedAt: now,
           });
         }

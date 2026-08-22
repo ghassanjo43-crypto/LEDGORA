@@ -1,7 +1,7 @@
 import type { Invoice } from '@/types/invoice';
 import type { CreditNote } from '@/types/creditNote';
 import type { Receipt } from '@/types/receipt';
-import { roundMoney, BALANCE_TOLERANCE } from '@/lib/journalValidation';
+import { roundMoney, balanceToleranceFor } from '@/lib/journalValidation';
 
 /** Credit-note statuses whose applications count towards settling an invoice. */
 const APPLIED_CREDIT_STATUSES: ReadonlyArray<CreditNote['status']> = ['issued', 'applied', 'partially-applied'];
@@ -34,12 +34,12 @@ export function receiptAppliedToInvoice(receipt: Receipt, invoiceId: string): nu
 
 /** Issued, non-void credit notes that have applied credit to this invoice (excludes drafts, voids and unapplied credits). */
 export function creditNotesForInvoice(invoiceId: string, creditNotes: CreditNote[]): CreditNote[] {
-  return creditNotes.filter((cn) => creditNoteAppliedToInvoice(cn, invoiceId) > BALANCE_TOLERANCE);
+  return creditNotes.filter((cn) => creditNoteAppliedToInvoice(cn, invoiceId) > balanceToleranceFor());
 }
 
 /** Posted receipts that have allocated money to this invoice. */
 export function receiptsForInvoice(invoiceId: string, receipts: Receipt[]): Receipt[] {
-  return receipts.filter((r) => receiptAppliedToInvoice(r, invoiceId) > BALANCE_TOLERANCE);
+  return receipts.filter((r) => receiptAppliedToInvoice(r, invoiceId) > balanceToleranceFor());
 }
 
 /**
@@ -72,9 +72,9 @@ export type InvoiceSettlementStatus =
  *  - balance > 0 with credits/payments    → partially-credited / partially-paid
  */
 export function deriveSettlementStatus(s: InvoiceSettlementSummary): InvoiceSettlementStatus {
-  const settled = s.balanceDue <= BALANCE_TOLERANCE;
-  const hasCredits = s.creditNotesApplied > BALANCE_TOLERANCE;
-  const hasPayments = s.paymentsApplied > BALANCE_TOLERANCE;
+  const settled = s.balanceDue <= balanceToleranceFor();
+  const hasCredits = s.creditNotesApplied > balanceToleranceFor();
+  const hasPayments = s.paymentsApplied > balanceToleranceFor();
   if (settled) {
     if (hasPayments && hasCredits) return 'paid-after-credit';
     if (hasCredits) return 'fully-credited';

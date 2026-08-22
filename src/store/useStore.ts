@@ -1,4 +1,5 @@
 import { guardFunctionalCurrencyChange, normalizeFunctionalCurrency } from '@/lib/functionalCurrency';
+import { registerCompanyCurrencySource } from '@/lib/monetaryPrecision';
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { businessJSONStorage } from '@/lib/workspaceStorage';
@@ -486,3 +487,10 @@ export function accountToFormValues(account: Account): AccountFormValues {
     industryTag: account.industryTag,
   };
 }
+
+/*
+ * Make the active organization's functional currency the head of the monetary
+ * precision chain. See `monetaryPrecision` for why this is registered rather
+ * than imported there.
+ */
+registerCompanyCurrencySource(() => useStore.getState().settings.baseCurrency ?? '');

@@ -9,16 +9,25 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { AccountSelect } from '@/components/journal/AccountSelect';
+import { eligiblePostingAccounts } from '@/lib/accountEligibility';
 import { useToast } from '@/components/ui/Toast';
+import { roundToCompanyPrecision } from '@/lib/monetaryPrecision';
+import { useMonetaryStep } from '@/lib/useMonetaryPrecision';
 
 /** Record a payment against a posted bill (Dr trade payables / Cr bank). */
 export function BillPaymentDialog({ bill, onClose }: { bill: Bill; onClose: () => void }) {
+  /*
+   * The company's smallest monetary unit — 0.001 for JOD, 0.01 for USD, 1 for
+   * JPY — so the stepper on every money field agrees with the ledger.
+   */
+  const moneyStep = useMonetaryStep();
+
   const accounts = useStore((s) => s.accounts);
   const recordPayment = useBillStore((s) => s.recordPayment);
   const { notify } = useToast();
-  const cashAccounts = accounts.filter((a) => a.isPostingAccount && a.type === 'ASSET' && /cash and cash equivalents/i.test(a.ifrsSubcategory));
+  const cashAccounts = eligiblePostingAccounts({ accounts, purpose: 'bank-cash' });
 
-  const [amount, setAmount] = useState(Math.round(bill.balanceDue * 100) / 100);
+  const [amount, setAmount] = useState(roundToCompanyPrecision(bill.balanceDue));
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [bankAccountId, setBankAccountId] = useState(cashAccounts[0]?.id ?? '');
   const [method, setMethod] = useState<BillPaymentMethod>('bank-transfer');
@@ -39,13 +48,13 @@ export function BillPaymentDialog({ bill, onClose }: { bill: Bill; onClose: () =
         <h2 className="text-sm font-semibold">Pay bill — {bill.billNumber}</h2>
         <p className="mt-0.5 text-xs text-slate-500">Balance due {money(bill.balanceDue)}</p>
         <div className="mt-3 space-y-3">
-          <label className="block text-xs text-slate-500">Amount<Input type="number" step="0.01" value={amount} onChange={(e) => setAmount(Number(e.target.value))} className="mt-1" /></label>
+          <label className="block text-xs text-slate-500">Amount<Input type="number" step={moneyStep} data-money="true" value={amount} onChange={(e) => setAmount(Number(e.target.value))} className="mt-1" /></label>
           <label className="block text-xs text-slate-500">Date<Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="mt-1" /></label>
           <label className="block text-xs text-slate-500">Pay from<div className="mt-1"><AccountSelect value={bankAccountId} accounts={cashAccounts} onChange={(a) => setBankAccountId(a.id)} /></div></label>
           <label className="block text-xs text-slate-500">Method<Select className="mt-1" options={(Object.keys(BILL_PAYMENT_METHOD_LABELS) as BillPaymentMethod[]).map((m) => ({ value: m, label: BILL_PAYMENT_METHOD_LABELS[m] }))} value={method} onChange={(e) => setMethod(e.target.value as BillPaymentMethod)} /></label>
           <label className="block text-xs text-slate-500">Reference<Input value={reference} onChange={(e) => setReference(e.target.value)} className="mt-1" placeholder="Payment reference" /></label>
           <div className="grid grid-cols-2 gap-2">
-            <label className="block text-xs text-slate-500">Bank fee<Input type="number" step="0.01" value={bankFeeAmount} onChange={(e) => setBankFeeAmount(Number(e.target.value))} className="mt-1" /></label>
+            <label className="block text-xs text-slate-500">Bank fee<Input type="number" step={moneyStep} data-money="true" value={bankFeeAmount} onChange={(e) => setBankFeeAmount(Number(e.target.value))} className="mt-1" /></label>
             <label className="block text-xs text-slate-500">Fee account<div className="mt-1"><AccountSelect value={bankFeeAccountId} accounts={accounts} onChange={(a) => setBankFeeAccountId(a.id)} disabled={bankFeeAmount <= 0} /></div></label>
           </div>
         </div>

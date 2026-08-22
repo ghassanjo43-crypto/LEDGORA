@@ -18,6 +18,7 @@ import {
 import { findCatalogEntry, catalogEntryToCurrency } from '@/data/currencyCatalog';
 import { SEED_CURRENCIES, SEED_ENTITY_CURRENCY_CONFIG, PRIMARY_ENTITY_ID } from '@/data/currencySeed';
 import { generateId, nowIso } from '@/lib/utils';
+import { registerCurrencyMasterSource } from '@/lib/monetaryPrecision';
 import { operatorAuditContext, resolveAuditActor } from './platformFullAccess';
 // Call-time-only imports (never touched during module evaluation): these stores
 // sit on import cycles back to this module via businessWorkspace — resolving
@@ -294,3 +295,14 @@ export const useCurrencyStore = create<CurrencyState>()(
     },
   ),
 );
+
+/*
+ * Make the Currency Master the authority for monetary precision.
+ *
+ * Registered rather than imported by `monetaryPrecision`, because that module is
+ * used from inside the accounting libraries this store depends on; a direct
+ * import would close a cycle. Until this line runs the ISO catalogue answers,
+ * which is correct for every standard currency — this registration is what adds
+ * the organization's CUSTOM currencies to the resolution.
+ */
+registerCurrencyMasterSource((code) => useCurrencyStore.getState().getCurrency(code));

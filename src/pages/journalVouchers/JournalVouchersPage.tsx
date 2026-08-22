@@ -29,6 +29,7 @@ import { Button } from '@/components/ui/Button';
 import { Field, Input, Textarea } from '@/components/ui/Input';
 import { AmountInput } from '@/components/ui/AmountInput';
 import { Select } from '@/components/ui/Select';
+import { postingAccountOptions } from '@/lib/accountEligibility';
 import { AccountSelect } from '@/components/journal/AccountSelect';
 import { CostCenterPicker } from '@/components/cost-centers/CostCenterPicker';
 import { ProjectPicker } from '@/components/projects/ProjectPicker';
@@ -38,8 +39,13 @@ import { Drawer } from '@/components/ui/Drawer';
 import { Toggle } from '@/components/ui/Toggle';
 import { Tabs, type TabItem } from '@/components/ui/Tabs';
 import { ArrowDown, ArrowUp, Copy, Plus, Printer, Trash2 } from 'lucide-react';
+import { companyMonetaryDecimals } from '@/lib/monetaryPrecision';
 
-const money = (n: number): string => n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+/** Voucher amounts at the company's monetary precision. */
+const money = (n: number): string => {
+  const d = companyMonetaryDecimals();
+  return n.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
+};
 const today = (): string => new Date().toISOString().slice(0, 10);
 
 const STATUS_TONE: Record<JournalVoucherStatus, 'slate' | 'amber' | 'red' | 'green' | 'blue' | 'violet'> = {
@@ -223,7 +229,7 @@ function VoucherEditor({ voucher, onChange, baseCurrency, onSave, onSaveAndSubmi
   const type = store.types.find((t) => t.id === voucher.typeId);
   const assets = useFixedAssetStore((s) => s.assets);
   const accountOptions = useMemo(
-    () => [{ value: '', label: '—' }, ...accounts.filter((a) => a.isPostingAccount && a.isActive).sort((a, b) => a.code.localeCompare(b.code)).map((a) => ({ value: a.id, label: `${a.code} — ${a.name}` }))],
+    () => postingAccountOptions({ accounts }, '—'),
     [accounts],
   );
   const isAssetKind = type && ['asset_acquisition', 'asset_disposal', 'asset_depreciation', 'asset_impairment'].includes(type.kind);
@@ -339,7 +345,14 @@ function VoucherEditor({ voucher, onChange, baseCurrency, onSave, onSaveAndSubmi
                       />
                     </td>
                     <td className="px-2 py-1">
+                      {/*
+                        AmountInput stays generic - it is used for non-monetary
+                        numbers elsewhere - so the company's monetary precision
+                        is passed in explicitly rather than assumed inside it.
+                      */}
                       <AmountInput
+                        decimals={companyCurrency.decimalPlaces}
+                        data-money="true"
                         data-testid={`jv-debit-${idx}`}
                         aria-label={`Line ${l.lineNumber} debit`}
                         value={l.debit}
@@ -349,6 +362,8 @@ function VoucherEditor({ voucher, onChange, baseCurrency, onSave, onSaveAndSubmi
                     </td>
                     <td className="px-2 py-1">
                       <AmountInput
+                        decimals={companyCurrency.decimalPlaces}
+                        data-money="true"
                         data-testid={`jv-credit-${idx}`}
                         aria-label={`Line ${l.lineNumber} credit`}
                         value={l.credit}
@@ -770,7 +785,7 @@ function TemplatesPanel({ onMsg }: { onMsg: (m: { tone: 'error' | 'success'; tex
 function TemplateLinesEditor({ template, onChange }: { template: RecurringVoucherTemplate; onChange: (t: RecurringVoucherTemplate) => void }) {
   const accounts = useStore((s) => s.accounts);
   const accountOptions = useMemo(
-    () => [{ value: '', label: '—' }, ...accounts.filter((a) => a.isPostingAccount && a.isActive).map((a) => ({ value: a.id, label: `${a.code} — ${a.name}` }))],
+    () => postingAccountOptions({ accounts }, '—'),
     [accounts],
   );
   const setLine = (id: string, patch: (l: JournalVoucherLine) => JournalVoucherLine): void =>
@@ -796,7 +811,7 @@ function ConfigPanel({ onMsg }: { onMsg: (m: { tone: 'error' | 'success'; text: 
   const store = useJournalVoucherStore();
   const accounts = useStore((s) => s.accounts);
   const accountOptions = useMemo(
-    () => [{ value: '', label: '— not configured —' }, ...accounts.filter((a) => a.isPostingAccount && a.isActive).map((a) => ({ value: a.id, label: `${a.code} — ${a.name}` }))],
+    () => postingAccountOptions({ accounts }, '— not configured —'),
     [accounts],
   );
   const [editing, setEditing] = useState<VoucherTypeConfig | null>(null);

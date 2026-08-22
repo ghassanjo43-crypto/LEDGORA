@@ -13,11 +13,13 @@ import type {
 import { BALANCE_SHEET_TYPES } from '@/types/balanceSheet';
 import { getPostedJournalLines, convertToBaseCurrency } from '@/lib/generalLedgerCalculations';
 import { buildIncomeStatement } from '@/lib/incomeStatementCalculations';
+import { companyMonetaryDecimals } from '@/lib/monetaryPrecision';
+import { roundToCompanyPrecision } from '@/lib/monetaryPrecision';
 
 export const BALANCE_TOLERANCE = 0.01;
 
 function round2(n: number): number {
-  return Math.round((n + Number.EPSILON) * 100) / 100;
+  return roundToCompanyPrecision(n + Number.EPSILON);
 }
 function addDays(iso: string, days: number): string {
   const d = new Date(`${iso}T00:00:00Z`);
@@ -332,7 +334,7 @@ export function calculateBalanceSheetTotals(report: BalanceSheetReport) {
 export function validateBalanceSheet(report: BalanceSheetReport, accountLines: BalanceSheetAccountLine[], accounts: Account[]): ReportWarning[] {
   const warnings: ReportWarning[] = [];
   if (!report.isBalanced) {
-    warnings.push({ id: 'out-of-balance', severity: 'error', message: `Balance sheet is out of balance by ${Math.abs(report.difference).toFixed(2)}.` });
+    warnings.push({ id: 'out-of-balance', severity: 'error', message: `Balance sheet is out of balance by ${Math.abs(report.difference).toFixed(companyMonetaryDecimals())}.` });
   }
   const byId = new Map(accounts.map((a) => [a.id, a]));
   for (const l of accountLines) {

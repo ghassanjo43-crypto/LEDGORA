@@ -323,8 +323,16 @@ export function dailyCounterRollup(events: UsageEvent[], organizationId: string,
 
 /* ── Utils ────────────────────────────────────────────────────────────────── */
 
+/**
+ * Two decimals, deliberately fixed.
+ *
+ * This module measures Ledgora's OWN infrastructure usage and prices it for
+ * Ledgora's billing — gigabytes, request counts and the platform's charges. It
+ * is not the subscriber's accounting, so it must not follow the subscriber's
+ * functional currency: a JOD customer's storage is still 12.34 GB, not 12.340.
+ */
 export function round2(n: number): number {
-  return Math.round(n * 100) / 100;
+  return Math.round((n + Number.EPSILON) * 100) / 100;
 }
 
 export function gbLabel(bytes: number): string {

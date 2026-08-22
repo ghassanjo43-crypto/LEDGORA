@@ -97,6 +97,8 @@ export function AppShell() {
   // Re-run the gate when the server session resolves or demands a new password.
   const backendStatus = useBackendSessionStore((s) => s.status);
   const backendUser = useBackendSessionStore((s) => s.user);
+  const backendError = useBackendSessionStore((s) => s.error);
+  const refreshBackendSession = useBackendSessionStore((s) => s.refresh);
   const mustChangePassword = backendUser?.mustChangePassword ?? false;
   const apiMode = isApiConfigured();
   /*
@@ -108,6 +110,7 @@ export function AppShell() {
   const sessionResolving = apiMode && (backendStatus === 'unknown' || backendStatus === 'loading');
   // The server positively reported "no session" — route to /login, not welcome.
   const sessionVerifiedUnauthenticated = apiMode && backendStatus === 'ready' && backendUser === null;
+  const sessionUnavailable = apiMode && backendStatus === 'unavailable';
 
   useEffect(() => initRouter(), []);
 
@@ -135,7 +138,7 @@ export function AppShell() {
    * opened again.
    */
   useEffect(() => {
-    if (sessionResolving) return;
+    if (sessionResolving || sessionUnavailable) return;
     if (demoActive) {
       openBusinessWorkspace({ kind: 'demo', organizationId: FREE_DEMO_WORKSPACE_ID });
       return;
@@ -206,16 +209,29 @@ export function AppShell() {
       return;
     }
 
+    // Onboarding is a destination, not an authenticated subscriber surface.
+    // A stale URL must not pin a server-confirmed organization in the wizard.
+    // Keep the page only when server-derived context says this exact step is
+    // genuinely next.
+    if (surface === 'onboarding') {
+      const destination = resolvePostLoginRoute(ctx);
+      if (destination !== path) navigate(destination, { replace: true });
+      return;
+    }
+
     // The app (accounting/invoicing/reports/…) requires an active subscription;
     // everything else allowed by policy (onboarding/billing/status/profile/support).
     if (!isPathAllowed(ctx, path)) {
       navigate(resolvePostLoginRoute(ctx), { replace: true });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [path, currentUserId, usersLen, orgId, subStatus, platformRole, demoActive, operatorViewing, sessionResolving, mustChangePassword, sessionVerifiedUnauthenticated]);
+  }, [path, currentUserId, usersLen, orgId, subStatus, platformRole, demoActive, operatorViewing, sessionResolving, sessionUnavailable, mustChangePassword, sessionVerifiedUnauthenticated]);
 
   // Paint nothing until the session verdict is in, so no surface flashes.
   if (sessionResolving) return <Blank />;
+  if (sessionUnavailable) {
+    return <SessionBootstrapError message={backendError} onRetry={() => void refreshBackendSession()} />;
+  }
 
   return <Surface path={path} platformRole={platformRole} />;
 }
@@ -307,4 +323,24 @@ function Surface({ path, platformRole }: { path: string; platformRole: string })
 
 function Blank() {
   return <div className="min-h-full bg-slate-50 dark:bg-slate-950" />;
+}
+
+function SessionBootstrapError({ message, onRetry }: { message: string | null; onRetry: () => void }) {
+  return (
+    <main className="flex min-h-full items-center justify-center bg-slate-50 px-4 dark:bg-slate-950">
+      <section className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 text-center shadow-card dark:border-slate-800 dark:bg-slate-900">
+        <h1 className="text-lg font-semibold text-slate-900 dark:text-slate-100">We could not restore your session</h1>
+        <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
+          {message ?? 'LEDGORA could not reach the account service. Your organization status has not been changed.'}
+        </p>
+        <button
+          type="button"
+          onClick={onRetry}
+          className="focus-ring mt-5 rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700"
+        >
+          Retry
+        </button>
+      </section>
+    </main>
+  );
 }

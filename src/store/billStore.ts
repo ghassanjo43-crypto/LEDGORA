@@ -43,6 +43,7 @@ import {
   ORDINARY_TRANSACTION_EXCHANGE_RATE,
   transactionCurrencyCode,
 } from '@/lib/transactionCurrency';
+import { roundToCompanyPrecision } from '@/lib/monetaryPrecision';
 
 const ACTOR = 'Finance Manager';
 
@@ -97,6 +98,15 @@ export function billPostingConfig(supplierId: string): BillPostingConfig {
 
 function audit(action: string, detail?: string): BillAuditEvent { return { id: generateId('baud'), at: nowIso(), action, detail }; }
 
+/** Persisted v1 bills predate optimistic-concurrency revisions. */
+export function billRevision(bill: Pick<Bill, 'revision'>): number {
+  return Number.isSafeInteger(bill.revision) && (bill.revision ?? -1) >= 0 ? bill.revision! : 0;
+}
+
+function normalizeBillRevision(bill: Bill): Bill {
+  return bill.revision === billRevision(bill) ? bill : { ...bill, revision: billRevision(bill) };
+}
+
 /** Recompute derived totals + balance at the DOCUMENT currency's configured precision. */
 function withTotals(bill: Bill): Bill {
   const dp = useCurrencyStore.getState().getCurrency(bill.currency)?.decimalPlaces ?? 2;
@@ -110,7 +120,7 @@ export function makeEmptyBillLine(billId: string, sortOrder: number): BillLine {
   return { id: generateId('bline'), billId, description: '', accountId: '', quantity: 1, unitPrice: 0, discountAmount: 0, taxRate: 0, taxableAmount: 0, taxAmount: 0, lineSubtotal: 0, lineTotal: 0, sortOrder };
 }
 
-const EDITABLE: Bill['status'][] = ['draft', 'submitted', 'approved'];
+const POSTABLE: Bill['status'][] = ['draft', 'submitted', 'approved'];
 
 interface BillState {
   bills: Bill[];
@@ -125,13 +135,13 @@ interface BillState {
   takeBillNumber: (entityId: string, usedNumbers: Set<string>, date: string) => string;
 
   createDraft: (input?: { supplierId?: string; billType?: BillType; billDate?: string; dueDate?: string; currency?: string }) => BillActionResult;
-  updateDraft: (id: string, patch: Partial<Bill>) => BillActionResult;
+  updateDraft: (id: string, patch: Partial<Bill>, opts?: { expectedRevision?: number }) => BillActionResult;
   deleteDraft: (id: string) => BillActionResult;
   duplicateBill: (id: string) => BillActionResult;
 
   submitBill: (id: string) => BillActionResult;
   approveBill: (id: string) => BillActionResult;
-  returnToDraft: (id: string) => BillActionResult;
+  returnToDraft: (id: string, reason?: string) => BillActionResult;
   postBill: (id: string, opts?: { overrideDuplicate?: boolean }) => BillActionResult;
   recordPayment: (id: string, input: { amount: number; date: string; bankAccountId: string; method?: BillPaymentMethod; reference?: string; bankFeeAmount?: number; bankFeeAccountId?: string; realizedFxAmount?: number }) => BillActionResult;
   /** Apply a Payments-module allocation to a bill WITHOUT posting a journal (the payment owns the bank entry). */
@@ -154,7 +164,10 @@ export const useBillStore = create<BillState>()(
       bills: [],
       numbering: { [INVOICE_ENTITY_ID]: makeDefaultBillNumberingConfig(INVOICE_ENTITY_ID) },
 
-      getBill: (id) => get().bills.find((b) => b.id === id),
+      getBill: (id) => {
+        const bill = get().bills.find((b) => b.id === id);
+        return bill ? normalizeBillRevision(bill) : undefined;
+      },
       getBillsForSupplier: (supplierId) => get().bills.filter((b) => b.supplierId === supplierId),
       usedNumbers: () => new Set(get().bills.map((b) => b.billNumber).filter(Boolean)),
 
@@ -196,7 +209,7 @@ export const useBillStore = create<BillState>()(
         const id = generateId('bill');
         const now = nowIso();
         const bill: Bill = {
-          id, entityId: INVOICE_ENTITY_ID, supplierId: input?.supplierId ?? '',
+          id, revision: 0, entityId: INVOICE_ENTITY_ID, supplierId: input?.supplierId ?? '',
           billNumber: number, supplierInvoiceNumber: '',
           billType: input?.billType ?? 'expense', status: 'draft',
           billDate, dueDate: input?.dueDate ?? billDate,
@@ -229,12 +242,24 @@ export const useBillStore = create<BillState>()(
         return { ok: true, id };
       },
 
-      updateDraft: (id, patch) => {
+      updateDraft: (id, patch, opts) => {
         const { bills } = get();
         const existing = bills.find((b) => b.id === id);
         if (!existing) return { ok: false, error: 'Bill not found.' };
-        if (!EDITABLE.includes(existing.status)) return { ok: false, error: 'Only draft, submitted or approved bills can be edited. Reverse a posted bill instead.' };
-        const merged = withTotals({ ...existing, ...patch, lines: (patch.lines ?? existing.lines).map((l) => ({ ...l, billId: id })) });
+        const permitted = assertTransactionDocumentPermission(currentRole(), 'bill.edit');
+        if (!permitted.ok) return { ok: false, error: permitted.error };
+        if (existing.entityId !== INVOICE_ENTITY_ID) return { ok: false, error: 'Bill not found in the current entity.' };
+        if (existing.status !== 'draft') return { ok: false, error: existing.status === 'posted' || existing.journalEntryId ? 'Posted bills cannot be edited because they have affected the ledger. Reverse or void this bill and create a corrected bill.' : 'Return this bill to draft before editing it.' };
+        if (existing.journalEntryId || existing.goodsReceiptId || existing.payments.length > 0 || existing.amountPaid > 0 || existing.supplierCreditsApplied > 0) return { ok: false, error: 'This bill has accounting, inventory, credit or payment activity and cannot be edited directly.' };
+        if (opts?.expectedRevision !== undefined && opts.expectedRevision !== billRevision(existing)) return { ok: false, error: 'This bill was changed in another session. Reload it before saving.' };
+        const allowed = ['supplierId', 'supplierInvoiceNumber', 'billType', 'billDate', 'dueDate', 'purchaseOrderId', 'notes', 'lines'] as const;
+        const clean: Partial<Bill> = {};
+        for (const key of allowed) if (Object.prototype.hasOwnProperty.call(patch, key)) (clean as Record<string, unknown>)[key] = patch[key];
+        const changed = Object.keys(clean).some((key) => JSON.stringify(existing[key as keyof Bill]) !== JSON.stringify(clean[key as keyof Bill]));
+        if (!changed) return { ok: true, id };
+        const merged = withTotals({ ...existing, ...clean, lines: (clean.lines ?? existing.lines).map((l) => ({ ...l, billId: id })) });
+        merged.revision = billRevision(existing) + 1;
+        merged.auditTrail = [...existing.auditTrail, audit('bill-draft-updated')];
         set({ bills: bills.map((b) => (b.id === id ? merged : b)) });
         return { ok: true, id };
       },
@@ -258,7 +283,7 @@ export const useBillStore = create<BillState>()(
         const now = nowIso();
         const copy: Bill = {
           ...structuredCopy(src),
-          id: newId, billNumber: number, supplierInvoiceNumber: '', status: 'draft', billDate, dueDate: billDate,
+          id: newId, revision: 0, billNumber: number, supplierInvoiceNumber: '', status: 'draft', billDate, dueDate: billDate,
           templateSnapshot: undefined, journalEntryId: undefined, reversalJournalEntryId: undefined,
           amountPaid: 0, supplierCreditsApplied: 0, payments: [], supplierCredits: [], attachments: [],
           submittedAt: undefined, approvedAt: undefined, postedAt: undefined, paidAt: undefined, voidedAt: undefined, reversedAt: undefined, approvedBy: undefined, voidReason: undefined, reversalReason: undefined,
@@ -280,13 +305,17 @@ export const useBillStore = create<BillState>()(
         set({ bills: bills.map((x) => (x.id === id ? { ...x, status: 'approved', approvedAt: now, approvedBy: ACTOR, auditTrail: [...x.auditTrail, audit('bill-approved')], updatedAt: now } : x)) });
         return { ok: true, id };
       },
-      returnToDraft: (id) => {
+      returnToDraft: (id, reason) => {
         const { bills } = get();
         const b = bills.find((x) => x.id === id);
         if (!b) return { ok: false, error: 'Bill not found.' };
+        const permitted = assertTransactionDocumentPermission(currentRole(), 'bill.transition');
+        if (!permitted.ok) return { ok: false, error: permitted.error };
+        if (b.entityId !== INVOICE_ENTITY_ID) return { ok: false, error: 'Bill not found in the current entity.' };
         if (b.status !== 'submitted' && b.status !== 'approved') return { ok: false, error: 'Only a submitted or approved bill can return to draft.' };
+        if (b.journalEntryId || b.goodsReceiptId || b.payments.length > 0 || b.amountPaid > 0 || b.supplierCreditsApplied > 0) return { ok: false, error: 'A bill with accounting, inventory, credit or payment activity cannot return to draft.' };
         const now = nowIso();
-        set({ bills: bills.map((x) => (x.id === id ? { ...x, status: 'draft', approvedAt: undefined, approvedBy: undefined, submittedAt: undefined, auditTrail: [...x.auditTrail, audit('returned-to-draft')], updatedAt: now } : x)) });
+        set({ bills: bills.map((x) => (x.id === id ? { ...x, status: 'draft', approvedAt: undefined, approvedBy: undefined, submittedAt: undefined, auditTrail: [...x.auditTrail, audit(b.status === 'approved' ? 'bill-reopened' : 'bill-submission-recalled', reason?.trim() || undefined)], updatedAt: now } : x)) });
         return { ok: true, id };
       },
 
@@ -294,7 +323,7 @@ export const useBillStore = create<BillState>()(
         const { bills } = get();
         const existing = bills.find((b) => b.id === id);
         if (!existing) return { ok: false, error: 'Bill not found.' };
-        if (!EDITABLE.includes(existing.status)) return { ok: false, error: 'Only a draft/submitted/approved bill can be posted.' };
+        if (!POSTABLE.includes(existing.status)) return { ok: false, error: 'Only a draft/submitted/approved bill can be posted.' };
 
         const bill = withTotals(existing);
         const dup = checkDuplicateSupplierInvoiceNumber(bills, { entityId: bill.entityId, supplierId: bill.supplierId, supplierInvoiceNumber: bill.supplierInvoiceNumber, excludeBillId: bill.id });
@@ -372,7 +401,7 @@ export const useBillStore = create<BillState>()(
         const existing = bills.find((b) => b.id === id);
         if (!existing) return { ok: false, error: 'Bill not found.' };
         if (!['posted', 'partially-paid'].includes(existing.status)) return { ok: false, error: 'Only a posted bill can receive payments.' };
-        const amt = Math.round((Number(input.amount) || 0) * 100) / 100;
+        const amt = roundToCompanyPrecision(Number(input.amount) || 0);
         if (amt <= 0) return { ok: false, error: 'Payment amount must be positive.' };
         if (amt > existing.balanceDue + 0.005) return { ok: false, error: 'Payment exceeds the balance due.' };
         if (!input.bankAccountId) return { ok: false, error: 'Select the bank/cash account.' };
@@ -389,7 +418,7 @@ export const useBillStore = create<BillState>()(
         if (!posted.ok) return { ok: false, error: posted.error ?? 'Could not post the payment.' };
         payment.journalEntryId = added.id;
 
-        const amountPaid = Math.round((existing.amountPaid + amt) * 100) / 100;
+        const amountPaid = roundToCompanyPrecision(existing.amountPaid + amt);
         const balanceDue = calculateBillBalance({ grandTotal: existing.grandTotal, withholdingTaxTotal: existing.withholdingTaxTotal, supplierCreditsApplied: existing.supplierCreditsApplied, amountPaid });
         const status = balanceDue <= 0.005 ? 'paid' : 'partially-paid';
         const now = nowIso();
@@ -402,7 +431,7 @@ export const useBillStore = create<BillState>()(
         const existing = bills.find((b) => b.id === id);
         if (!existing) return { ok: false, error: 'Bill not found.' };
         if (!['posted', 'partially-paid'].includes(existing.status)) return { ok: false, error: 'Payments can only be allocated to a posted bill.' };
-        const amt = Math.round((Number(input.amount) || 0) * 100) / 100;
+        const amt = roundToCompanyPrecision(Number(input.amount) || 0);
         if (amt <= 0) return { ok: false, error: 'Allocation amount must be positive.' };
         if (amt > existing.balanceDue + 0.005) return { ok: false, error: 'Allocation exceeds the bill balance due.' };
 
@@ -410,7 +439,7 @@ export const useBillStore = create<BillState>()(
           id: generateId('bpay'), billId: id, date: input.date, amount: amt, method: input.method ?? 'bank-transfer',
           reference: input.reference, bankAccountId: input.bankAccountId ?? '', journalEntryId: input.journalEntryId, paymentId: input.paymentId, createdAt: nowIso(),
         };
-        const amountPaid = Math.round((existing.amountPaid + amt) * 100) / 100;
+        const amountPaid = roundToCompanyPrecision(existing.amountPaid + amt);
         const balanceDue = calculateBillBalance({ grandTotal: existing.grandTotal, withholdingTaxTotal: existing.withholdingTaxTotal, supplierCreditsApplied: existing.supplierCreditsApplied, amountPaid });
         const status = balanceDue <= 0.005 ? 'paid' : 'partially-paid';
         const now = nowIso();
@@ -424,8 +453,8 @@ export const useBillStore = create<BillState>()(
         if (!existing) return { ok: false, error: 'Bill not found.' };
         const linked = existing.payments.filter((p) => p.paymentId === paymentId);
         if (linked.length === 0) return { ok: true, id };
-        const removed = Math.round(linked.reduce((s, p) => s + p.amount, 0) * 100) / 100;
-        const amountPaid = Math.round(Math.max(0, existing.amountPaid - removed) * 100) / 100;
+        const removed = roundToCompanyPrecision(linked.reduce((s, p) => s + p.amount, 0));
+        const amountPaid = roundToCompanyPrecision(Math.max(0, existing.amountPaid - removed));
         const balanceDue = calculateBillBalance({ grandTotal: existing.grandTotal, withholdingTaxTotal: existing.withholdingTaxTotal, supplierCreditsApplied: existing.supplierCreditsApplied, amountPaid });
         const status = balanceDue <= 0.005 && amountPaid > 0.005 ? 'paid' : amountPaid <= 0.005 && existing.supplierCreditsApplied <= 0.005 ? 'posted' : 'partially-paid';
         const now = nowIso();
@@ -438,9 +467,9 @@ export const useBillStore = create<BillState>()(
         const existing = bills.find((b) => b.id === id);
         if (!existing) return { ok: false, error: 'Bill not found.' };
         if (!['posted', 'partially-paid'].includes(existing.status)) return { ok: false, error: 'A supplier credit can only be raised against a posted bill.' };
-        const net = Math.round((Number(input.netAmount) || 0) * 100) / 100;
-        const tax = Math.round((Number(input.taxAmount) || 0) * 100) / 100;
-        const amount = Math.round((net + tax) * 100) / 100;
+        const net = roundToCompanyPrecision(Number(input.netAmount) || 0);
+        const tax = roundToCompanyPrecision(Number(input.taxAmount) || 0);
+        const amount = roundToCompanyPrecision(net + tax);
         if (amount <= 0) return { ok: false, error: 'Supplier credit amount must be positive.' };
         if (amount > existing.balanceDue + 0.005) return { ok: false, error: 'Supplier credit exceeds the balance due.' };
         if (!input.creditAccountId) return { ok: false, error: 'Select the account the credit reverses.' };
@@ -472,7 +501,7 @@ export const useBillStore = create<BillState>()(
           }
         }
 
-        const supplierCreditsApplied = Math.round((existing.supplierCreditsApplied + amount) * 100) / 100;
+        const supplierCreditsApplied = roundToCompanyPrecision(existing.supplierCreditsApplied + amount);
         const balanceDue = calculateBillBalance({ grandTotal: existing.grandTotal, withholdingTaxTotal: existing.withholdingTaxTotal, supplierCreditsApplied, amountPaid: existing.amountPaid });
         const status = balanceDue <= 0.005 ? 'paid' : existing.amountPaid > 0 ? 'partially-paid' : 'partially-paid';
         const now = nowIso();
@@ -511,10 +540,18 @@ export const useBillStore = create<BillState>()(
         return { ok: true, id };
       },
 
-      replaceAll: (bills) => set({ bills }),
+      replaceAll: (bills) => set({ bills: bills.map(normalizeBillRevision) }),
       resetToDefault: () => set({ bills: [], numbering: { [INVOICE_ENTITY_ID]: makeDefaultBillNumberingConfig(INVOICE_ENTITY_ID) } }),
     }),
-    { name: 'ledgerly-bills', storage: businessJSONStorage, version: 1 },
+    {
+      name: 'ledgerly-bills',
+      storage: businessJSONStorage,
+      version: 2,
+      migrate: (persisted) => {
+        const state = persisted as Partial<BillState>;
+        return { ...state, bills: (state.bills ?? []).map(normalizeBillRevision) } as BillState;
+      },
+    },
   ),
 );
 

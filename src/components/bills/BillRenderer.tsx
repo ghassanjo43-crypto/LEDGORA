@@ -5,6 +5,7 @@ import { resolveInvoiceLogo } from '@/lib/invoiceLogo';
 import { formatCurrency } from '@/lib/money';
 import { BILL_TYPE_LABELS, BILL_PAYMENT_METHOD_LABELS } from '@/lib/billLabels';
 import { LogoImage } from '@/components/invoices/LogoImage';
+import { roundToCompanyPrecision } from '@/lib/monetaryPrecision';
 
 interface Props {
   bill: Bill;
@@ -25,7 +26,7 @@ export function BillRenderer({ bill, snapshot, supplierName, supplierAddress, su
   const money = (n: number): string => formatCurrency(n, bill.currency);
   const opp = rtl ? 'left' : 'right';
   const align = rtl ? 'right' : 'left';
-  const netPayable = Math.round((bill.grandTotal - bill.withholdingTaxTotal) * 100) / 100;
+  const netPayable = roundToCompanyPrecision(bill.grandTotal - bill.withholdingTaxTotal);
 
   return (
     <div dir={content.direction} lang={content.language} className="invoice-page relative mx-auto bg-white text-slate-900"

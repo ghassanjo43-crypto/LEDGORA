@@ -14,9 +14,10 @@ import type {
   VoucherTypeConfig,
 } from '@/types/journalVoucher';
 import { roundTo } from '@/lib/currencyConversion';
+import { roundToCompanyPrecision } from '@/lib/monetaryPrecision';
 
 /** Legacy 2-dp rounding — kept for base-currency-only callers (fixed assets). */
-export const round2 = (n: number): number => Math.round((n + Number.EPSILON) * 100) / 100;
+export const round2 = (n: number): number => roundToCompanyPrecision(n + Number.EPSILON);
 
 /* ── Totals ───────────────────────────────────────────────────────────────── */
 

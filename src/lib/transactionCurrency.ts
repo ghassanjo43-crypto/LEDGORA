@@ -39,6 +39,7 @@
  */
 import { useStore } from '@/store/useStore';
 import { findCatalogEntry } from '@/data/currencyCatalog';
+import { getCurrencyMonetaryDecimals } from '@/lib/monetaryPrecision';
 
 /** An ordinary transaction is in the company's own currency, so never converted. */
 export const ORDINARY_TRANSACTION_EXCHANGE_RATE = 1;
@@ -61,7 +62,12 @@ function describe(code: string): TransactionCurrency {
     code: normalized,
     name: entry?.name ?? normalized,
     label: entry ? `${normalized} — ${entry.name}` : normalized,
-    decimalPlaces: entry?.decimals ?? 2,
+    /*
+     * Through the canonical resolver, not the catalogue directly: the Currency
+     * Master is the authority and it holds the organization's CUSTOM currencies,
+     * which the ISO catalogue has never heard of.
+     */
+    decimalPlaces: getCurrencyMonetaryDecimals(normalized),
   };
 }
 

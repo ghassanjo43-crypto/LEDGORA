@@ -9,6 +9,7 @@
  */
 import type { InventoryBalance, StockMovement } from '@/types/inventory';
 import { replayMovements, type ValuationState } from './inventoryValuation';
+import { roundToCompanyPrecision } from '@/lib/monetaryPrecision';
 
 export interface BalanceQuery {
   entityId: string;
@@ -91,7 +92,7 @@ export function getSubledgerValue(movements: StockMovement[], entityId: string, 
 }
 
 function round2(n: number): number {
-  return Math.round((n + Number.EPSILON) * 100) / 100;
+  return roundToCompanyPrecision(n + Number.EPSILON);
 }
 function round6(n: number): number {
   return Math.round((n + Number.EPSILON) * 1e6) / 1e6;

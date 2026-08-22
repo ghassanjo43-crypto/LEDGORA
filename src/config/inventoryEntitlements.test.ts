@@ -38,6 +38,7 @@ describe('inventory navigation & route guards', () => {
   it('hides the Inventory group without inventory_basic', () => {
     const groups = filterNavigationByEntitlements(CORE);
     expect(groups.find((g) => g.id === 'inventory')).toBeUndefined();
+    expect(groups.find((g) => g.id === 'master-data')?.items.map((item) => item.key)).toContain('inventory-items');
   });
 
   it('shows the Inventory group with inventory_basic', () => {
@@ -45,16 +46,16 @@ describe('inventory navigation & route guards', () => {
     const inv = groups.find((g) => g.id === 'inventory');
     expect(inv).toBeDefined();
     expect(inv!.items.map((i) => i.key)).toEqual(
-      expect.arrayContaining(['inventory-dashboard', 'inventory-items', 'inventory-warehouses', 'inventory-movements', 'inventory-receipts', 'inventory-reports']),
+      expect.arrayContaining(['inventory-dashboard', 'inventory-warehouses', 'inventory-movements', 'inventory-receipts', 'inventory-reports']),
     );
   });
 
-  it('blocks inventory routes without entitlement and allows them with it', () => {
-    expect(canAccessView(CORE, 'inventory-items')).toBe(false);
+  it('keeps Items shared while stock-operation routes require inventory', () => {
+    expect(canAccessView(CORE, 'inventory-items')).toBe(true);
     expect(canAccessView(CORE, 'inventory-reports')).toBe(false);
     expect(canAccessView(WITH_INVENTORY, 'inventory-items')).toBe(true);
     expect(canAccessView(WITH_INVENTORY, 'inventory-reports')).toBe(true);
-    // Every inventory view carries an entitlement requirement (no open routes).
-    expect(VIEW_MODULE_REQUIREMENTS['inventory-items']?.requiredModule).toBe('inventory_basic');
+    expect(VIEW_MODULE_REQUIREMENTS['inventory-items']).toBeUndefined();
+    expect(VIEW_MODULE_REQUIREMENTS['inventory-reports']?.requiredModule).toBe('inventory_basic');
   });
 });

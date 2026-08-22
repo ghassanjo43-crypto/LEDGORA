@@ -14,6 +14,7 @@ import { resolveInventoryAccounts } from '@/lib/inventoryAccounts';
 import { getInventoryBalance } from '@/lib/inventoryBalance';
 import { ENTITY } from '@/lib/inventorySeed';
 import { Select } from '@/components/ui/Select';
+import { roundToCompanyPrecision } from '@/lib/monetaryPrecision';
 
 export function CreditNoteReturnControl({
   line,
@@ -59,7 +60,7 @@ export function CreditNoteReturnControl({
       returnWarehouseId: line.returnWarehouseId || warehouseOptions[0]?.value,
       inventoryAccountId: acc?.inventory,
       costOfGoodsSoldAccountId: acc?.cogs,
-      costAmount: Math.round(unitCost * (line.quantity || 0) * 100) / 100,
+      costAmount: roundToCompanyPrecision(unitCost * (line.quantity || 0)),
     });
   };
 

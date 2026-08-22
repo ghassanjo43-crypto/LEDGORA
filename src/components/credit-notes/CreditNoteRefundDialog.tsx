@@ -8,15 +8,24 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { useToast } from '@/components/ui/Toast';
+import { roundToCompanyPrecision } from '@/lib/monetaryPrecision';
+import { useMonetaryStep } from '@/lib/useMonetaryPrecision';
+import { eligiblePostingAccounts } from '@/lib/accountEligibility';
 
 /** Refund remaining customer credit as cash — a separate journal entry. */
 export function CreditNoteRefundDialog({ creditNote, onClose }: { creditNote: CreditNote; onClose: () => void }) {
+  /*
+   * The company's smallest monetary unit — 0.001 for JOD, 0.01 for USD, 1 for
+   * JPY — so the stepper on every money field agrees with the ledger.
+   */
+  const moneyStep = useMonetaryStep();
+
   const accounts = useStore((s) => s.accounts);
   const refundCreditNote = useCreditNoteStore((s) => s.refundCreditNote);
   const { notify } = useToast();
-  const banks = accounts.filter((a) => a.type === 'ASSET' && /cash and cash equivalents/i.test(a.ifrsSubcategory));
+  const banks = eligiblePostingAccounts({ accounts, purpose: 'bank-cash' });
 
-  const [amount, setAmount] = useState(Math.round(creditNote.remainingCredit * 100) / 100);
+  const [amount, setAmount] = useState(roundToCompanyPrecision(creditNote.remainingCredit));
   const [refundDate, setRefundDate] = useState(new Date().toISOString().slice(0, 10));
   const [bankAccountId, setBankAccountId] = useState(banks[0]?.id ?? '');
   const [reference, setReference] = useState('');
@@ -36,7 +45,7 @@ export function CreditNoteRefundDialog({ creditNote, onClose }: { creditNote: Cr
         <h2 className="text-sm font-semibold">Refund credit — {creditNote.creditNoteNumber}</h2>
         <p className="mt-0.5 text-xs text-slate-500">Remaining credit {money(creditNote.remainingCredit)}. A refund posts Dr receivables / Cr bank.</p>
         <div className="mt-3 space-y-3">
-          <label className="block text-xs text-slate-500">Amount<Input type="number" step="0.01" value={amount} onChange={(e) => setAmount(Number(e.target.value))} className="mt-1" /></label>
+          <label className="block text-xs text-slate-500">Amount<Input type="number" step={moneyStep} data-money="true" value={amount} onChange={(e) => setAmount(Number(e.target.value))} className="mt-1" /></label>
           <label className="block text-xs text-slate-500">Refund date<Input type="date" value={refundDate} onChange={(e) => setRefundDate(e.target.value)} className="mt-1" /></label>
           <label className="block text-xs text-slate-500">Pay from<Select className="mt-1" options={banks.map((b) => ({ value: b.id, label: `${b.code} · ${b.name}` }))} value={bankAccountId} onChange={(e) => setBankAccountId(e.target.value)} /></label>
           <label className="block text-xs text-slate-500">Reference<Input value={reference} onChange={(e) => setReference(e.target.value)} className="mt-1" placeholder="Payment reference" /></label>

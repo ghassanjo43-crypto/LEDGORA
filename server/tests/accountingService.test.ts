@@ -168,17 +168,40 @@ describe('posting validation', () => {
   });
 
   it('refuses an entry that is out by the smallest representable amount', async () => {
-    // The case a floating-point comparison with a tolerance would wave through.
+    /*
+     * The case a floating-point comparison with a tolerance would wave through:
+     * one fils, the smallest amount this company's currency can express.
+     *
+     * This used to be out by 1e-10. That is no longer expressible — a JOD entry
+     * may not carry more than three decimals, and `createDraft` now refuses the
+     * over-precise figure before posting is ever reached. The claim under test
+     * is the balance check's lack of tolerance, so the imbalance is stated at
+     * the currency's own smallest unit, which is the sharper version of it.
+     */
     const draft = await draftOf({
       transactionDate: '2026-08-01',
       lines: [
-        { accountId: cash, debit: '100.0000000001' },
-        { accountId: sales, credit: '100.0000000000' },
+        { accountId: cash, debit: '100.001' },
+        { accountId: sales, credit: '100.000' },
       ],
     });
     await expect(
       journals.postJournal(ctx.db, orgA, draft.id, { expectedVersion: draft.version }),
     ).rejects.toThrow(/does not balance/i);
+  });
+
+  it('refuses an over-precise amount before it can ever be posted', async () => {
+    // And the figure the previous test used to rely on is now caught earlier,
+    // at the write, with a message about precision rather than about balance.
+    await expect(
+      draftOf({
+        transactionDate: '2026-08-01',
+        lines: [
+          { accountId: cash, debit: '100.0000000001' },
+          { accountId: sales, credit: '100.0000000000' },
+        ],
+      }),
+    ).rejects.toThrow(/JOD supports a maximum of 3 decimal places/i);
   });
 
   it('refuses a single-line entry', async () => {
@@ -213,7 +236,7 @@ describe('posting validation', () => {
     });
     await expect(
       journals.postJournal(ctx.db, orgA, draft.id, { expectedVersion: draft.version }),
-    ).rejects.toThrow(/header account/i);
+    ).rejects.toThrow(/parent accounts cannot receive transactions/i);
   });
 
   it('refuses an entry that is all debits or all credits', async () => {

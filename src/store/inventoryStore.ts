@@ -51,6 +51,8 @@ import { roundCost } from '@/lib/inventoryValuation';
 import type { StockMovementType, StockSourceDocumentType } from '@/types/inventory';
 import { ENTITY, makeInventorySeed } from '@/lib/inventorySeed';
 import { generateId, nowIso } from '@/lib/utils';
+import { useTaxCodeStore } from './taxCodeStore';
+import { useEntityStore } from './useEntityStore';
 
 export interface InvResult {
   ok: boolean;
@@ -108,6 +110,7 @@ interface InventoryState {
   seeded: boolean;
 
   ensureSeeded: () => void;
+  ensureCatalogueInitialized: () => void;
 
   /* Master data */
   saveItem: (item: InventoryItem) => InvResult;
@@ -346,20 +349,64 @@ export const useInventoryStore = create<InventoryState>()(
           if (get().seeded) return;
           const edition = useEntitlementStore.getState().subscription.edition;
           const seed = makeInventorySeed(edition);
-          set({ ...seed, movements: [], documents: [], auditTrail: [], seeded: true });
+          const current = get();
+          const mergeById = <T extends { id: string }>(existing: T[], defaults: T[]): T[] => [
+            ...existing,
+            ...defaults.filter((candidate) => !existing.some((record) => record.id === candidate.id)),
+          ];
+          set({
+            // An inventory upgrade adds reference data around the existing
+            // catalogue; it never injects sample SKUs beside real Core items.
+            items: current.items.length > 0 ? current.items : seed.items,
+            categories: mergeById(current.categories, seed.categories),
+            units: mergeById(current.units, seed.units),
+            warehouses: mergeById(current.warehouses, seed.warehouses),
+            settings: { ...seed.settings, ...current.settings, enabled: true },
+            seeded: true,
+          });
+        },
+
+        ensureCatalogueInitialized: () => {
+          if (get().units.length > 0) return;
+          const { units } = makeInventorySeed('core');
+          set({ units });
         },
 
         /* ── Master data ──────────────────────────────────────────────────── */
         saveItem: (item) => {
+          if (item.entityId && item.entityId !== ENTITY) return { ok: false, error: 'Item does not belong to the current company.' };
           const existing = get().items.find((i) => i.id === item.id);
+          const code = item.code.trim();
+          const name = item.name.trim();
+          if (!code || !name) return { ok: false, error: 'Item code and name are required.' };
+          if (!item.isSellable && !item.isPurchasable) return { ok: false, error: 'An item must be sellable, purchasable, or both.' };
+          if (item.itemType === 'service' && item.isInventoryTracked) return { ok: false, error: 'A service cannot be inventory tracked.' };
+          if ((item.defaultSellingPrice ?? 0) < 0 || (item.defaultPurchasePrice ?? 0) < 0) return { ok: false, error: 'Item prices cannot be negative.' };
+          if (!get().units.some((unit) => unit.id === item.baseUnitId && unit.entityId === ENTITY)) return { ok: false, error: 'The selected unit of measure does not exist.' };
+          if (item.categoryId && !get().categories.some((category) => category.id === item.categoryId && category.entityId === ENTITY)) return { ok: false, error: 'The selected item category does not exist.' };
           if (existing && existing.valuationMethod !== item.valuationMethod && !canChangeValuationMethod(item.id, get().movements)) {
             set((s) => ({ auditTrail: [...s.auditTrail, audit('valuation-method-change-blocked', `Blocked valuation-method change on "${item.code}" — movements exist.`)] }));
             return { ok: false, error: 'Cannot change valuation method after stock movements exist for this item.' };
           }
-          if (get().items.some((i) => i.id !== item.id && i.code.trim().toLowerCase() === item.code.trim().toLowerCase())) {
+          if (get().items.some((i) => i.entityId === item.entityId && i.id !== item.id && i.code.trim().toLowerCase() === code.toLowerCase())) {
             return { ok: false, error: `Item code "${item.code}" already exists.` };
           }
-          const record: InventoryItem = { ...item, entityId: ENTITY, updatedAt: nowIso(), createdAt: existing?.createdAt ?? nowIso() };
+          const gtin = item.gtin?.trim();
+          if (gtin && get().items.some((i) => i.entityId === item.entityId && i.id !== item.id && i.gtin?.trim().toLowerCase() === gtin.toLowerCase())) {
+            return { ok: false, error: `GTIN/barcode "${gtin}" already exists.` };
+          }
+          const accounts = new Set(useStore.getState().accounts.map((a) => a.id));
+          for (const accountId of [item.salesAccountId, item.purchaseAccountId, item.inventoryAccountId, item.costOfGoodsSoldAccountId]) {
+            if (accountId && !accounts.has(accountId)) return { ok: false, error: 'A referenced item account does not exist.' };
+          }
+          const taxCodes = new Set(useTaxCodeStore.getState().taxCodes.map((tax) => tax.id));
+          for (const taxCodeId of [item.salesTaxCodeId, item.purchaseTaxCodeId]) {
+            if (taxCodeId && !taxCodes.has(taxCodeId)) return { ok: false, error: 'A referenced item tax code does not exist.' };
+          }
+          if (item.defaultSupplierId && !useEntityStore.getState().entities.some((entity) => entity.id === item.defaultSupplierId && (entity.entityType === 'supplier' || entity.entityType === 'both'))) {
+            return { ok: false, error: 'The preferred supplier does not exist.' };
+          }
+          const record: InventoryItem = { ...item, code, name, gtin: gtin || undefined, entityId: item.entityId || ENTITY, updatedAt: nowIso(), createdAt: existing?.createdAt ?? nowIso() };
           set((s) => ({
             items: existing ? s.items.map((i) => (i.id === item.id ? record : i)) : [...s.items, record],
             auditTrail: [...s.auditTrail, audit(existing ? 'item-updated' : 'item-created', `Item "${record.code}" saved.`)],
@@ -368,7 +415,7 @@ export const useInventoryStore = create<InventoryState>()(
         },
 
         archiveItem: (id) => {
-          const item = get().items.find((i) => i.id === id);
+          const item = get().items.find((i) => i.id === id && i.entityId === ENTITY);
           if (!item) return { ok: false, error: 'Item not found.' };
           set((s) => ({
             items: s.items.map((i) => (i.id === id ? { ...i, status: 'archived', updatedAt: nowIso() } : i)),
@@ -590,7 +637,20 @@ export const useInventoryStore = create<InventoryState>()(
     },
     {
       name: 'ledgora-inventory', storage: businessJSONStorage,
-      version: 1,
+      version: 2,
+      migrate: (persisted) => {
+        const state = (persisted ?? {}) as Partial<InventoryState>;
+        return {
+          ...state,
+          items: (state.items ?? []).map((item) => ({
+            ...item,
+            entityId: item.entityId || ENTITY,
+            isSellable: item.isSellable !== false,
+            isPurchasable: item.isPurchasable !== false,
+            isInventoryTracked: item.itemType === 'service' ? false : !!item.isInventoryTracked,
+          })),
+        } as InventoryState;
+      },
       partialize: (s) => ({
         items: s.items,
         categories: s.categories,

@@ -10,10 +10,13 @@ import { ENTITY } from '@/lib/inventorySeed';
 import { getInventoryBalance, getSubledgerValue } from '@/lib/inventoryBalance';
 import { ordered } from '@/lib/inventoryValuation';
 import type { StockMovement } from '@/types/inventory';
+import { roundToCompanyPrecision } from '@/lib/monetaryPrecision';
+import { companyMonetaryDecimals } from '@/lib/monetaryPrecision';
 
 export function money(n: number, currency?: string): string {
   const cur = currency ?? useStore.getState().settings.baseCurrency ?? 'USD';
-  return `${cur} ${(n ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const d = companyMonetaryDecimals();
+  return `${cur} ${(n ?? 0).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d })}`;
 }
 
 export function qty(n: number): string {
@@ -26,7 +29,7 @@ export function useItemOptions(onlyTracked = false) {
   return useMemo(
     () =>
       items
-        .filter((i) => i.status !== 'archived' && (!onlyTracked || (i.itemType !== 'service' && i.itemType !== 'non-inventory' && i.isInventoryTracked)))
+        .filter((i) => i.entityId === ENTITY && i.status !== 'archived' && (!onlyTracked || (i.itemType !== 'service' && i.itemType !== 'non-inventory' && i.isInventoryTracked)))
         .map((i) => ({ value: i.id, label: `${i.code} — ${i.name}` })),
     [items, onlyTracked],
   );
@@ -35,7 +38,7 @@ export function useItemOptions(onlyTracked = false) {
 export function useWarehouseOptions() {
   const warehouses = useInventoryStore((s) => s.warehouses);
   return useMemo(
-    () => warehouses.filter((w) => w.status === 'active').map((w) => ({ value: w.id, label: `${w.code} — ${w.name}` })),
+    () => warehouses.filter((w) => w.entityId === ENTITY && w.status === 'active').map((w) => ({ value: w.id, label: `${w.code} — ${w.name}` })),
     [warehouses],
   );
 }
@@ -67,7 +70,7 @@ export interface LedgerRow {
 export function useMovementLedger(filter?: { itemId?: string; warehouseId?: string }): LedgerRow[] {
   const movements = useInventoryStore((s) => s.movements);
   return useMemo(() => {
-    const sorted = ordered(movements.filter((m) => (!filter?.itemId || m.itemId === filter.itemId) && (!filter?.warehouseId || m.warehouseId === filter.warehouseId)));
+    const sorted = ordered(movements.filter((m) => m.entityId === ENTITY && (!filter?.itemId || m.itemId === filter.itemId) && (!filter?.warehouseId || m.warehouseId === filter.warehouseId)));
     const runQty = new Map<string, number>();
     const runVal = new Map<string, number>();
     const rows: LedgerRow[] = [];
@@ -79,7 +82,7 @@ export function useMovementLedger(filter?: { itemId?: string; warehouseId?: stri
       const dq = m.direction === 'in' ? m.quantity : -m.quantity;
       const dv = m.direction === 'in' ? m.totalCostBase : -m.totalCostBase;
       runQty.set(m.itemId, (runQty.get(m.itemId) ?? 0) + dq);
-      runVal.set(m.itemId, Math.round(((runVal.get(m.itemId) ?? 0) + dv) * 100) / 100);
+      runVal.set(m.itemId, roundToCompanyPrecision((runVal.get(m.itemId) ?? 0) + dv));
       rows.push({ movement: m, runningQty: runQty.get(m.itemId)!, runningValue: runVal.get(m.itemId)! });
     }
     return rows.reverse();

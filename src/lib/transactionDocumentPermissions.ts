@@ -34,6 +34,8 @@ export type TransactionDocument = 'invoice' | 'bill' | 'payment';
 export type TransactionDocumentPermission =
   | 'invoice.create'
   | 'bill.create'
+  | 'bill.edit'
+  | 'bill.transition'
   | 'payment.create';
 
 export const CREATE_PERMISSION: Record<TransactionDocument, TransactionDocumentPermission> = {
@@ -42,7 +44,7 @@ export const CREATE_PERMISSION: Record<TransactionDocument, TransactionDocumentP
   payment: 'payment.create',
 };
 
-const ALL: TransactionDocumentPermission[] = ['invoice.create', 'bill.create', 'payment.create'];
+const ALL: TransactionDocumentPermission[] = ['invoice.create', 'bill.create', 'bill.edit', 'bill.transition', 'payment.create'];
 
 /**
  * Role → permission grants.
@@ -90,4 +92,12 @@ export function assertTransactionDocumentPermission(
 /** May this role start a draft of `document`? For UI affordances. */
 export function roleCanCreateDocument(role: OrganizationRole, document: TransactionDocument): boolean {
   return roleHasTransactionDocumentPermission(role, CREATE_PERMISSION[document]);
+}
+
+export function roleCanEditBills(role: OrganizationRole): boolean {
+  return roleHasTransactionDocumentPermission(role, 'bill.edit');
+}
+
+export function roleCanTransitionBills(role: OrganizationRole): boolean {
+  return roleHasTransactionDocumentPermission(role, 'bill.transition');
 }

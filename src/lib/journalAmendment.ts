@@ -56,6 +56,7 @@ import type {
   JournalFieldChange,
   JournalLine,
 } from '@/types/journal';
+import { companyMonetaryDecimals } from '@/lib/monetaryPrecision';
 
 /* ─────────────────────────────── Dependencies ───────────────────────────── */
 
@@ -236,8 +237,19 @@ export function assessAmendment(
 
 /* ──────────────────────────────── Diffing ───────────────────────────────── */
 
-const money = (n: number): string =>
-  n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+/**
+ * Amounts shown in the amendment history, at the company's own precision.
+ *
+ * An audit trail that reported "1,250.00 → 1,250.00" for a change of one fils
+ * would describe a correction while hiding what was corrected.
+ */
+const money = (n: number): string => {
+  const decimals = companyMonetaryDecimals();
+  return n.toLocaleString('en-US', {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  });
+};
 
 /** Header fields tracked in the audit trail, with the labels operators read. */
 const HEADER_FIELDS: Array<{ key: keyof JournalEntrySnapshot; label: string }> = [

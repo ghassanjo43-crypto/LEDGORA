@@ -204,12 +204,13 @@ describe('view access (route guard)', () => {
     for (const view of [
       'manufacturing-work-orders',
       'manufacturing-bom',
-      'inventory-items',
       'inventory-warehouses',
     ] as const) {
       expect(canAccessView(core, view)).toBe(false);
       expect(canAccessView(mfg, view)).toBe(true);
     }
+    expect(canAccessView(core, 'inventory-items')).toBe(true);
+    expect(canAccessView(mfg, 'inventory-items')).toBe(true);
     // manufacturing customers still cannot reach project/construction views
     expect(canAccessView(mfg, 'projects')).toBe(false);
   });
