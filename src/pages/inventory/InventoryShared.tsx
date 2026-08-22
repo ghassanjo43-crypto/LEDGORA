@@ -26,7 +26,7 @@ export function useItemOptions(onlyTracked = false) {
   return useMemo(
     () =>
       items
-        .filter((i) => i.status !== 'archived' && (!onlyTracked || (i.itemType !== 'service' && i.itemType !== 'non-inventory' && i.isInventoryTracked)))
+        .filter((i) => i.entityId === ENTITY && i.status !== 'archived' && (!onlyTracked || (i.itemType !== 'service' && i.itemType !== 'non-inventory' && i.isInventoryTracked)))
         .map((i) => ({ value: i.id, label: `${i.code} — ${i.name}` })),
     [items, onlyTracked],
   );
@@ -35,7 +35,7 @@ export function useItemOptions(onlyTracked = false) {
 export function useWarehouseOptions() {
   const warehouses = useInventoryStore((s) => s.warehouses);
   return useMemo(
-    () => warehouses.filter((w) => w.status === 'active').map((w) => ({ value: w.id, label: `${w.code} — ${w.name}` })),
+    () => warehouses.filter((w) => w.entityId === ENTITY && w.status === 'active').map((w) => ({ value: w.id, label: `${w.code} — ${w.name}` })),
     [warehouses],
   );
 }
@@ -67,7 +67,7 @@ export interface LedgerRow {
 export function useMovementLedger(filter?: { itemId?: string; warehouseId?: string }): LedgerRow[] {
   const movements = useInventoryStore((s) => s.movements);
   return useMemo(() => {
-    const sorted = ordered(movements.filter((m) => (!filter?.itemId || m.itemId === filter.itemId) && (!filter?.warehouseId || m.warehouseId === filter.warehouseId)));
+    const sorted = ordered(movements.filter((m) => m.entityId === ENTITY && (!filter?.itemId || m.itemId === filter.itemId) && (!filter?.warehouseId || m.warehouseId === filter.warehouseId)));
     const runQty = new Map<string, number>();
     const runVal = new Map<string, number>();
     const rows: LedgerRow[] = [];
