@@ -56,11 +56,46 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Resolve the configured API origin.
+ *
+ * Older local setups pin this to Vite's preferred `:5173` origin so `/api` is
+ * same-origin and travels through the dev proxy. Vite legitimately moves to a
+ * free port when 5173 is occupied; continuing to call the old port then talks
+ * to a different/stale dev server and loses the session bootstrap. In
+ * development only, carry that legacy same-origin setting to the origin that
+ * actually served this page. Explicit API ports (for example `:3000`) and all
+ * deployed origins remain untouched.
+ */
+export function resolveApiBaseUrl(
+  configured: string | undefined,
+  runtimeOrigin: string | undefined,
+  development: boolean,
+): string {
+  const value = (configured ?? '').replace(/\/$/, '');
+  if (!value || !development || !runtimeOrigin) return value;
+
+  try {
+    const configuredUrl = new URL(value);
+    const runtimeUrl = new URL(runtimeOrigin);
+    const localHosts = new Set(['localhost', '127.0.0.1', '::1']);
+    const legacyViteOrigin = localHosts.has(configuredUrl.hostname) && configuredUrl.port === '5173';
+    const servedLocally = localHosts.has(runtimeUrl.hostname);
+    if (legacyViteOrigin && servedLocally && configuredUrl.origin !== runtimeUrl.origin) {
+      return runtimeUrl.origin;
+    }
+  } catch {
+    // Preserve existing handling for relative/custom values.
+  }
+  return value;
+}
+
 /** Configured backend origin. Empty means "no backend configured". */
 export function apiBaseUrl(): string {
   try {
-    const value = (import.meta.env as Record<string, string | undefined>)?.VITE_API_URL ?? '';
-    return value.replace(/\/$/, '');
+    const env = import.meta.env as Record<string, string | boolean | undefined>;
+    const runtimeOrigin = typeof window === 'undefined' ? undefined : window.location.origin;
+    return resolveApiBaseUrl(env?.VITE_API_URL as string | undefined, runtimeOrigin, env?.DEV === true);
   } catch {
     return '';
   }
