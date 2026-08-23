@@ -17,6 +17,8 @@ import { OpeningBalancesPage } from '@/pages/OpeningBalancesPage';
 import { ToastProvider } from '@/components/ui/Toast';
 import { useStore } from '@/store/useStore';
 import { useCompanyStore } from '@/store/companyStore';
+import { useBackendSessionStore } from '@/store/backendSessionStore';
+import { useOperatorViewStore } from '@/store/operatorViewStore';
 
 const API = 'https://api.example.test';
 
@@ -42,12 +44,61 @@ beforeEach(() => {
   vi.stubEnv('VITE_API_URL', API);
   useStore.setState({ activeView: 'opening-balances' });
   useCompanyStore.setState({ companies: [], activeCompanyId: '' });
+  // Default: an ordinary subscriber, nobody being viewed as an administrator.
+  useBackendSessionStore.setState({ platformRoles: [] });
+  useOperatorViewStore.setState({ active: false, organizationId: null, ownerUserId: null });
 });
 
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
+});
+
+/**
+ * A platform administrator is not a subscriber. They hold a role in
+ * `platform_user_roles` and never a workspace membership, so the accounting API
+ * — which resolves the workspace from the caller's OWN membership — can never
+ * serve them. The old behavior asked anyway and rendered the 403 verbatim:
+ * "You do not belong to an organization", which describes a state a subscriber
+ * cannot be in (a subscription cannot exist without a workspace) and so reads
+ * as a fault when it is the design.
+ */
+describe('Opening Balances as a platform administrator', () => {
+  it('sends an administrator with no subscriber selected to the console', async () => {
+    useBackendSessionStore.setState({ platformRoles: ['super_admin'] });
+    const fetchSpy = mockForbidden();
+
+    renderPage();
+
+    expect(await screen.findByText(/No subscriber selected/i)).toBeTruthy();
+    expect(screen.getByText(/no books of your own/i)).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Back to admin console/i })).toBeTruthy();
+    // The misleading message must not appear — and nothing was asked of a
+    // server that could only have answered with it.
+    expect(screen.queryByText(/do not belong to an organization/i)).toBeNull();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('explains that previewing a subscriber does not grant their ledger', async () => {
+    useBackendSessionStore.setState({ platformRoles: ['super_admin'] });
+    useOperatorViewStore.setState({ active: true, organizationId: 'org-1', ownerUserId: 'user-1' });
+    useCompanyStore.setState({
+      companies: [{ id: 'co-1', settings: useStore.getState().settings, accounts: [], entities: [], entries: [] }],
+      activeCompanyId: 'co-1',
+    });
+    const fetchSpy = mockForbidden();
+
+    renderPage();
+
+    expect(await screen.findByText(/Opening balances belong to the subscriber/i)).toBeTruthy();
+    expect(screen.getByText(/cannot be entered from an administrator session/i)).toBeTruthy();
+    // Preview may resolve the workspace, but the ledger is never asked for:
+    // every accounting route reads the caller's own membership.
+    const accountingCalls = fetchSpy.mock.calls.filter(([input]) =>
+      String(input).includes('/api/accounting/'));
+    expect(accountingCalls).toEqual([]);
+  });
 });
 
 describe('Opening Balances with no company', () => {

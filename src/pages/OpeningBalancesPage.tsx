@@ -9,6 +9,9 @@ import { MoneyInput } from '@/components/ui/MoneyInput';
 import { AddCompanyDialog } from '@/components/company/AddCompanyDialog';
 import { useStore } from '@/store/useStore';
 import { useCompanyStore } from '@/store/companyStore';
+import { useRouterStore } from '@/store/routerStore';
+import { useEffectiveOrganizationSync } from '@/store/effectiveOrganization';
+import { ROUTES } from '@/lib/accessControl';
 import { useMonetaryPrecision } from '@/lib/useMonetaryPrecision';
 import { ApiError } from '@/services/api/client';
 import { openingBalancesApi, type OpeningBalanceAccount, type OpeningBalanceLine, type OpeningBalanceRecord } from '@/services/api/openingBalancesApi';
@@ -44,6 +47,17 @@ export function OpeningBalancesPage() {
   const companies = useCompanyStore((s) => s.companies);
   const activeCompanyId = useCompanyStore((s) => s.activeCompanyId);
   const hasCompany = companies.length > 0 && Boolean(activeCompanyId);
+  const context = useEffectiveOrganizationSync();
+  const navigate = useRouterStore((s) => s.navigate);
+  /*
+   * Opening balances belong to a subscriber's books, and the accounting API
+   * derives the workspace from the CALLER'S OWN membership. A platform
+   * administrator has none by construction — they are not a subscriber — so
+   * neither `none` nor `operator` mode can be served here, and asking either
+   * one would only produce a 403 whose message ("You do not belong to an
+   * organization") describes a state a subscriber cannot be in.
+   */
+  const subscriberSurface = context.mode === 'subscriber';
 
   const loadRecord = (next: OpeningBalanceRecord | null): void => {
     setRecord(next);
@@ -60,7 +74,7 @@ export function OpeningBalancesPage() {
   useEffect(() => {
     // Nothing to load until a company is selected; the setup surface is shown
     // instead, and asking the server first would only produce a confusing error.
-    if (!hasCompany) { setLoading(false); return; }
+    if (!hasCompany || !subscriberSurface) { setLoading(false); return; }
     let cancelled = false;
     setLoading(true); setWorkspaceError(null); setError('');
     void Promise.all([openingBalancesApi.current(), openingBalancesApi.accounts()]).then(([current, catalogue]) => {
@@ -76,7 +90,7 @@ export function OpeningBalancesPage() {
     }).finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasCompany, activeCompanyId, reloadToken]);
+  }, [hasCompany, subscriberSurface, activeCompanyId, reloadToken]);
   useEffect(() => { const warn = (event: BeforeUnloadEvent) => { if (dirty) event.preventDefault(); }; window.addEventListener('beforeunload', warn); return () => window.removeEventListener('beforeunload', warn); }, [dirty]);
 
   const populated = Object.values(lines).filter((line) => Number(line.debit) || Number(line.credit));
@@ -107,6 +121,30 @@ export function OpeningBalancesPage() {
   };
   const replace = () => record && run(() => openingBalancesApi.replacement(record.id, payload()));
   const categoryLabel = (type: OpeningBalanceAccount['type']) => type === 'asset' ? 'Assets' : type === 'liability' ? 'Liabilities' : 'Owners equity';
+
+  /*
+   * A platform administrator is not a subscriber: they hold a role in
+   * `platform_user_roles`, never a workspace membership, so they have no books
+   * of their own. Say that, rather than "You do not belong to an organization"
+   * — a subscriber always belongs to one (a subscription cannot exist without a
+   * workspace), so that message describes an impossible state and reads as a
+   * fault when it is the design.
+   */
+  if (context.mode === 'none') return <ConfigurationNotice icon={<Building2 className="h-6 w-6" />}
+    title="No subscriber selected"
+    body="You are signed in as a Ledgora platform administrator, so you have no books of your own — bookkeeping happens inside a subscriber's workspace. Choose a subscriber in the admin console to work on their opening balances."
+    action={<Button variant="secondary" onClick={() => navigate(ROUTES.adminConsole)}>Back to admin console</Button>} />;
+
+  /*
+   * Viewing a subscriber does not make the administrator a member of it. Every
+   * accounting route resolves the workspace from the caller's own membership,
+   * so preview can show the subscriber's configuration but cannot open their
+   * ledger — and opening balances post to that ledger.
+   */
+  if (context.mode === 'operator') return <ConfigurationNotice tone="warning" icon={<TriangleAlert className="h-6 w-6" />}
+    title="Opening balances belong to the subscriber"
+    body={`You are previewing ${context.organizationName ?? 'this subscriber'} as a platform administrator. Opening balances are posted to the subscriber's own ledger by a member of that workspace, so they cannot be entered from an administrator session. Ask the subscriber's owner or an authorized member to enter them.`}
+    action={<Button variant="secondary" onClick={() => navigate(ROUTES.adminConsole)}>Back to admin console</Button>} />;
 
   // Missing configuration is answered here, on the page, with something the user
   // can act on. Neither branch navigates on its own: a redirect out of the
