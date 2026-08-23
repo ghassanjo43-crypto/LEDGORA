@@ -13,6 +13,7 @@ import { useRouterStore } from '@/store/routerStore';
 import { useEffectiveOrganizationSync } from '@/store/effectiveOrganization';
 import { ROUTES } from '@/lib/accessControl';
 import { useMonetaryPrecision } from '@/lib/useMonetaryPrecision';
+import { trimStoredAmount } from '@/lib/monetaryPrecision';
 import { balanceSheetAccounts, importBalanceSheetChart } from '@/lib/chartOfAccountsImport';
 import { accountingApi } from '@/services/api/accountingApi';
 import { ApiError } from '@/services/api/client';
@@ -66,7 +67,14 @@ export function OpeningBalancesPage() {
     if (!next) return;
     setStartDate(next.bookkeepingStartDate); setOpeningDate(next.openingBalanceDate);
     setReference(next.reference); setDescription(next.description);
-    setLines(Object.fromEntries(next.journal.lines.map((line) => [line.accountId, { accountId: line.accountId, debit: Number(line.debit) ? line.debit : '', credit: Number(line.credit) ? line.credit : '', memo: line.memo }])));
+    /*
+     * The server stores money as `numeric(28,10)` and PostgreSQL returns every
+     * one of those decimals, so an amount arrives as "100.0000000000". Trim to
+     * the currency before it reaches an input, or a two-decimal currency shows
+     * ten.
+     */
+    const show = (amount: string): string => (Number(amount) ? trimStoredAmount(amount, decimals) : '');
+    setLines(Object.fromEntries(next.journal.lines.map((line) => [line.accountId, { accountId: line.accountId, debit: show(line.debit), credit: show(line.credit), memo: line.memo }])));
     setDirty(false);
   };
 

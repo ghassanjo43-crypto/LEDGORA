@@ -232,3 +232,38 @@ export function validateMonetaryDecimals(
 export function validateCompanyMonetaryDecimals(value: string | number): MonetaryPrecisionCheck {
   return validateMonetaryDecimals(value, companyCurrencyCode());
 }
+
+/**
+ * An amount as the server stored it, rendered for a field a person types in.
+ *
+ * ── The problem this solves ──────────────────────────────────────────────────
+ * The server's ledger columns are `numeric(28,10)`, and that scale is what keeps
+ * its arithmetic exact. But PostgreSQL returns every one of those decimals, so
+ * an amount comes back as `100.0000000000` — and a form that puts the stored
+ * string straight into an input shows ten decimal places to somebody whose
+ * currency has two.
+ *
+ * The scale is a storage decision and stays one. This is the display side of
+ * that boundary, and it lives here rather than on the server because the server
+ * deliberately treats precision as a POSTING rule and not a formatting one —
+ * see the note in `services/accounting/currencyPrecision.ts`.
+ *
+ * ── Why it will not hide a digit ─────────────────────────────────────────────
+ * Trailing zeros are dropped only down to `decimals`, never past a digit that is
+ * not zero. Posting refuses an over-precise amount, so one should never exist;
+ * if it somehow does, showing it is the honest failure. Rounding it away would
+ * display a figure nobody wrote and make the discrepancy invisible.
+ */
+export function trimStoredAmount(value: string | number | null | undefined, decimals: number): string {
+  const text = typeof value === 'number' ? String(value) : (value ?? '').trim();
+  if (text === '') return '';
+  const negative = text.startsWith('-');
+  const [whole = '0', fraction = ''] = (negative ? text.slice(1) : text).split('.');
+  const floor = Math.max(0, Math.trunc(decimals));
+
+  let end = fraction.length;
+  while (end > floor && fraction[end - 1] === '0') end -= 1;
+  const kept = fraction.slice(0, end).padEnd(Math.min(floor, fraction.length), '0');
+
+  return `${negative ? '-' : ''}${whole}${kept.length > 0 ? `.${kept}` : ''}`;
+}

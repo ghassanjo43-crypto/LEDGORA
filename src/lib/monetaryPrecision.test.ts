@@ -363,3 +363,45 @@ describe('concepts that are not monetary precision', () => {
     expect(round2(12.3456)).toBe(12.35);
   });
 });
+
+/**
+ * Ten decimals are storage, not presentation.
+ *
+ * The server's ledger columns are `numeric(28,10)` — the scale is what keeps
+ * its arithmetic exact — and PostgreSQL hands every one of those decimals back
+ * on read. Opening Balances put the stored string straight into its amount
+ * fields, so a subscriber whose currency has two decimals saw `100.0000000000`
+ * in every one of them.
+ */
+describe('rendering a stored amount into an input', () => {
+  it('trims the storage scale to the currency, not to a fixed two', async () => {
+    const { trimStoredAmount } = await import('@/lib/monetaryPrecision');
+    // Exactly what PostgreSQL returns for a numeric(28,10) column.
+    expect(trimStoredAmount('100.0000000000', 2)).toBe('100.00');
+    expect(trimStoredAmount('100.0000000000', 3)).toBe('100.000');
+    expect(trimStoredAmount('1500.0000000000', 0)).toBe('1500');
+  });
+
+  it('keeps a digit the currency has no room for rather than hiding it', async () => {
+    /*
+     * Posting refuses an over-precise amount, so this should not exist. If one
+     * ever does, showing it is the honest failure — rounding it away would
+     * display a figure nobody wrote and make the discrepancy invisible.
+     */
+    const { trimStoredAmount } = await import('@/lib/monetaryPrecision');
+    expect(trimStoredAmount('100.1234000000', 2)).toBe('100.1234');
+  });
+
+  it('preserves value and sign, and leaves an empty field empty', async () => {
+    const { trimStoredAmount } = await import('@/lib/monetaryPrecision');
+    expect(trimStoredAmount('-42.5000000000', 2)).toBe('-42.50');
+    expect(trimStoredAmount('0.0010000000', 3)).toBe('0.001');
+    expect(trimStoredAmount('', 2)).toBe('');
+    expect(trimStoredAmount(null, 2)).toBe('');
+  });
+
+  it('never invents precision the ledger did not store', async () => {
+    const { trimStoredAmount } = await import('@/lib/monetaryPrecision');
+    expect(trimStoredAmount('1.5', 4)).toBe('1.5');
+  });
+});
