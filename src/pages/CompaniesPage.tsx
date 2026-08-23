@@ -90,14 +90,14 @@ export function CompaniesPage() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold text-slate-900 dark:text-white">Entities</h1>
+          <h1 className="text-2xl font-semibold text-slate-900 dark:text-white">Companies</h1>
           <p className="text-sm text-slate-500">
-            Each entity is a separate set of books. Your package allows {allowance}{' '}
+            Each company is a separate entity — its own set of books. Your package allows {allowance}{' '}
             active {allowance === 1 ? 'entity' : 'entities'}. Deactivating frees a slot and archiving retires an entity —
             both keep every record, and an entity must be archived before it can be deleted.
           </p>
         </div>
-        <Button disabled={atLimit} onClick={() => setAddOpen(true)}>Add entity</Button>
+        <Button disabled={atLimit} onClick={() => setAddOpen(true)}>Add company</Button>
       </div>
 
       {atLimit && (
@@ -114,8 +114,8 @@ export function CompaniesPage() {
           description="Open an entity to work in its books, deactivate one you are not using, or archive one you have finished with."
           actions={
             <Input
-              aria-label="Search entities"
-              placeholder="Search by name"
+              aria-label="Search companies"
+              placeholder="Search companies"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
@@ -124,13 +124,13 @@ export function CompaniesPage() {
         <CardBody className="p-0">
           {rows.length === 0 ? (
             <p className="px-4 py-8 text-center text-sm text-slate-500">
-              {companies.length === 0 ? 'No entities yet.' : 'No entity matches that search.'}
+              {companies.length === 0 ? 'No companies yet.' : 'No company matches that search.'}
             </p>
           ) : (
             <table className="w-full min-w-[640px] text-sm">
               <thead className="bg-slate-50 text-left text-xs uppercase text-slate-500 dark:bg-slate-800">
                 <tr>
-                  <th className="px-4 py-3">Entity</th>
+                  <th className="px-4 py-3">Company</th>
                   <th>Base currency</th>
                   <th>Status</th>
                   <th className="px-4 text-right">Actions</th>
