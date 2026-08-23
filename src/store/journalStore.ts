@@ -369,7 +369,21 @@ export interface PostedEntryInput {
 export const useJournalStore = create<JournalState>()(
   persist(
     (set, get) => ({
-      entries: SEED_JOURNAL_ENTRIES,
+      /*
+       * EMPTY, not the demo fixtures.
+       *
+       * A new organization's journal has nothing in it — that is what "new"
+       * means for a set of books. Defaulting to `SEED_JOURNAL_ENTRIES` meant
+       * any path that did not explicitly clear the store showed a real
+       * subscriber ten demo transactions, with balances that flow straight
+       * into the trial balance, the ledger and every financial statement.
+       *
+       * The demo workspace still gets its fixtures: `resetBusinessWorkspace`
+       * calls `resetToDefault()` below, which seeds deliberately. Seeding is
+       * now something the demo asks for rather than something every tenant has
+       * to remember to undo.
+       */
+      entries: [],
 
       addEntry: (values, options) => {
         // Subscription gate: a suspended/expired subscription blocks new
@@ -1091,10 +1105,24 @@ export const useJournalStore = create<JournalState>()(
       name: 'ifrs-journal-store', storage: businessJSONStorage,
       version: 3,
       partialize: (state) => ({ entries: state.entries }),
-      // v3 refreshes the demo dataset to the 10 seeded dummy transactions
-      // (9 posted + 1 draft). Once the store is written at v3, the persisted
-      // entries are kept as-is on subsequent loads.
-      migrate: (_persisted, _version) => ({ entries: SEED_JOURNAL_ENTRIES.map((e) => ({ ...e })) }),
+      /*
+       * Carry the books forward. Never replace them.
+       *
+       * This previously ignored both arguments and returned the demo dataset,
+       * so a version bump did not migrate a tenant's journal — it DELETED it
+       * and left ten dummy transactions in its place. Zustand runs `migrate`
+       * whenever the stored version differs from the one above, including when
+       * a store was written before versioning, so the loss was silent and
+       * needed no action from the account holder to trigger.
+       *
+       * Entries are re-normalised on the way through, which is what a
+       * migration is actually for: a shape written by an older build is
+       * brought up to date, and its contents are kept.
+       */
+      migrate: (persisted) => {
+        const entries = (persisted as { entries?: unknown } | undefined)?.entries;
+        return { entries: Array.isArray(entries) ? entries.map(normalizeEntry) : [] };
+      },
     },
   ),
 );
