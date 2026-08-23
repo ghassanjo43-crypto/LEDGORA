@@ -517,7 +517,7 @@ export interface SubscriberDeletionTombstonesTable {
   /** The aggregate of the three above. */
   outcome: string;
   failure_summary: string | null;
-  created_at: Generated<Timestamp>;
+  created_at: Timestamp;
 }
 
 /** Durable intent to delete an external object. Written before the row naming it. */
@@ -533,7 +533,7 @@ export interface FileCleanupQueueTable {
   last_error: string | null;
   last_attempted_at: Timestamp | null;
   completed_at: Timestamp | null;
-  created_at: Generated<Timestamp>;
+  created_at: Timestamp;
 }
 
 /** One confirmed cleanup run. Makes a replayed confirmation idempotent. */
@@ -546,7 +546,7 @@ export interface CleanupOperationsTable {
   previewed_at: Timestamp;
   status: Generated<'pending' | 'completed' | 'failed'>;
   result: ColumnType<Record<string, unknown> | null, string | null | undefined, string | null>;
-  created_at: Generated<Timestamp>;
+  created_at: Timestamp;
   completed_at: Timestamp | null;
 }
 
@@ -595,6 +595,11 @@ export interface Database {
   journal_entry_versions: JournalEntryVersionsTable;
   accounting_audit_events: AccountingAuditEventsTable;
   opening_balance_sets: OpeningBalanceSetsTable;
+  invoices: InvoicesTable;
+  invoice_lines: InvoiceLinesTable;
+  invoice_payments: InvoicePaymentsTable;
+  invoice_numbering: InvoiceNumberingTable;
+  invoice_audit_events: InvoiceAuditEventsTable;
 }
 
 
@@ -752,3 +757,146 @@ export type User = Selectable<UsersTable>;
 export type NewUser = Insertable<UsersTable>;
 export type UserUpdate = Updateable<UsersTable>;
 export type AuthSession = Selectable<AuthSessionsTable>;
+
+
+/* ══ Phase B — sales invoices ═════════════════════════════════════════════════
+ *
+ * Money is `string` here for the same reason it is in the ledger: PostgreSQL
+ * returns NUMERIC as a string so an exact decimal is never pushed through a
+ * float, and this schema keeps that promise up to the service layer.
+ *
+ * `issuing_entity_id`, `customer_id` and the dimension ids are plain strings
+ * rather than typed references — the business-entity, project and cost-center
+ * directories are still browser-resident. See migration 019.
+ */
+
+/** Sales-invoice lifecycle. Distinct from the billing `InvoiceStatus` above. */
+export type SalesInvoiceStatus =
+  | 'draft'
+  | 'approved'
+  | 'issued'
+  | 'sent'
+  | 'partially-paid'
+  | 'paid'
+  | 'void';
+
+export type InvoiceDiscountType = 'percentage' | 'amount';
+
+export type InventoryFulfillmentMode = 'none' | 'issue-on-invoice' | 'delivered-separately';
+
+export interface InvoicesTable {
+  id: Generated<string>;
+  organization_id: string;
+  issuing_entity_id: string;
+  customer_id: string;
+  invoice_number: string;
+  status: Generated<SalesInvoiceStatus>;
+  issue_date: string;
+  due_date: string;
+  transaction_currency: string;
+  functional_currency: string;
+  exchange_rate: Generated<string>;
+  purchase_order_reference: Generated<string>;
+  customer_reference: Generated<string>;
+  salesperson_id: string | null;
+  project_id: string | null;
+  cost_center_id: string | null;
+  template_id: string | null;
+  template_version_id: string | null;
+  template_resolution_source: string | null;
+  /** Frozen presentation, so a reprint matches what the customer received. */
+  template_snapshot: ColumnType<unknown, string | null, string | null>;
+  subtotal: Generated<string>;
+  discount_total: Generated<string>;
+  tax_total: Generated<string>;
+  additional_charges_total: Generated<string>;
+  grand_total: Generated<string>;
+  amount_paid: Generated<string>;
+  credits_applied: Generated<string>;
+  balance_due: Generated<string>;
+  notes: Generated<string>;
+  terms: Generated<string>;
+  payment_terms: Generated<string>;
+  journal_entry_id: string | null;
+  reversal_journal_entry_id: string | null;
+  void_reason: string | null;
+  issued_at: Timestamp | null;
+  sent_at: Timestamp | null;
+  paid_at: Timestamp | null;
+  voided_at: Timestamp | null;
+  version: Generated<number>;
+  created_by: string | null;
+  updated_by: string | null;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+}
+
+export interface InvoiceLinesTable {
+  id: Generated<string>;
+  organization_id: string;
+  invoice_id: string;
+  line_number: number;
+  account_id: string;
+  item_id: string | null;
+  description: Generated<string>;
+  quantity: Generated<string>;
+  unit: Generated<string>;
+  unit_price: Generated<string>;
+  discount_type: InvoiceDiscountType | null;
+  discount_value: string | null;
+  /**
+   * The code AND the rate and amount it produced. A tax code's rate is
+   * effective-dated; an invoice must keep reporting the tax it actually
+   * charged, not what the code says today.
+   */
+  tax_code_id: string | null;
+  tax_rate: Generated<string>;
+  tax_amount: Generated<string>;
+  line_subtotal: Generated<string>;
+  line_total: Generated<string>;
+  entity_id: string | null;
+  project_id: string | null;
+  cost_center_id: string | null;
+  cost_center_assignments: ColumnType<unknown, string | null, string | null>;
+  inventory_item_id: string | null;
+  warehouse_id: string | null;
+  inventory_fulfillment_mode: InventoryFulfillmentMode | null;
+  issued_unit_cost: string | null;
+  created_at: Timestamp;
+}
+
+export interface InvoicePaymentsTable {
+  id: Generated<string>;
+  organization_id: string;
+  invoice_id: string;
+  paid_on: string;
+  amount: string;
+  method: Generated<string>;
+  reference: Generated<string>;
+  bank_account_id: string | null;
+  journal_entry_id: string | null;
+  receipt_id: string | null;
+  created_by: string | null;
+  created_at: Timestamp;
+}
+
+export interface InvoiceNumberingTable {
+  organization_id: string;
+  issuing_entity_id: string;
+  prefix: Generated<string>;
+  include_year: Generated<boolean>;
+  sequence_length: Generated<number>;
+  /** Held, never derived: a counted sequence reuses a number after a deletion. */
+  next_sequence: Generated<number>;
+  updated_at: Timestamp;
+}
+
+export interface InvoiceAuditEventsTable {
+  id: Generated<string>;
+  organization_id: string;
+  invoice_id: string;
+  action: string;
+  detail: Generated<string>;
+  actor_user_id: string | null;
+  occurred_at: Timestamp;
+}

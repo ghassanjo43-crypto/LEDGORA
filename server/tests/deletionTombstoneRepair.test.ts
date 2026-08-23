@@ -112,8 +112,10 @@ async function breakTable(options: { unrecordMigration: boolean; keepColumns?: b
     await sql`DROP INDEX IF EXISTS organizations_subscriber_owner_unique`.execute(ctx.db);
     await sql`ALTER TABLE organizations DROP CONSTRAINT IF EXISTS organizations_subscriber_owner_fk`.execute(ctx.db);
     await sql`ALTER TABLE organizations DROP COLUMN IF EXISTS subscriber_owner_user_id`.execute(ctx.db);
-    await sql`DROP TABLE IF EXISTS opening_balance_sets, accounting_audit_events, journal_entry_versions,
-              journal_lines, journal_entries, accounts, accounting_periods CASCADE`.execute(ctx.db);
+    await sql`DROP TABLE IF EXISTS invoice_audit_events, invoice_payments, invoice_lines,
+              invoice_numbering, invoices, opening_balance_sets, accounting_audit_events,
+              journal_entry_versions, journal_lines, journal_entries, accounts,
+              accounting_periods CASCADE`.execute(ctx.db);
   }
 }
 

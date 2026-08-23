@@ -28,6 +28,7 @@ import { adminUserRoutes } from './routes/adminUsers.js';
 import { adminClosureRoutes } from './routes/adminClosure.js';
 import { orgAdminUserRoutes } from './routes/orgAdminUsers.js';
 import { accountingRoutes } from './routes/accounting.js';
+import { invoiceRoutes } from './routes/invoices.js';
 import { decoratePermissions } from './guards/permissions.js';
 import { enforcePersistenceEntitlement } from './guards/persistence.js';
 import { enforcePasswordChange } from './guards/passwordChange.js';
@@ -248,6 +249,7 @@ export async function buildApp({
   await app.register(adminClosureRoutes);
   await app.register(orgAdminUserRoutes);
   await app.register(accountingRoutes);
+  await app.register(invoiceRoutes);
   if (extraRoutes) await extraRoutes(app);
 
   return app;

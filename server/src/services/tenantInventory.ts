@@ -216,6 +216,60 @@ export const TENANT_DEPENDENCIES: readonly TenantDependency[] = [
     crossTenantReachable: false,
     rationale: 'The postings themselves; meaningless without the entry they belong to.',
   },
+  /*
+   * Sales invoices — migration 019. Ordered before the journal entries and
+   * accounts they reference, children ahead of their parents.
+   */
+  {
+    table: 'invoice_audit_events',
+    ownershipKey: 'organization_id',
+    kind: 'authoritative',
+    disposition: 'delete',
+    order: 40.1,
+    label: 'Invoice audit events',
+    crossTenantReachable: false,
+    rationale: 'The history of a tenant invoice; meaningless once that invoice is gone.',
+  },
+  {
+    table: 'invoice_payments',
+    ownershipKey: 'organization_id',
+    kind: 'authoritative',
+    disposition: 'delete',
+    order: 40.2,
+    label: 'Invoice payments',
+    crossTenantReachable: false,
+    rationale: 'Owned through its invoice; deleted before the journal entries it references.',
+  },
+  {
+    table: 'invoice_lines',
+    ownershipKey: 'organization_id',
+    kind: 'authoritative',
+    disposition: 'delete',
+    order: 40.3,
+    label: 'Invoice lines',
+    crossTenantReachable: false,
+    rationale: 'Owned through its invoice; deleted before the accounts each line points at.',
+  },
+  {
+    table: 'invoice_numbering',
+    ownershipKey: 'organization_id',
+    kind: 'authoritative',
+    disposition: 'delete',
+    order: 40.4,
+    label: 'Invoice numbering',
+    crossTenantReachable: false,
+    rationale: 'Per-entity document sequences. Nothing references them.',
+  },
+  {
+    table: 'invoices',
+    ownershipKey: 'organization_id',
+    kind: 'authoritative',
+    disposition: 'delete',
+    order: 40.5,
+    label: 'Sales invoices',
+    crossTenantReachable: false,
+    rationale: 'Tenant sales documents; deleted before the journal entries they posted.',
+  },
   {
     table: 'opening_balance_sets',
     ownershipKey: 'organization_id',
@@ -362,6 +416,12 @@ export const DELETION_SEQUENCE = TENANT_DEPENDENCIES.filter((d) => d.disposition
  * separately.
  */
 export const DIRECTLY_OWNED_TABLES = [
+  /* Sales invoices, children first — see migration 019. */
+  'invoice_audit_events',
+  'invoice_payments',
+  'invoice_lines',
+  'invoice_numbering',
+  'invoices',
   'accounting_audit_events',
   'journal_entry_versions',
   'journal_lines',

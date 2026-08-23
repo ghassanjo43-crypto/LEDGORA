@@ -281,6 +281,45 @@ const RESET_PLAN: readonly PlanEntry[] = [
     label: 'Journal lines',
     why: 'Deleted before their entries and before the accounts they point at.',
   },
+  /*
+   * Sales invoices, children before parents and all of them before the journal
+   * entries and accounts they reference — see migration 019.
+   */
+  {
+    table: 'invoice_audit_events',
+    action: 'scoped_delete',
+    order: 30.1,
+    label: 'Invoice audit events',
+    why: 'Deleted before the invoices and users they reference.',
+  },
+  {
+    table: 'invoice_payments',
+    action: 'scoped_delete',
+    order: 30.2,
+    label: 'Invoice payments',
+    why: 'Deleted before the invoices and journal entries they reference.',
+  },
+  {
+    table: 'invoice_lines',
+    action: 'scoped_delete',
+    order: 30.3,
+    label: 'Invoice lines',
+    why: 'Deleted before their invoices and before the accounts they point at.',
+  },
+  {
+    table: 'invoice_numbering',
+    action: 'scoped_delete',
+    order: 30.4,
+    label: 'Invoice numbering',
+    why: 'Per-entity document sequences. Nothing references them.',
+  },
+  {
+    table: 'invoices',
+    action: 'scoped_delete',
+    order: 30.5,
+    label: 'Sales invoices',
+    why: 'Deleted before the journal entries and users they reference.',
+  },
   {
     table: 'opening_balance_sets',
     action: 'scoped_delete',
