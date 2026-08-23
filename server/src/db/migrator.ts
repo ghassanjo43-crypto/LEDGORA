@@ -28,6 +28,7 @@ import * as commercialPackageCatalogue from './migrations/014_commercial_package
 import * as accountPostingStates from './migrations/015_account_posting_states.js';
 import * as openingBalances from './migrations/016_opening_balances.js';
 import * as immutableSubscriberOwnership from './migrations/017_immutable_subscriber_ownership.js';
+import * as packageModuleRepair from './migrations/018_package_module_repair.js';
 
 const MIGRATIONS: Record<string, Migration> = {
   '001_initial_schema': initialSchema,
@@ -47,6 +48,7 @@ const MIGRATIONS: Record<string, Migration> = {
   '015_account_posting_states': accountPostingStates,
   '016_opening_balances': openingBalances,
   '017_immutable_subscriber_ownership': immutableSubscriberOwnership,
+  '018_package_module_repair': packageModuleRepair,
 };
 
 class StaticMigrationProvider implements MigrationProvider {

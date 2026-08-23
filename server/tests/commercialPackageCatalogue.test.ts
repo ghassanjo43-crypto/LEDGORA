@@ -16,7 +16,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { sql } from 'kysely';
 import { createTestContext, type TestContext } from './helpers/testApp.js';
-import { findSubject } from '../src/config/permissionCatalog.js';
+import { PERMISSION_SUBJECTS, findSubject } from '../src/config/permissionCatalog.js';
+import { PACKAGE_CODES, allSoldModules, modulesForPackage, type PackageCode } from '../src/config/packageCatalogue.js';
 
 let ctx: TestContext;
 
@@ -101,6 +102,79 @@ describe('the seeded catalogue', () => {
   it('keeps every code unique', async () => {
     const codes = (await plans()).map((p) => p.code);
     expect(new Set(codes).size).toBe(codes.length);
+  });
+
+  it('never gates a permission subject on a module no package sells', async () => {
+    /*
+     * The invariant `fixed_assets` broke. It had a module, a navigation group
+     * and its own edition tier, but appeared in no package's module list — so
+     * every Fixed Assets permission resolved "not in package" for every
+     * subscriber, Enterprise included. Stated generally: a subject gated on a
+     * module nobody can buy is a feature that is visible everywhere and
+     * permitted nowhere.
+     */
+    const sold = new Set(allSoldModules());
+    const unreachable = PERMISSION_SUBJECTS
+      .filter((subject) => subject.requiredModule !== null && !sold.has(subject.requiredModule))
+      .map((subject) => `${subject.id} (needs ${subject.requiredModule})`);
+    expect(unreachable, 'no package sells the module these subjects require').toEqual([]);
+  });
+
+  it('sells every module the canonical catalogue says each package includes', async () => {
+    const { rows } = await sql<{ code: string; modules: string[] }>`
+      SELECT code, module_entitlements AS modules FROM subscription_plans
+       WHERE code = ANY(${sql.raw(`ARRAY[${PACKAGE_CODES.map((c) => `'${c}'`).join(',')}]`)})
+    `.execute(ctx.db);
+    expect(rows).toHaveLength(PACKAGE_CODES.length);
+
+    for (const row of rows) {
+      const missing = modulesForPackage(row.code as PackageCode)
+        .filter((module) => !row.modules.includes(module));
+      expect(missing, `${row.code} is missing entitlements it is sold with`).toEqual([]);
+    }
+  });
+
+  it('includes the asset register and currency master data in every package', async () => {
+    /*
+     * Both ship in the Core edition of the frontend registry, so both must be
+     * sellable from Core upwards. `multi_currency` is the coarse id behind
+     * currency MASTER DATA; advanced FX is `currency_advanced`, a different
+     * module this says nothing about.
+     */
+    const { rows } = await sql<{ code: string; modules: string[] }>`
+      SELECT code, module_entitlements AS modules
+        FROM subscription_plans WHERE is_public AND is_active
+    `.execute(ctx.db);
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      expect(row.modules, `${row.code} must sell the asset register`).toContain('fixed_assets');
+      expect(row.modules, `${row.code} must sell currency master data`).toContain('multi_currency');
+    }
+  });
+
+  it('does not leave an entitlement cache that still hides a restored module', async () => {
+    /*
+     * `organization_entitlements` is a derived cache and `getEntitlements`
+     * prefers it to recomputation, so repairing the plans alone would fix
+     * nothing for an existing subscriber. Any cached row that no longer covers
+     * its own plan's modules must be gone, so the next read rebuilds it.
+     */
+    const { rows } = await sql<{ organization_id: string; plan_code: string }>`
+      SELECT e.organization_id, e.plan_code
+        FROM organization_entitlements e
+        JOIN subscription_plans p ON p.id = e.plan_id
+       WHERE NOT (e.modules @> p.module_entitlements)
+    `.execute(ctx.db);
+    expect(rows, 'cached entitlements narrower than the plan they name').toEqual([]);
+  });
+
+  it('sells cost centers with manufacturing, which structurally depends on them', async () => {
+    // `manufacturing_core` and `manufacturing_work_centers` both declare a
+    // dependency on cost centers; a work center has nowhere to post without one.
+    const { rows } = await sql<{ modules: string[] }>`
+      SELECT module_entitlements AS modules FROM subscription_plans WHERE code = 'manufacturing'
+    `.execute(ctx.db);
+    expect(rows[0]!.modules).toContain('cost_centers');
   });
 
   it('entitles opening balances in every paid package', async () => {
