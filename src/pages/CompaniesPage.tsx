@@ -11,11 +11,17 @@
  * The package caps how many entities may be ACTIVE at once. Deactivating frees
  * a slot and keeps every record exactly where it is, so a subscriber on a
  * one-entity package can hold several years or several businesses and work in
- * one at a time. Nothing here deletes anything; deletion stays where it was.
+ * one at a time.
+ *
+ * ── Destruction is staged ────────────────────────────────────────────────────
+ * Archive, then delete — never one click. An archived entity keeps every
+ * record and can be restored; only an archived one may be deleted, and that
+ * asks again before it does. These books live in this browser and nowhere
+ * else, so there is no copy to recover from afterwards.
  */
 import { useState } from 'react';
-import { Building2, Power, PowerOff, LogIn } from 'lucide-react';
-import { useCompanyStore, isActiveEntity, activeEntityCount, entityAllowance } from '@/store/companyStore';
+import { Building2, Power, PowerOff, LogIn, Archive, ArchiveRestore, Trash2 } from 'lucide-react';
+import { useCompanyStore, entityStatus, activeEntityCount, entityAllowance, type EntityStatus } from '@/store/companyStore';
 import { useStore } from '@/store/useStore';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -25,17 +31,34 @@ import { Input } from '@/components/ui/Input';
 import { useToast } from '@/components/ui/Toast';
 import { AddCompanyDialog } from '@/components/company/AddCompanyDialog';
 
+const STATUS_LABEL: Record<EntityStatus, string> = {
+  active: 'Active',
+  inactive: 'Deactivated',
+  archived: 'Archived',
+};
+
+const STATUS_TONE: Record<EntityStatus, 'green' | 'slate' | 'amber'> = {
+  active: 'green',
+  inactive: 'slate',
+  archived: 'amber',
+};
+
 export function CompaniesPage() {
   const companies = useCompanyStore((s) => s.companies);
   const activeCompanyId = useCompanyStore((s) => s.activeCompanyId);
   const switchCompany = useCompanyStore((s) => s.switchCompany);
   const activateCompany = useCompanyStore((s) => s.activateCompany);
   const deactivateCompany = useCompanyStore((s) => s.deactivateCompany);
+  const archiveCompany = useCompanyStore((s) => s.archiveCompany);
+  const restoreCompany = useCompanyStore((s) => s.restoreCompany);
+  const deleteCompany = useCompanyStore((s) => s.deleteCompany);
   const liveSettings = useStore((s) => s.settings);
   const { notify } = useToast();
 
   const [query, setQuery] = useState('');
   const [addOpen, setAddOpen] = useState(false);
+  /* Deletion is irreversible and there is no server copy, so it is confirmed in place. */
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
 
   const allowance = entityAllowance();
   const used = activeEntityCount(companies);
@@ -54,7 +77,7 @@ export function CompaniesPage() {
       id: company.id,
       name: nameOf(company.id, company.settings.companyName),
       currency: company.id === activeCompanyId ? liveSettings.baseCurrency : company.settings.baseCurrency,
-      active: isActiveEntity(company),
+      status: entityStatus(company),
       open: company.id === activeCompanyId,
     }))
     .filter((row) => row.name.toLowerCase().includes(query.trim().toLowerCase()));
@@ -70,7 +93,8 @@ export function CompaniesPage() {
           <h1 className="text-2xl font-semibold text-slate-900 dark:text-white">Entities</h1>
           <p className="text-sm text-slate-500">
             Each entity is a separate set of books. Your package allows {allowance}{' '}
-            active {allowance === 1 ? 'entity' : 'entities'}; deactivating one keeps its records and frees a slot.
+            active {allowance === 1 ? 'entity' : 'entities'}. Deactivating frees a slot and archiving retires an entity —
+            both keep every record, and an entity must be archived before it can be deleted.
           </p>
         </div>
         <Button disabled={atLimit} onClick={() => setAddOpen(true)}>Add entity</Button>
@@ -87,7 +111,7 @@ export function CompaniesPage() {
       <Card>
         <CardHeader
           title={`${used} of ${allowance} active`}
-          description="Open an entity to work in its books, or deactivate one you are not using."
+          description="Open an entity to work in its books, deactivate one you are not using, or archive one you have finished with."
           actions={
             <Input
               aria-label="Search entities"
@@ -124,16 +148,16 @@ export function CompaniesPage() {
                     </td>
                     <td className="text-slate-500">{row.currency}</td>
                     <td>
-                      <Badge tone={row.active ? 'green' : 'slate'}>{row.active ? 'Active' : 'Deactivated'}</Badge>
+                      <Badge tone={STATUS_TONE[row.status]}>{STATUS_LABEL[row.status]}</Badge>
                     </td>
                     <td className="px-4 py-2">
-                      <div className="flex justify-end gap-2">
-                        {row.active && !row.open && (
+                      <div className="flex flex-wrap justify-end gap-2">
+                        {row.status === 'active' && !row.open && (
                           <Button size="sm" variant="outline" onClick={() => act(switchCompany(row.id), `Opened ${row.name}.`)}>
                             <LogIn className="h-4 w-4" /> Open
                           </Button>
                         )}
-                        {row.active ? (
+                        {row.status === 'active' && (
                           <Button
                             size="sm"
                             variant="outline"
@@ -145,7 +169,8 @@ export function CompaniesPage() {
                           >
                             <PowerOff className="h-4 w-4" /> Deactivate
                           </Button>
-                        ) : (
+                        )}
+                        {row.status === 'inactive' && (
                           <Button
                             size="sm"
                             variant="outline"
@@ -155,6 +180,40 @@ export function CompaniesPage() {
                           >
                             <Power className="h-4 w-4" /> Activate
                           </Button>
+                        )}
+                        {row.status !== 'archived' ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={row.open}
+                            title={row.open ? 'Open another entity first' : undefined}
+                            onClick={() => act(archiveCompany(row.id), `${row.name} archived. Its records are kept and it can be restored.`)}
+                          >
+                            <Archive className="h-4 w-4" /> Archive
+                          </Button>
+                        ) : (
+                          <>
+                            <Button size="sm" variant="outline" onClick={() => act(restoreCompany(row.id), `${row.name} restored, deactivated. Activate it to open its books.`)}>
+                              <ArchiveRestore className="h-4 w-4" /> Restore
+                            </Button>
+                            {/*
+                              * Delete is reachable ONLY from archived, and only
+                              * after a second, explicit confirmation: these books
+                              * exist in this browser and nowhere else.
+                              */}
+                            {confirmDelete === row.id ? (
+                              <>
+                                <Button size="sm" variant="danger" onClick={() => { act(deleteCompany(row.id), `${row.name} deleted.`); setConfirmDelete(null); }}>
+                                  Delete permanently
+                                </Button>
+                                <Button size="sm" variant="ghost" onClick={() => setConfirmDelete(null)}>Cancel</Button>
+                              </>
+                            ) : (
+                              <Button size="sm" variant="ghost" onClick={() => setConfirmDelete(row.id)}>
+                                <Trash2 className="h-4 w-4" /> Delete
+                              </Button>
+                            )}
+                          </>
                         )}
                       </div>
                     </td>

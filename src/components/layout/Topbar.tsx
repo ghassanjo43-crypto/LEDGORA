@@ -14,7 +14,6 @@ import {
   UserCog,
   ChevronsUpDown,
   Plus,
-  Trash2,
   KeyRound,
 } from 'lucide-react';
 import { useStore } from '@/store/useStore';
@@ -97,7 +96,6 @@ export function Topbar({
   const companies = useCompanyStore((s) => s.companies);
   const activeCompanyId = useCompanyStore((s) => s.activeCompanyId);
   const switchCompany = useCompanyStore((s) => s.switchCompany);
-  const deleteCompany = useCompanyStore((s) => s.deleteCompany);
 
   const [companyQuery, setCompanyQuery] = useState('');
   const [addOpen, setAddOpen] = useState(false);
@@ -172,16 +170,12 @@ export function Topbar({
                     <span className="flex-1 truncate">{c.name}</span>
                     {active && <Check className="h-4 w-4 shrink-0 text-brand-500" />}
                   </button>
-                  {!active && companies.length > 1 && (
-                    <button
-                      type="button"
-                      onClick={() => deleteCompany(c.id)}
-                      title="Delete company"
-                      className="focus-ring flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-slate-400 opacity-0 transition-opacity hover:bg-red-50 hover:text-red-600 group-hover:opacity-100 dark:hover:bg-red-500/10"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
-                  )}
+                  {/*
+                    * Deleting from here used to be one hover and one click, on
+                    * books that exist in this browser and nowhere else. An
+                    * entity must now be archived first, and both steps live on
+                    * the Entities page where the consequence is stated.
+                    */}
                 </div>
               );
             })

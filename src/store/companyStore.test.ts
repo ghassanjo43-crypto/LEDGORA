@@ -51,11 +51,16 @@ describe('company store (multi-company books isolation)', () => {
     expect(useCompanyStore.getState().deleteCompany(active).ok).toBe(false);
 
     const beta = useCompanyStore.getState().addCompany({ companyName: 'Beta Co' }, true).id!;
-    // active is now beta; delete the first one (allowed)
+    // Active is now Beta. Deleting the first one is a TWO-step act: these books
+    // live in this browser and nowhere else, so it must be archived first.
+    // See `entityActivation.test.ts` for the staging rules themselves.
+    expect(useCompanyStore.getState().deleteCompany(active).ok).toBe(false);
+    expect(useCompanyStore.getState().archiveCompany(active).ok).toBe(true);
+
     const del = useCompanyStore.getState().deleteCompany(active);
     expect(del.ok).toBe(true);
     expect(useCompanyStore.getState().companies).toHaveLength(1);
-    // now only beta remains and is active → cannot delete
+    // Now only Beta remains and is active → cannot delete.
     expect(useCompanyStore.getState().deleteCompany(beta).ok).toBe(false);
   });
 });
