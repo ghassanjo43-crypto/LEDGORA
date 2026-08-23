@@ -131,6 +131,54 @@ describe('Opening Balances with no company', () => {
   });
 });
 
+/**
+ * The books live in the browser; opening balances post through the server's
+ * journal and read the SERVER's chart. Nothing in the frontend had ever written
+ * to it, so a subscriber with a full chart on screen saw "0 accounts" here.
+ */
+describe('Opening Balances when the server holds no chart', () => {
+  beforeEach(() => {
+    useCompanyStore.setState({
+      companies: [{ id: 'co-1', settings: useStore.getState().settings, accounts: [], entities: [], entries: [] }],
+      activeCompanyId: 'co-1',
+    });
+  });
+
+  it('offers to import the browser chart instead of showing an empty table', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/opening-balances/accounts')) return json({ accounts: [], restrictions: [] });
+      if (url.includes('/opening-balances/current')) return json({ openingBalance: null });
+      if (url.includes('/api/accounting/accounts')) return json({ accounts: [] }); // server chart is empty
+      return json({}, 404);
+    });
+
+    renderPage();
+
+    expect(await screen.findByText(/has not been shared with the accounting service/i)).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Import chart of accounts/i })).toBeTruthy();
+  });
+
+  it('stays quiet when the server has a chart but nothing in it is eligible', async () => {
+    // A chart that is entirely control accounts is a different situation with a
+    // different explanation — the restrictions banner — and must not be
+    // mistaken for "no chart at all".
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/opening-balances/accounts')) {
+        return json({ accounts: [], restrictions: ['Accounts Receivable opening details require the customer subledger workflow.'] });
+      }
+      if (url.includes('/opening-balances/current')) return json({ openingBalance: null });
+      return json({}, 404);
+    });
+
+    renderPage();
+
+    expect(await screen.findByText(/customer subledger workflow/i)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Import chart of accounts/i })).toBeNull();
+  });
+});
+
 describe('Opening Balances with an unresolved subscriber workspace', () => {
   beforeEach(() => {
     useCompanyStore.setState({

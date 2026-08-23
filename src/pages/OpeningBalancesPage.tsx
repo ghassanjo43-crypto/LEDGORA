@@ -13,6 +13,8 @@ import { useRouterStore } from '@/store/routerStore';
 import { useEffectiveOrganizationSync } from '@/store/effectiveOrganization';
 import { ROUTES } from '@/lib/accessControl';
 import { useMonetaryPrecision } from '@/lib/useMonetaryPrecision';
+import { balanceSheetAccounts, importBalanceSheetChart } from '@/lib/chartOfAccountsImport';
+import { accountingApi } from '@/services/api/accountingApi';
 import { ApiError } from '@/services/api/client';
 import { openingBalancesApi, type OpeningBalanceAccount, type OpeningBalanceLine, type OpeningBalanceRecord } from '@/services/api/openingBalancesApi';
 
@@ -70,6 +72,34 @@ export function OpeningBalancesPage() {
 
   const [reloadToken, setReloadToken] = useState(0);
   const retry = useCallback(() => { setReloadToken((n) => n + 1); }, []);
+  /*
+   * Set only when the server holds NO chart for this workspace — distinct from
+   * "a chart exists but nothing in it is eligible", which the restrictions
+   * banner already explains. The books live in the browser, so a subscriber can
+   * have a complete chart on screen while the server has none at all.
+   */
+  const [serverChartEmpty, setServerChartEmpty] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const localAccounts = useStore((s) => s.accounts);
+  const setActiveView = useStore((s) => s.setActiveView);
+  const importable = balanceSheetAccounts(localAccounts);
+
+  const runImport = async (): Promise<void> => {
+    setImporting(true); setError('');
+    try {
+      const existing = await accountingApi.list();
+      const outcome = await importBalanceSheetChart(localAccounts, new Set(existing.map((a) => a.accountCode)));
+      if (outcome.failures.length > 0) {
+        const [first] = outcome.failures;
+        setError(`Imported ${outcome.created} of ${outcome.created + outcome.failures.length} accounts. ${first!.code} ${first!.name}: ${first!.reason}`);
+      }
+      setReloadToken((n) => n + 1);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setImporting(false);
+    }
+  };
 
   useEffect(() => {
     // Nothing to load until a company is selected; the setup surface is shown
@@ -77,9 +107,18 @@ export function OpeningBalancesPage() {
     if (!hasCompany || !subscriberSurface) { setLoading(false); return; }
     let cancelled = false;
     setLoading(true); setWorkspaceError(null); setError('');
-    void Promise.all([openingBalancesApi.current(), openingBalancesApi.accounts()]).then(([current, catalogue]) => {
+    void Promise.all([openingBalancesApi.current(), openingBalancesApi.accounts()]).then(async ([current, catalogue]) => {
       if (cancelled) return;
       setAccounts(catalogue.accounts); setRestrictions(catalogue.restrictions); loadRecord(current);
+      // Nothing eligible has two very different causes. Ask the server whether
+      // it holds a chart at all, so the page can offer the import rather than
+      // showing an empty table with no explanation.
+      if (catalogue.accounts.length === 0 && catalogue.restrictions.length === 0) {
+        const existing = await accountingApi.list().catch(() => null);
+        if (!cancelled && existing !== null) setServerChartEmpty(existing.length === 0);
+      } else if (!cancelled) {
+        setServerChartEmpty(false);
+      }
     }).catch((e: Error) => {
       if (cancelled) return;
       // A 403 here means the session is valid but no subscriber workspace could
@@ -169,6 +208,29 @@ export function OpeningBalancesPage() {
     </div>
     {error && <Alert variant="error" onClose={() => setError('')}>{error}</Alert>}
     {restrictions.length > 0 && <Alert variant="warning"><strong>Controlled subledgers are protected.</strong><ul className="mt-1 list-disc pl-5">{restrictions.map((item) => <li key={item}>{item}</li>)}</ul></Alert>}
+    {/*
+      * The chart on screen lives in this browser; opening balances post through
+      * the server's journal and read the server's chart. When the server holds
+      * none, say so plainly and offer the copy — an empty table with no
+      * explanation reads as a broken page.
+      */}
+    {serverChartEmpty && <Alert variant="info">
+      <div className="space-y-2">
+        <p>
+          <strong>This company’s chart of accounts has not been shared with the accounting service yet.</strong>{' '}
+          Opening balances are posted through Ledgora’s server-side journal, which keeps its own copy of the chart.
+          {importable.length > 0
+            ? ` Import the ${importable.length} asset, liability and equity accounts from this company to continue.`
+            : ' This company has no balance-sheet accounts to import — add them in Chart of Accounts first.'}
+        </p>
+        <div className="flex flex-wrap gap-2">
+          {importable.length > 0 && <Button size="sm" disabled={importing} onClick={() => void runImport()}>
+            {importing ? 'Importing…' : 'Import chart of accounts'}
+          </Button>}
+          <Button size="sm" variant="outline" onClick={() => setActiveView('tree')}>Open Chart of Accounts</Button>
+        </div>
+      </div>
+    </Alert>}
     <Card><CardHeader title="Migration information" description="The journal defaults to the day immediately before normal bookkeeping begins."/><CardBody className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
       <Field label="Company/entity"><Input value={settings.companyName} disabled /></Field>
       <Field label="Base currency"><Input value={settings.baseCurrency} disabled /></Field>
