@@ -155,6 +155,7 @@ export type ViewKey =
   | 'tree'
   | 'mapping'
   | 'entities'
+  | 'companies'
   | 'customers'
   | 'suppliers'
   | 'journal'

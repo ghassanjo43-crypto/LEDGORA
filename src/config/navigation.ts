@@ -251,6 +251,7 @@ export const NAV_GROUPS: NavGroup[] = [
     icon: ShieldCheck,
     items: [
       { key: 'import-export', label: 'Import / Export', icon: ArrowLeftRight, description: 'Accounts CSV & JSON', requiredModule: 'core_accounting' },
+      { key: 'companies', label: 'Entities', icon: Building2, description: 'Your sets of books — open, activate or deactivate them within your package allowance' },
       { key: 'members', label: 'Users & Roles', icon: Users, description: 'Invite people, set roles and manage seats in your organization' },
       { key: 'subscription', label: 'Subscription', icon: CreditCard, description: 'Edition, modules & subscription status' },
       { key: 'settings', label: 'Settings', icon: Settings2, description: 'Company & presentation' },

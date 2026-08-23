@@ -38,6 +38,7 @@ const SuppliersPage = lazy(() =>
 const JournalPage = lazy(() =>
   import('@/pages/JournalPage').then((m) => ({ default: m.JournalPage })),
 );
+const CompaniesPage = lazy(() => import('@/pages/CompaniesPage').then((m) => ({ default: m.CompaniesPage })));
 const OpeningBalancesPage = lazy(() => import('@/pages/OpeningBalancesPage').then((m) => ({ default: m.OpeningBalancesPage })));
 const GeneralLedgerPage = lazy(() =>
   import('@/pages/GeneralLedgerPage').then((m) => ({ default: m.GeneralLedgerPage })),
@@ -139,6 +140,8 @@ export default function App() {
         return <MappingPage />;
       case 'entities':
         return <EntitiesPage />;
+      case 'companies':
+        return <CompaniesPage />;
       case 'customers':
         return <CustomersPage />;
       case 'suppliers':
