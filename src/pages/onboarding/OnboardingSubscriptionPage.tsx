@@ -105,7 +105,7 @@ export function OnboardingSubscriptionPage() {
       // this asks once more before rejecting anybody.
       const organizationId = await requireCurrentOrganizationId();
       if (!organizationId) {
-        setError('Create your organization first.');
+        setError('Create your company workspace first.');
         return;
       }
 
@@ -285,17 +285,17 @@ function OrganizationNotice({
   if (availability === 'loading') {
     return (
       <Alert variant="info" className="mb-4">
-        <span data-testid="organization-loading">Loading your organization…</span>
+        <span data-testid="organization-loading">Loading your company workspace…</span>
       </Alert>
     );
   }
 
   if (availability === 'error') {
     return (
-      <Alert variant="warning" title="We could not load your organization" className="mb-4">
+      <Alert variant="warning" title="We could not load your company workspace" className="mb-4">
         <div className="space-y-2">
           <p data-testid="organization-error">
-            {error ?? 'We could not load your organization.'} Please retry — your organization has not been lost.
+            {error ?? 'We could not load your company workspace.'} Please retry — your workspace has not been lost.
           </p>
           <Button size="sm" variant="outline" onClick={onRetry}>
             Retry
@@ -306,13 +306,13 @@ function OrganizationNotice({
   }
 
   return (
-    <Alert variant="error" title="Create your organization first." className="mb-4">
+    <Alert variant="error" title="Create your company workspace first." className="mb-4">
       <div className="space-y-2">
         <p data-testid="organization-absent">
-          You need an organization before choosing a package.
+          You need a company workspace before choosing a package.
         </p>
         <Button size="sm" variant="outline" onClick={onCreate}>
-          Back to organization setup
+          Back to company setup
         </Button>
       </div>
     </Alert>

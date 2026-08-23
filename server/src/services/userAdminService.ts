@@ -456,7 +456,7 @@ export async function assignOrganization(
     throw errors.validation('Unknown role.', { fieldErrors: { role: 'Choose a valid role.' } });
   }
   if (input.role === 'owner') {
-    throw errors.validation('Ownership is transferred through the ownership transfer action.', {
+    throw errors.validation('A workspace already has its permanent subscriber owner.', {
       fieldErrors: { role: 'Choose a role other than Owner.' },
     });
   }
@@ -484,27 +484,13 @@ export async function assignOrganization(
   const alreadyHere = existing.find((m) => m.organization_id === input.organizationId);
   const elsewhere = existing.filter((m) => m.organization_id !== input.organizationId);
 
-  /*
-   * Moving the last active owner out of a tenant would leave it unmanageable by
-   * its own customer. The same rule `memberService` enforces, enforced here too
-   * because this is a different entry point.
-   */
+  /* A subscriber owner can never be moved out of its permanent workspace. */
   for (const membership of elsewhere) {
     if (input.keepExisting) break;
     if (membership.role === 'owner' && membership.status === 'active') {
-      const others = await db
-        .selectFrom('organization_memberships')
-        .select('id')
-        .where('organization_id', '=', membership.organization_id)
-        .where('role', '=', 'owner')
-        .where('status', '=', 'active')
-        .where('user_id', '!=', input.userId)
-        .execute();
-      if (others.length === 0) {
-        throw errors.conflict(
-          'This user is the last active owner of their current organization. Transfer that ownership before moving them.',
-        );
-      }
+      throw errors.conflict(
+        'The subscriber owner cannot be moved out of its permanent workspace.',
+      );
     }
   }
 

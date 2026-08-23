@@ -331,7 +331,7 @@ function SessionBootstrapError({ message, onRetry }: { message: string | null; o
       <section className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 text-center shadow-card dark:border-slate-800 dark:bg-slate-900">
         <h1 className="text-lg font-semibold text-slate-900 dark:text-slate-100">We could not restore your session</h1>
         <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
-          {message ?? 'LEDGORA could not reach the account service. Your organization status has not been changed.'}
+          {message ?? 'LEDGORA could not reach the account service. Your company status has not been changed.'}
         </p>
         <button
           type="button"

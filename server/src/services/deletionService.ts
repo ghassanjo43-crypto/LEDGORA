@@ -791,7 +791,14 @@ async function assertNotLastSuperAdmin(db: Executor, userId: string): Promise<vo
   }
 }
 
-/** The organization must keep one active owner or become unmanageable. */
+/**
+ * The subscriber owner cannot be removed from the workspace they own.
+ *
+ * There is exactly one, permanently, so there is no "unless somebody else owns
+ * it too" branch left to take — and no transfer to suggest as a way round it.
+ * The database refuses this as well; refusing here is what turns a constraint
+ * violation into an explanation.
+ */
 async function assertNotLastOwner(db: Executor, organizationId: string, userId: string): Promise<void> {
   const membership = await db
     .selectFrom('organization_memberships')
@@ -801,19 +808,10 @@ async function assertNotLastOwner(db: Executor, organizationId: string, userId: 
     .executeTakeFirst();
   if (!membership || membership.role !== 'owner') return;
 
-  const others = await db
-    .selectFrom('organization_memberships')
-    .select('id')
-    .where('organization_id', '=', organizationId)
-    .where('role', '=', 'owner')
-    .where('status', '=', 'active')
-    .where('user_id', '!=', userId)
-    .execute();
-  if (others.length === 0) {
-    throw errors.conflict(
-      'This is the organization’s last active owner. Transfer ownership before removing them.',
-    );
-  }
+  throw errors.conflict(
+    'This is the workspace’s subscriber owner, the last active owner it will ever have. ' +
+      'Ownership is permanent, so they cannot be removed — close the subscriber account instead.',
+  );
 }
 
 /** A proof awaiting review is an operation in flight. */
@@ -1706,6 +1704,13 @@ async function purgeSubscriberTransaction(
         .where('organization_id', '=', input.organizationId)
         .executeTakeFirst(),
     );
+    // Retire, but never remove, the permanent subscriber/workspace claim. This
+    // is the only condition under which the database permits the live owner
+    // membership and workspace shell to be purged, and the transaction makes
+    // the retirement roll back if any later deletion fails.
+    await sql`UPDATE subscriber_workspace_ownership_claims
+      SET retired_at = now()
+      WHERE workspace_id = ${input.organizationId} AND retired_at IS NULL`.execute(trx);
     await record(
       'organization_memberships',
       await trx

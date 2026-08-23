@@ -132,7 +132,7 @@ describe('the subscription page on mount', () => {
 
     await waitFor(() => expect(screen.queryByTestId('organization-loading')).toBeNull());
     expect(screen.queryByTestId('organization-absent')).toBeNull();
-    expect(screen.queryByText(/Create your organization first/)).toBeNull();
+    expect(screen.queryByText(/Create your company workspace first/)).toBeNull();
     expect(screen.getByRole('button', { name: /Confirm & continue to payment/ })).not.toHaveProperty('disabled', true);
   });
 
@@ -173,7 +173,7 @@ describe('the subscription page on mount', () => {
 
     expect(await screen.findByTestId('organization-loading')).toBeTruthy();
     expect(screen.queryByTestId('organization-absent')).toBeNull();
-    expect(screen.queryByText(/Create your organization first/)).toBeNull();
+    expect(screen.queryByText(/Create your company workspace first/)).toBeNull();
 
     gate.resolve(json({ organization: backendOrganization() }));
     await waitFor(() => expect(screen.queryByTestId('organization-loading')).toBeNull());
@@ -187,9 +187,9 @@ describe('the subscription page on mount', () => {
     await renderSubscriptionPage();
 
     expect(await screen.findByTestId('organization-absent')).toBeTruthy();
-    expect(screen.getByText(/Create your organization first/)).toBeTruthy();
+    expect(screen.getByText(/Create your company workspace first/)).toBeTruthy();
     // And offers the way out.
-    fireEvent.click(screen.getByRole('button', { name: /Back to organization setup/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Back to company setup/ }));
     expect(useRouterStore.getState().path).toBe(ROUTES.onboardingOrganization);
   });
 
@@ -203,7 +203,7 @@ describe('the subscription page on mount', () => {
 
     expect(await screen.findByTestId('organization-error')).toBeTruthy();
     expect(screen.queryByTestId('organization-absent')).toBeNull();
-    expect(screen.queryByText(/Create your organization first/)).toBeNull();
+    expect(screen.queryByText(/Create your company workspace first/)).toBeNull();
     expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
   });
 

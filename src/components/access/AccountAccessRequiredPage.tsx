@@ -75,10 +75,13 @@ export function resolveAccountAccessExplanation(input: {
   if (!hasOrganization) {
     return {
       reason: 'no-organization',
-      title: 'No organization available',
+      title: 'No company workspace available',
       description:
-        'Your account is not linked to an organization workspace yet. Create your organization to continue.',
-      actionLabel: 'Set up organization',
+        'Your subscriber account is not linked to a company workspace yet. Create your company workspace to continue.',
+      actionLabel: 'Set up company',
+      // Reachable, and not undone on arrival: the shell keeps a genuinely
+      // workspace-less user on this exact onboarding step, so the button lands
+      // where it says it will.
       route: ROUTES.onboardingOrganization,
     };
   }
@@ -117,7 +120,7 @@ export function resolveAccountAccessExplanation(input: {
         reason: 'no-plan',
         title: 'No active subscription',
         description:
-          'Your organization has not activated a subscription yet. Choose a package to open the application.',
+          'Your subscriber account has not activated a subscription yet. Choose a package to open the application.',
         actionLabel: 'Choose a plan',
         route: ROUTES.onboardingSubscription,
       };

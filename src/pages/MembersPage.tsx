@@ -83,7 +83,7 @@ export function MembersPage() {
       <Alert variant="info" title="No subscriber selected">
         <div className="space-y-2">
           <p data-testid="members-no-selection">
-            You are signed in as a Ledgora platform administrator, so you have no organization of your own. Choose a
+            You are signed in as a Ledgora platform administrator, so you have no subscriber workspace of your own. Choose a
             subscriber in the admin console to manage their members.
           </p>
           <Button size="sm" variant="outline" onClick={() => navigate(ROUTES.adminConsole)}>
@@ -97,7 +97,7 @@ export function MembersPage() {
   if (context.status === 'loading') {
     return (
       <Alert variant="info">
-        <span data-testid="members-loading">Loading the organization…</span>
+        <span data-testid="members-loading">Loading the workspace…</span>
       </Alert>
     );
   }
@@ -105,7 +105,7 @@ export function MembersPage() {
   // A failed lookup is not proof of absence. It never renders the creation prompt.
   if (context.status === 'error') {
     return (
-      <Alert variant="warning" title="We could not load this organization">
+      <Alert variant="warning" title="We could not load this workspace">
         <p data-testid="members-error">{context.error ?? 'Please try again.'}</p>
       </Alert>
     );
@@ -114,13 +114,13 @@ export function MembersPage() {
   // The ONE honest use of this message: a settled subscriber lookup with no
   // organization behind it.
   if (isGenuinelyWithoutOrganization(context)) {
-    return <Alert variant="info">Create your organization first to manage members.</Alert>;
+    return <Alert variant="info">Create your company workspace first to manage members.</Alert>;
   }
 
   if (!context.organizationId) {
     return (
       <Alert variant="warning">
-        <span data-testid="members-error">We could not determine which organization to show.</span>
+        <span data-testid="members-error">We could not determine which workspace to show.</span>
       </Alert>
     );
   }
@@ -401,7 +401,7 @@ function MemberRoster({
           {seatsUsed >= seatLimit && (
             <p className="mt-2 text-xs text-amber-600">
               {mode === 'operator'
-                ? `This organization has used all ${seatLimit} seats. Free a seat or change their plan to add another.`
+                ? `This workspace has used all ${seatLimit} seats. Free a seat or change its plan to add another.`
                 : `You've used all ${seatLimit} seats. Suspend or remove a member, or upgrade your plan, to invite more.`}
             </p>
           )}

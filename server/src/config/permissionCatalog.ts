@@ -444,7 +444,8 @@ export function allPermissionKeys(): string[] {
  *   Super Admin          → NOT here. It is a PLATFORM role (`platform_user_roles`),
  *                          not an organization role, and conflating the two is
  *                          exactly what `guards/platform.ts` exists to prevent.
- *   Organization Admin   → `owner` (the transferable ownership position) and
+ *   Organization Admin   → `owner` (the subscriber who owns the workspace — a
+ *                          permanent position that is never reassigned) and
  *                          `admin` (the role any number of members may hold).
  *   Manager              → `manager`   (added by migration 006)
  *   Accountant           → `accountant` (existing)
@@ -464,7 +465,7 @@ export const ROLE_LABELS: Record<CatalogRole, string> = {
 };
 
 export const ROLE_DESCRIPTIONS: Record<CatalogRole, string> = {
-  owner: 'Full authority, and the one account that cannot be removed without transferring ownership.',
+  owner: 'The subscriber who owns this workspace. Full authority, and permanent — it cannot be removed or reassigned.',
   admin: 'Full authority inside this organization, including its people and its package.',
   manager: 'Everything an Accountant may do, plus approval of documents and entries.',
   accountant: 'Day-to-day bookkeeping: authoring, posting, reversing and voiding.',

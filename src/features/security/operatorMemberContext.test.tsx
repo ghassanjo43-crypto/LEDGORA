@@ -97,7 +97,18 @@ function mockRoutes(routes: Record<string, (init?: RequestInit) => Response | Pr
     const url = String(input);
     calls.push(`${(init?.method ?? 'GET').toUpperCase()} ${url.replace(API, '')}`);
     const hit = Object.keys(routes).find((path) => url.includes(path));
-    if (!hit) return json({ error: { code: 'not_found', message: 'no route' } }, 404);
+    if (!hit) {
+      const workspace = url.match(/\/api\/admin\/subscribers\/([^/]+)\/workspace/);
+      if (workspace) {
+        const organizationId = workspace[1]!;
+        return json({
+          organizationId,
+          workspaceName: organizationId === GLOBEX ? 'Globex LLC' : 'Acme Holdings Ltd.',
+          ownerUserId: `${organizationId}_u0`,
+        });
+      }
+      return json({ error: { code: 'not_found', message: 'no route' } }, 404);
+    }
     return routes[hit]!(init);
   });
   return calls;
@@ -285,7 +296,7 @@ describe('a tenantless super_admin viewing Acme', () => {
 
     await waitFor(() => expect(screen.queryByTestId('members-loading')).toBeNull());
     // The defect, gone.
-    expect(screen.queryByText(/Create your organization first/)).toBeNull();
+    expect(screen.queryByText(/Create your company workspace first/)).toBeNull();
     expect(await screen.findByTestId('members-operator-context')).toBeTruthy();
   });
 
@@ -315,7 +326,7 @@ describe('a tenantless super_admin viewing Acme', () => {
 
     expect(await screen.findByTestId('members-loading')).toBeTruthy();
     // Never the accusation, while we do not yet know.
-    expect(screen.queryByText(/Create your organization first/)).toBeNull();
+    expect(screen.queryByText(/Create your company workspace first/)).toBeNull();
 
     gate.resolve(json(memberPayload(ACME, 'Acme Holdings Ltd.', ['Sam Subscriber'])));
     await waitFor(() => expect(screen.queryByTestId('members-loading')).toBeNull());
@@ -324,6 +335,8 @@ describe('a tenantless super_admin viewing Acme', () => {
   it('reports a vanished organization as an error, never as "create one"', async () => {
     operatorViewing(ACME);
     mockRoutes({
+      [`/api/admin/subscribers/${ACME}/workspace`]: () =>
+        json({ error: { code: 'not_found', message: 'Subscriber workspace not found.' } }, 404),
       [`/api/admin/organizations/${ACME}/members`]: () =>
         json({ error: { code: 'not_found', message: 'Organization not found.' } }, 404),
     });
@@ -332,12 +345,14 @@ describe('a tenantless super_admin viewing Acme', () => {
 
     expect(await screen.findByTestId('members-error')).toBeTruthy();
     expect(screen.getByText(/no longer exists/)).toBeTruthy();
-    expect(screen.queryByText(/Create your organization first/)).toBeNull();
+    expect(screen.queryByText(/Create your company workspace first/)).toBeNull();
   });
 
   it('reports a permission failure as such', async () => {
     operatorViewing(ACME);
     mockRoutes({
+      [`/api/admin/subscribers/${ACME}/workspace`]: () =>
+        json({ error: { code: 'forbidden', message: 'nope' } }, 403),
       [`/api/admin/organizations/${ACME}/members`]: () =>
         json({ error: { code: 'forbidden', message: 'nope' } }, 403),
     });
@@ -446,7 +461,7 @@ describe('an ordinary subscriber', () => {
 
     render(<MembersPage />);
 
-    expect(await screen.findByText('Create your organization first to manage members.')).toBeTruthy();
+    expect(await screen.findByText('Create your company workspace first to manage members.')).toBeTruthy();
   });
 
   it('with an organization loads their OWN members through the subscriber endpoint', async () => {
@@ -496,7 +511,7 @@ describe('a super_admin outside operator view', () => {
     render(<MembersPage />);
 
     expect(await screen.findByTestId('members-no-selection')).toBeTruthy();
-    expect(screen.queryByText(/Create your organization first/)).toBeNull();
+    expect(screen.queryByText(/Create your company workspace first/)).toBeNull();
 
     const back = screen.getByRole('button', { name: /Back to admin console/ });
     back.click();

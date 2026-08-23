@@ -1,12 +1,16 @@
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Building2, TriangleAlert } from 'lucide-react';
 import { Alert } from '@/components/ui/Alert';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { Field, Input, Textarea } from '@/components/ui/Input';
 import { MoneyInput } from '@/components/ui/MoneyInput';
+import { AddCompanyDialog } from '@/components/company/AddCompanyDialog';
 import { useStore } from '@/store/useStore';
+import { useCompanyStore } from '@/store/companyStore';
 import { useMonetaryPrecision } from '@/lib/useMonetaryPrecision';
+import { ApiError } from '@/services/api/client';
 import { openingBalancesApi, type OpeningBalanceAccount, type OpeningBalanceLine, type OpeningBalanceRecord } from '@/services/api/openingBalancesApi';
 
 type DraftLine = OpeningBalanceLine & { precisionError?: string | null };
@@ -29,6 +33,17 @@ export function OpeningBalancesPage() {
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
+  /**
+   * Set only when the workspace itself could not be resolved. Kept apart from
+   * `error` because this is a configuration fault the user must be told about
+   * and offered an action for — never something to silently redirect away from.
+   */
+  const [workspaceError, setWorkspaceError] = useState<string | null>(null);
+  const [setupOpen, setSetupOpen] = useState(false);
+  const companies = useCompanyStore((s) => s.companies);
+  const activeCompanyId = useCompanyStore((s) => s.activeCompanyId);
+  const hasCompany = companies.length > 0 && Boolean(activeCompanyId);
 
   const loadRecord = (next: OpeningBalanceRecord | null): void => {
     setRecord(next);
@@ -39,9 +54,29 @@ export function OpeningBalancesPage() {
     setDirty(false);
   };
 
-  useEffect(() => { void Promise.all([openingBalancesApi.current(), openingBalancesApi.accounts()]).then(([current, catalogue]) => {
-    setAccounts(catalogue.accounts); setRestrictions(catalogue.restrictions); loadRecord(current);
-  }).catch((e: Error) => setError(e.message)); }, []);
+  const [reloadToken, setReloadToken] = useState(0);
+  const retry = useCallback(() => { setReloadToken((n) => n + 1); }, []);
+
+  useEffect(() => {
+    // Nothing to load until a company is selected; the setup surface is shown
+    // instead, and asking the server first would only produce a confusing error.
+    if (!hasCompany) { setLoading(false); return; }
+    let cancelled = false;
+    setLoading(true); setWorkspaceError(null); setError('');
+    void Promise.all([openingBalancesApi.current(), openingBalancesApi.accounts()]).then(([current, catalogue]) => {
+      if (cancelled) return;
+      setAccounts(catalogue.accounts); setRestrictions(catalogue.restrictions); loadRecord(current);
+    }).catch((e: Error) => {
+      if (cancelled) return;
+      // A 403 here means the session is valid but no subscriber workspace could
+      // be resolved for it. That is a configuration fault, not a permission the
+      // user can be expected to fix by navigating somewhere else.
+      if (e instanceof ApiError && e.status === 403) setWorkspaceError(e.message);
+      else setError(e.message);
+    }).finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasCompany, activeCompanyId, reloadToken]);
   useEffect(() => { const warn = (event: BeforeUnloadEvent) => { if (dirty) event.preventDefault(); }; window.addEventListener('beforeunload', warn); return () => window.removeEventListener('beforeunload', warn); }, [dirty]);
 
   const populated = Object.values(lines).filter((line) => Number(line.debit) || Number(line.credit));
@@ -72,6 +107,22 @@ export function OpeningBalancesPage() {
   };
   const replace = () => record && run(() => openingBalancesApi.replacement(record.id, payload()));
   const categoryLabel = (type: OpeningBalanceAccount['type']) => type === 'asset' ? 'Assets' : type === 'liability' ? 'Liabilities' : 'Owners equity';
+
+  // Missing configuration is answered here, on the page, with something the user
+  // can act on. Neither branch navigates on its own: a redirect out of the
+  // application surface would be reversed by the shell and look like the button
+  // did nothing.
+  if (!hasCompany) return <>
+    <ConfigurationNotice icon={<Building2 className="h-6 w-6" />} title="No company is set up yet"
+      body="Opening balances belong to a company’s books. Create the company you are migrating, then return here to enter its opening balances."
+      action={<Button onClick={() => setSetupOpen(true)}>Set up company</Button>} />
+    <AddCompanyDialog open={setupOpen} onClose={() => setSetupOpen(false)} />
+  </>;
+
+  if (workspaceError) return <ConfigurationNotice tone="warning" icon={<TriangleAlert className="h-6 w-6" />}
+    title="Your subscriber workspace could not be resolved"
+    body={`${workspaceError} Your sign-in is valid, so this is a workspace configuration problem rather than something you can fix by signing in again. Ask your administrator to confirm your membership of the subscriber workspace.`}
+    action={<Button variant="secondary" disabled={loading} onClick={retry}>Try again</Button>} />;
 
   return <div className="space-y-4 pb-28">
     <div className="flex flex-wrap items-start justify-between gap-3">
@@ -104,3 +155,20 @@ export function OpeningBalancesPage() {
 }
 
 function Stat({ label, value }: { label: string; value: string }) { return <div><div className="text-[11px] uppercase text-slate-400">{label}</div><div className="font-semibold tabular-nums">{value}</div></div>; }
+
+/** The one shape both missing-configuration answers take: say what is wrong, offer the fix. */
+function ConfigurationNotice({ icon, title, body, action, tone = 'neutral' }: {
+  icon: ReactNode; title: string; body: string; action: ReactNode; tone?: 'neutral' | 'warning';
+}) {
+  const badge = tone === 'warning'
+    ? 'bg-amber-100 text-amber-600 dark:bg-amber-500/15 dark:text-amber-300'
+    : 'bg-brand-100 text-brand-600 dark:bg-brand-500/15 dark:text-brand-300';
+  return <div className="mx-auto max-w-lg py-10"><Card><CardBody className="flex flex-col items-center gap-4 py-10 text-center">
+    <span className={`flex h-14 w-14 items-center justify-center rounded-full ${badge}`}>{icon}</span>
+    <div>
+      <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">{title}</h2>
+      <p className="mt-1.5 text-sm text-slate-500 dark:text-slate-400">{body}</p>
+    </div>
+    {action}
+  </CardBody></Card></div>;
+}

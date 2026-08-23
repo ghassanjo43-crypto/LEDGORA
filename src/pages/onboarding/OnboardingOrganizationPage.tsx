@@ -98,7 +98,7 @@ export function OnboardingOrganizationPage() {
       const res = createOrganization(form);
       if (!res.ok) {
         setErrors(res.fieldErrors ?? {});
-        setFormError(res.error ?? 'Could not create organization.');
+        setFormError(res.error ?? 'Could not create your company workspace.');
         return;
       }
       setErrors({});
@@ -126,7 +126,7 @@ export function OnboardingOrganizationPage() {
         : (await hydrateFromBackend({ force: true })).organizationId;
 
       if (!adopted) {
-        setFormError('Your organization was created but could not be loaded. Please retry.');
+        setFormError('Your company workspace was created but could not be loaded. Please retry.');
         return;
       }
       setErrors({});
@@ -145,18 +145,18 @@ export function OnboardingOrganizationPage() {
       }
       if (error instanceof ApiError) {
         setErrors(error.fieldErrors);
-        setFormError(error.message || 'Could not create organization.');
+        setFormError(error.message || 'Could not create your company workspace.');
         return;
       }
-      setFormError('Could not create organization.');
+      setFormError('Could not create your company workspace.');
     } finally {
       setSubmitting(false);
     }
   };
 
   return (
-    <CenteredCard title="Set up your organization" subtitle="Tell us about the business you're keeping books for." width="xl">
-      <Stepper current="Organization" />
+    <CenteredCard title="Set up your company" subtitle="Tell us about the business you're keeping books for." width="xl">
+      <Stepper current="Company" />
       <form className="space-y-4" onSubmit={(e) => void submit(e)} noValidate>
         {formError && <Alert variant="error">{formError}</Alert>}
         <div className="grid gap-4 sm:grid-cols-2">
@@ -207,7 +207,7 @@ export function OnboardingOrganizationPage() {
         </div>
         <div className="flex justify-end pt-2">
           <Button type="submit" disabled={submitting}>
-            {submitting ? 'Creating your organization…' : 'Continue to subscription'}
+            {submitting ? 'Creating your workspace…' : 'Continue to subscription'}
           </Button>
         </div>
       </form>

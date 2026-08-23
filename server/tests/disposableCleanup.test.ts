@@ -276,26 +276,27 @@ describe('identity rules', () => {
     });
 
     /*
-     * A REAL person, created as the owner of a production subscriber, who is
-     * then also given a seat in the test tenant.
+     * A REAL person whose ONLY membership is a seat in the test tenant.
      *
-     * Constructed explicitly rather than relying on the users table default: a
-     * test tenant's own owner is now created disposable (that is the point of
-     * classifying the tenant), so the default no longer produces the production
-     * identity this test is about.
+     * The isolation matters: retention has several independent causes, and a
+     * person who also belonged somewhere else would be kept by the
+     * other-membership rule, proving nothing about classification. They are
+     * therefore not a subscriber owner — ownership is permanent, so an owner
+     * always has a second membership and could never be reduced to this case.
+     *
+     * Production is asserted rather than assumed: a test tenant's own owner is
+     * created disposable (that is the point of classifying the tenant), so the
+     * table default is not what makes this person real.
      */
-    const real = await subscriber(admin.cookies, {
-      email: 'realperson@dev.test',
-      legalName: 'Real Customer Ltd',
-      classification: 'production',
-    });
-    const ownerUserId = real.ownerUserId;
+    const real = await seedUser(ctx, { email: 'realperson@dev.test', fullName: 'Real Person' });
+    const ownerUserId = real.id;
+    const classification = await ctx.db
+      .selectFrom('users')
+      .select('data_classification')
+      .where('id', '=', ownerUserId)
+      .executeTakeFirstOrThrow();
+    expect(classification.data_classification).toBe('production');
 
-    await ctx.db
-      .deleteFrom('organization_memberships')
-      .where('organization_id', '=', real.organizationId)
-      .where('user_id', '=', ownerUserId)
-      .execute();
     await ctx.db
       .insertInto('organization_memberships')
       .values({ organization_id: organizationId, user_id: ownerUserId, role: 'member', status: 'active' })

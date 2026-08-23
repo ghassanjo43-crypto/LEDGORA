@@ -258,6 +258,7 @@ export async function createSubscriber(
     const organization = await trx
       .insertInto('organizations')
       .values({
+        subscriber_owner_user_id: user.id,
         legal_name: input.organizationLegalName.trim(),
         trading_name: input.tradingName?.trim() || null,
         country: input.country,
@@ -1064,116 +1065,46 @@ export interface ChangeOwnerResult {
   previousOwnerRole: string | null;
 }
 
+/** Read-only resolution used by administrator preview; it never creates or attaches a workspace. */
+export async function resolveSubscriberWorkspace(
+  db: Kysely<Database>, organizationId: string,
+): Promise<{ organizationId: string; workspaceName: string; ownerUserId: string }> {
+  const row = await db.selectFrom('organizations as o')
+    .innerJoin('organization_memberships as m', (join) => join
+      .onRef('m.organization_id', '=', 'o.id')
+      .onRef('m.user_id', '=', 'o.subscriber_owner_user_id')
+      .on('m.role', '=', 'owner').on('m.status', '=', 'active'))
+    .select(['o.id as organization_id', 'o.legal_name', 'o.subscriber_owner_user_id'])
+    .where('o.id', '=', organizationId).executeTakeFirst();
+  if (!row) throw errors.notFound('Subscriber workspace');
+  return { organizationId: row.organization_id, workspaceName: row.legal_name, ownerUserId: row.subscriber_owner_user_id };
+}
+
 /**
- * Transfer ownership to another member of the SAME organization.
+ * Ownership transfer, refused.
  *
- * Deliberately not "make this arbitrary user the owner": the new owner must
- * already be a member, so ownership cannot be used as a back door for adding an
- * account to a tenant. The outgoing owner keeps a membership (demoted, by
- * default to `accountant`) rather than being removed — an organization that
- * loses its only administrator in a transfer is exactly the failure the
- * last-owner rule exists to prevent.
+ * A subscriber workspace has exactly one owner and keeps it for life. The
+ * `organizations.subscriber_owner_user_id` column, its unique index and the
+ * `protect_subscriber_ownership` trigger make reassignment impossible below
+ * this layer; refusing here as well means an operator gets an explanation
+ * instead of a constraint violation.
+ *
+ * The function itself stays because the route does: removing it would turn a
+ * deliberate policy answer into a 404 that reads like a routing mistake.
  */
 export async function changeSubscriberOwner(
-  db: Kysely<Database>,
-  input: {
+  _db: Kysely<Database>,
+  _input: {
     organizationId: string;
     newOwnerUserId: string;
-    /** Role the outgoing owner keeps. `null` demotes them to `accountant`. */
     previousOwnerRole?: 'accountant' | 'member' | 'viewer';
     reason: string;
   },
-  context: SubscriberAdminContext,
+  _context: SubscriberAdminContext,
 ): Promise<ChangeOwnerResult> {
-  const reason = input.reason?.trim();
-  if (!reason) {
-    throw errors.validation('A reason is required and is recorded in the audit trail.', {
-      fieldErrors: { reason: 'Explain why ownership is being transferred.' },
-    });
-  }
-
-  return db.transaction().execute(async (trx) => {
-    const organization = await trx
-      .selectFrom('organizations')
-      .select('id')
-      .where('id', '=', input.organizationId)
-      .executeTakeFirst();
-    if (!organization) throw errors.notFound('Subscriber');
-
-    const target = await trx
-      .selectFrom('organization_memberships')
-      .selectAll()
-      .where('organization_id', '=', input.organizationId)
-      .where('user_id', '=', input.newOwnerUserId)
-      .forUpdate()
-      .executeTakeFirst();
-    if (!target) {
-      throw errors.validation('The new owner must already be a member of this organization.', {
-        fieldErrors: { newOwnerUserId: 'Add them as a member first, then transfer ownership.' },
-      });
-    }
-    if (target.role === 'owner' && target.status === 'active') {
-      throw errors.conflict('That member is already the active owner.');
-    }
-
-    // A platform operator must never end up owning a tenant — that is how a
-    // tenantless administrator quietly becomes a subscriber.
-    const operatorRole = await trx
-      .selectFrom('platform_user_roles')
-      .select('id')
-      .where('user_id', '=', input.newOwnerUserId)
-      .executeTakeFirst();
-    if (operatorRole) {
-      throw errors.validation('A Ledgora platform operator cannot own a subscriber organization.');
-    }
-
-    const currentOwner = await trx
-      .selectFrom('organization_memberships')
-      .selectAll()
-      .where('organization_id', '=', input.organizationId)
-      .where('role', '=', 'owner')
-      .orderBy(sql`(status = 'active') DESC`)
-      .orderBy('created_at', 'asc')
-      .forUpdate()
-      .executeTakeFirst();
-
-    // Promote first, demote second: at no point inside the transaction is the
-    // organization without an owner.
-    await trx
-      .updateTable('organization_memberships')
-      .set({ role: 'owner', status: 'active', updated_at: new Date() })
-      .where('id', '=', target.id)
-      .execute();
-
-    if (currentOwner && currentOwner.user_id !== input.newOwnerUserId) {
-      await trx
-        .updateTable('organization_memberships')
-        .set({ role: input.previousOwnerRole ?? 'accountant', updated_at: new Date() })
-        .where('id', '=', currentOwner.id)
-        .execute();
-    }
-
-    await writeAuditLog(trx, {
-      ...context,
-      organizationId: input.organizationId,
-      action: 'organization.owner_changed',
-      targetType: 'organization',
-      targetId: input.organizationId,
-      metadata: {
-        reason,
-        previousOwnerUserId: currentOwner?.user_id ?? null,
-        newOwnerUserId: input.newOwnerUserId,
-        previousOwnerNewRole: currentOwner ? (input.previousOwnerRole ?? 'accountant') : null,
-      },
-    });
-
-    return {
-      organizationId: input.organizationId,
-      previousOwnerUserId: currentOwner?.user_id ?? null,
-      newOwnerUserId: input.newOwnerUserId,
-      previousOwnerRole: currentOwner ? (input.previousOwnerRole ?? 'accountant') : null,
-    };
-  });
+  throw errors.conflict(
+    'Subscriber workspace ownership is permanent and cannot be transferred or reassigned.',
+  );
 }
 
 /** Operator notes on a subscriber account. Audited, but the text is not logged. */

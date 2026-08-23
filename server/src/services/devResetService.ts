@@ -694,6 +694,20 @@ export async function executeReset(
   const deleted = await db.transaction().execute(async (trx: Transaction<Database>) => {
     const counts: Record<string, number> = {};
 
+    /*
+     * Subscriber ownership is permanent, so the database refuses to delete an
+     * owner membership or a workspace shell while its claim is live. Retire
+     * every claim first — this reset takes every organization (`organizations`
+     * is scoped `TRUE`) — and let the transaction roll the retirement back if
+     * any later delete fails.
+     *
+     * Retired, never removed: the claim table is the permanent record that a
+     * workspace id and a subscriber were once bound together, and its own
+     * trigger refuses deletion. A development reset is not a reason to forget.
+     */
+    await sql`UPDATE subscriber_workspace_ownership_claims
+      SET retired_at = now() WHERE retired_at IS NULL`.execute(trx);
+
     for (const entry of RESET_SEQUENCE) {
       if (entry.action === 'truncate') {
         const { rows } = await sql<{ n: number }>`

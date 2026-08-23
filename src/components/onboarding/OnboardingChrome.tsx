@@ -112,7 +112,7 @@ export function CenteredCard({
   );
 }
 
-const ONBOARDING_STEPS = ['Account', 'Verify', 'Organization', 'Subscription', 'Payment'] as const;
+const ONBOARDING_STEPS = ['Account', 'Verify', 'Company', 'Subscription', 'Payment'] as const;
 
 export type OnboardingStep = (typeof ONBOARDING_STEPS)[number];
 
@@ -136,7 +136,7 @@ export function Stepper({ current }: { current: OnboardingStep }) {
     // A step is only "done" when it is genuinely done. For the organization
     // that means the backend confirmed one — position on the route proves
     // nothing, least of all on a page reached by a direct link or a refresh.
-    if (step === 'Organization' && index < activeIndex) return hasOrganization ? 'done' : 'todo';
+    if (step === 'Company' && index < activeIndex) return hasOrganization ? 'done' : 'todo';
     if (index < activeIndex) return 'done';
     return index === activeIndex ? 'active' : 'todo';
   };

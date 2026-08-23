@@ -23,7 +23,7 @@ import {
 import { availabilityOf } from '@/lib/currentOrganization';
 import { isPlatformOperator } from '@/lib/accessControl';
 import { effectivePlatformRole } from '@/lib/platformAccess';
-import { memberApi } from '@/services/api/memberApi';
+import { adminSubscriberApi } from '@/services/api/adminConsoleApi';
 import { ApiError, isApiConfigured } from '@/services/api/client';
 import { useOrganizationStore } from './organizationStore';
 import { useOperatorViewStore } from './operatorViewStore';
@@ -74,12 +74,12 @@ export const useViewedOrganizationStore = create<ViewedOrganizationState>()((set
     const mine = ++viewedGeneration;
     set({ status: 'loading', error: null });
     try {
-      const result = await memberApi.listForOrganization(organizationId);
+      const result = await adminSubscriberApi.resolveWorkspace(organizationId);
       if (mine !== viewedGeneration) return;
       set({
         status: 'ready',
-        organizationId: result.organization?.id ?? organizationId,
-        organizationName: result.organization?.legalName ?? null,
+        organizationId: result.organizationId,
+        organizationName: result.workspaceName,
         error: null,
       });
     } catch (cause) {
@@ -91,11 +91,11 @@ export const useViewedOrganizationStore = create<ViewedOrganizationState>()((set
         error:
           cause instanceof ApiError
             ? cause.status === 404
-              ? 'That organization no longer exists.'
+              ? 'That subscriber workspace no longer exists.'
               : cause.status === 403
-                ? 'You do not have permission to manage this organization.'
+                ? 'You do not have permission to view this subscriber workspace.'
                 : cause.message
-            : 'We could not load the selected organization.',
+            : 'We could not load the selected subscriber workspace.',
       });
     }
   },

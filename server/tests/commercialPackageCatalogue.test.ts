@@ -16,6 +16,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { sql } from 'kysely';
 import { createTestContext, type TestContext } from './helpers/testApp.js';
+import { findSubject } from '../src/config/permissionCatalog.js';
 
 let ctx: TestContext;
 
@@ -100,6 +101,27 @@ describe('the seeded catalogue', () => {
   it('keeps every code unique', async () => {
     const codes = (await plans()).map((p) => p.code);
     expect(new Set(codes).size).toBe(codes.length);
+  });
+
+  it('entitles opening balances in every paid package', async () => {
+    /*
+     * Opening balances are how a customer's existing books arrive in Ledgora.
+     * A package that sells bookkeeping but withholds the migration is not a
+     * sellable package, so this is asserted against the module the
+     * `opening_balances` subject is actually gated on rather than against a
+     * hand-copied list that could drift from the catalogue.
+     */
+    const required = findSubject('opening_balances')?.requiredModule;
+    expect(required).toBe('accounting');
+
+    const { rows } = await sql<{ code: string; modules: string[] }>`
+      SELECT code, module_entitlements AS modules
+        FROM subscription_plans WHERE is_public AND is_active ORDER BY sort_order
+    `.execute(ctx.db);
+    expect(rows.length).toBeGreaterThan(0);
+    for (const plan of rows) {
+      expect(plan.modules, `${plan.code} must entitle opening balances`).toContain(required);
+    }
   });
 
   it('never records a negative price or an impossible limit', async () => {

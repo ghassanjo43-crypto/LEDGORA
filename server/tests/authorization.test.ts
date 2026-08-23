@@ -54,15 +54,17 @@ describe('normal customers hold no platform role', () => {
 
   it('does not make an organization owner a platform administrator', async () => {
     const owner = await seedUser(ctx, { email: 'owner@acme.test' });
-    const org = await ctx.db
-      .insertInto('organizations')
-      .values({ legal_name: 'Acme Holdings', country: 'AE', base_currency: 'USD', fiscal_year_start: '01-01' })
-      .returning('id')
-      .executeTakeFirstOrThrow();
-    await ctx.db
-      .insertInto('organization_memberships')
-      .values({ organization_id: org.id, user_id: owner.id, role: 'owner' })
-      .execute();
+    await ctx.db.transaction().execute(async (trx) => {
+      const org = await trx
+        .insertInto('organizations')
+        .values({ subscriber_owner_user_id: owner.id, legal_name: 'Acme Holdings', country: 'AE', base_currency: 'USD', fiscal_year_start: '01-01' })
+        .returning('id')
+        .executeTakeFirstOrThrow();
+      await trx
+        .insertInto('organization_memberships')
+        .values({ organization_id: org.id, user_id: owner.id, role: 'owner' })
+        .execute();
+    });
 
     const cookies = await login(ctx, 'owner@acme.test');
     const response = await ctx.app.inject({ method: 'GET', url: '/api/admin/me', headers: authHeaders(cookies) });

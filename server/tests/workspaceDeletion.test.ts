@@ -289,6 +289,14 @@ describe('destroying an activated tenant', () => {
     );
     expect(result.outcome).toBe('completed');
 
+    const ownershipClaim = await sql<{ subscriber_owner_user_id: string; retired_at: Date | null }>`
+      SELECT subscriber_owner_user_id, retired_at
+      FROM subscriber_workspace_ownership_claims
+      WHERE workspace_id = ${doomed.organizationId}
+    `.execute(ctx.db);
+    expect(ownershipClaim.rows).toHaveLength(1);
+    expect(ownershipClaim.rows[0]!.retired_at).not.toBeNull();
+
     /* ── Interrogate every table in the catalogue ────────────────────────── */
     for (const table of scoped) {
       const remaining = await rowsReferencing(table, doomed.organizationId);

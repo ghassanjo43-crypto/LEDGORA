@@ -5,7 +5,7 @@
  * administrator must be able to see every subscriber, which is impossible when
  * the record only exists in one customer's browser.
  */
-import type { Kysely, Transaction } from 'kysely';
+import { sql, type Kysely, type Transaction } from 'kysely';
 import type { Database, OrganizationRole } from '../db/schema.js';
 import { writeAuditLog, type AuditContext } from '../lib/audit.js';
 import { errors } from '../lib/errors.js';
@@ -67,6 +67,7 @@ export async function createOrganization(
     const organization = await trx
       .insertInto('organizations')
       .values({
+        subscriber_owner_user_id: userId,
         legal_name: input.legalName.trim(),
         trading_name: input.tradingName?.trim() || null,
         country: input.country,
@@ -104,15 +105,31 @@ export async function createOrganization(
   });
 }
 
+/**
+ * The workspace this user signs in to.
+ *
+ * A subscriber owns exactly one workspace and resolves to THAT one, even when
+ * they also hold a guest membership somewhere else — being invited into a
+ * colleague's books must never displace your own. Everyone else resolves
+ * through their active membership. The ordering is what makes this
+ * deterministic: without it the query returned whichever row the planner
+ * happened to hand back first, which is how a subscriber with a second
+ * membership ended up looking like they had no workspace and was sent to
+ * onboarding to create a duplicate.
+ */
 export async function findMembershipForUser(
   db: Kysely<Database> | Transaction<Database>,
   userId: string,
 ): Promise<{ organizationId: string; role: OrganizationRole } | null> {
   const row = await db
-    .selectFrom('organization_memberships')
-    .select(['organization_id', 'role'])
-    .where('user_id', '=', userId)
-    .where('status', '=', 'active')
+    .selectFrom('organization_memberships as m')
+    .innerJoin('organizations as o', 'o.id', 'm.organization_id')
+    .select(['m.organization_id', 'm.role'])
+    .where('m.user_id', '=', userId)
+    .where('m.status', '=', 'active')
+    // Owned workspace first, then oldest membership — a stable tiebreak.
+    .orderBy(sql`case when o.subscriber_owner_user_id = m.user_id then 0 else 1 end`, 'asc')
+    .orderBy('m.created_at', 'asc')
     .executeTakeFirst();
   return row ? { organizationId: row.organization_id, role: row.role } : null;
 }
@@ -132,14 +149,6 @@ export async function getCurrentOrganization(
     .executeTakeFirst();
   if (!organization) return null;
 
-  const owner = await db
-    .selectFrom('organization_memberships')
-    .select('user_id')
-    .where('organization_id', '=', organization.id)
-    .where('role', '=', 'owner')
-    .orderBy('created_at', 'asc')
-    .executeTakeFirst();
-
   return {
     id: organization.id,
     legalName: organization.legal_name,
@@ -153,7 +162,7 @@ export async function getCurrentOrganization(
     booksStartDate: organization.books_start_date,
     status: organization.status,
     createdAt: new Date(organization.created_at).toISOString(),
-    ownerUserId: owner?.user_id ?? null,
+    ownerUserId: organization.subscriber_owner_user_id,
     role: membership.role,
   };
 }
@@ -161,6 +170,6 @@ export async function getCurrentOrganization(
 /** Resolve the caller's organization or fail — used by subscription routes. */
 export async function requireOrganizationFor(db: Kysely<Database>, userId: string): Promise<string> {
   const membership = await findMembershipForUser(db, userId);
-  if (!membership) throw errors.validation('Create your organization before choosing a package.');
+  if (!membership) throw errors.validation('Create your company workspace before choosing a package.');
   return membership.organizationId;
 }

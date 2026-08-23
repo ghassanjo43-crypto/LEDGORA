@@ -50,18 +50,23 @@ describe.skipIf(!DATABASE_URL)('journal numbering under real concurrency', () =>
     db = await createDatabase({ databaseUrl: DATABASE_URL });
     assertMigrationsSucceeded(await migrateToLatest(db));
 
-    const { rows: orgRows } = await sql<{ id: string }>`
-      INSERT INTO organizations (legal_name, country, base_currency, data_classification)
-      VALUES (${`Concurrency ${Date.now()}`}, 'JO', 'JOD', 'test')
-      RETURNING id
-    `.execute(db);
     const { rows: userRows } = await sql<{ id: string }>`
       INSERT INTO users (email, normalized_email, full_name, password_hash, status)
       VALUES (${`c${Date.now()}@test.local`}, ${`c${Date.now()}@test.local`}, 'Concurrency', 'x', 'active')
       RETURNING id
     `.execute(db);
+    const organizationId = await db.transaction().execute(async (trx) => {
+      const { rows: orgRows } = await sql<{ id: string }>`
+        INSERT INTO organizations (subscriber_owner_user_id, legal_name, country, base_currency, data_classification)
+        VALUES (${userRows[0]!.id}, ${`Concurrency ${Date.now()}`}, 'JO', 'JOD', 'test')
+        RETURNING id
+      `.execute(trx);
+      await sql`INSERT INTO organization_memberships (organization_id, user_id, role, status)
+        VALUES (${orgRows[0]!.id}, ${userRows[0]!.id}, 'owner', 'active')`.execute(trx);
+      return orgRows[0]!.id;
+    });
 
-    actor = { organizationId: orgRows[0]!.id, userId: userRows[0]!.id, name: 'Concurrency Tester' };
+    actor = { organizationId, userId: userRows[0]!.id, name: 'Concurrency Tester' };
     cash = (await accounts.createAccount(db, actor, {
       accountCode: '1000', accountName: 'Cash', accountType: 'asset',
     })).id;
@@ -74,7 +79,11 @@ describe.skipIf(!DATABASE_URL)('journal numbering under real concurrency', () =>
     if (!db) return;
     // Cascades from `organizations`, so the scratch database is left clean.
     if (actor) {
-      await sql`DELETE FROM organizations WHERE id = ${actor.organizationId}`.execute(db);
+      await db.transaction().execute(async (trx) => {
+        await sql`UPDATE subscriber_workspace_ownership_claims SET retired_at=now() WHERE workspace_id=${actor.organizationId}`.execute(trx);
+        await sql`DELETE FROM organization_memberships WHERE organization_id=${actor.organizationId}`.execute(trx);
+        await sql`DELETE FROM organizations WHERE id = ${actor.organizationId}`.execute(trx);
+      });
       await sql`DELETE FROM users WHERE id = ${actor.userId}`.execute(db);
     }
     await db.destroy();

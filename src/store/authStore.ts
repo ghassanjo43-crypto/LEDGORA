@@ -304,7 +304,8 @@ export const useAuthStore = create<AuthState>()(
         const target = get().users.find((u) => u.id === userId);
         if (!target || target.organizationId !== memberScopeOrganizationId(actor)) return { ok: false, error: 'Member not found.' };
         if (target.id === actor!.id) return { ok: false, error: 'You cannot remove yourself.' };
-        if (target.role === 'owner') return { ok: false, error: 'Transfer ownership before removing an owner.' };
+        // Ownership is permanent, so there is no transfer to offer as a way round this.
+        if (target.role === 'owner') return { ok: false, error: 'The subscriber owner is permanent and cannot be removed.' };
         set((s) => ({ users: s.users.filter((u) => u.id !== userId) }));
         return { ok: true, id: userId };
       },

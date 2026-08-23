@@ -25,7 +25,7 @@
  * exactly what an operator should look at twice before destroying it.
  */
 import { createHash, randomUUID } from 'node:crypto';
-import type { Kysely, Transaction } from 'kysely';
+import { sql, type Kysely, type Transaction } from 'kysely';
 import type { Database } from '../db/schema.js';
 import type { FileStorage } from '../storage/fileStorage.js';
 import { writeAuditLog, type AuditContext } from '../lib/audit.js';
@@ -755,6 +755,13 @@ async function deleteOneOrganization(
 
     /* ── Tenant-owned rows, in reviewed order ────────────────────────────── */
     const removed: Record<string, number> = { auth_sessions: revokedSessions };
+
+    // Permanent cleanup retires the live shell but preserves its immutable
+    // subscriber/workspace claim. The trigger permits owner-row deletion only
+    // after this marker is set in the same all-or-nothing transaction.
+    await sql`UPDATE subscriber_workspace_ownership_claims
+      SET retired_at = now()
+      WHERE workspace_id = ${organizationId} AND retired_at IS NULL`.execute(trx);
 
     const proofIds = proofs.map((p) => p.proof_id);
     if (proofIds.length > 0) {

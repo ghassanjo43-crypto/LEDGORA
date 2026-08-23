@@ -99,6 +99,19 @@ async function breakTable(options: { unrecordMigration: boolean; keepColumns?: b
      * already exists". Their objects are dropped here so the replay is a true
      * replay rather than a collision.
      */
+    await sql`DROP TRIGGER IF EXISTS workspace_owner_after_membership ON organization_memberships`.execute(ctx.db);
+    await sql`DROP TRIGGER IF EXISTS workspace_owner_after_organization ON organizations`.execute(ctx.db);
+    await sql`DROP FUNCTION IF EXISTS assert_workspace_has_one_subscriber_owner()`.execute(ctx.db);
+    await sql`DROP TRIGGER IF EXISTS immutable_subscriber_ownership_claim ON subscriber_workspace_ownership_claims`.execute(ctx.db);
+    await sql`DROP FUNCTION IF EXISTS protect_subscriber_ownership_claim()`.execute(ctx.db);
+    await sql`DROP TRIGGER IF EXISTS memberships_immutable_subscriber_owner ON organization_memberships`.execute(ctx.db);
+    await sql`DROP TRIGGER IF EXISTS organizations_immutable_subscriber_owner ON organizations`.execute(ctx.db);
+    await sql`DROP FUNCTION IF EXISTS protect_subscriber_ownership()`.execute(ctx.db);
+    await sql`DROP TABLE IF EXISTS subscriber_workspace_ownership_claims`.execute(ctx.db);
+    await sql`DROP INDEX IF EXISTS organization_memberships_one_owner`.execute(ctx.db);
+    await sql`DROP INDEX IF EXISTS organizations_subscriber_owner_unique`.execute(ctx.db);
+    await sql`ALTER TABLE organizations DROP CONSTRAINT IF EXISTS organizations_subscriber_owner_fk`.execute(ctx.db);
+    await sql`ALTER TABLE organizations DROP COLUMN IF EXISTS subscriber_owner_user_id`.execute(ctx.db);
     await sql`DROP TABLE IF EXISTS opening_balance_sets, accounting_audit_events, journal_entry_versions,
               journal_lines, journal_entries, accounts, accounting_periods CASCADE`.execute(ctx.db);
   }

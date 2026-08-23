@@ -151,23 +151,6 @@ async function membershipOf(
   return row ? { id: row.id, role: row.role, status: row.status } : null;
 }
 
-/** Owners remaining if the given membership stopped being an active owner. */
-async function otherActiveOwners(
-  db: Executor,
-  organizationId: string,
-  exceptUserId: string,
-): Promise<number> {
-  const rows = await db
-    .selectFrom('organization_memberships')
-    .select('id')
-    .where('organization_id', '=', organizationId)
-    .where('role', '=', 'owner')
-    .where('status', '=', 'active')
-    .where('user_id', '!=', exceptUserId)
-    .execute();
-  return rows.length;
-}
-
 /* ── Onboarding activation ────────────────────────────────────────────────── */
 
 /**
@@ -826,13 +809,19 @@ export async function updateMember(
     throw errors.validation('Nothing to change.');
   }
 
-  // The organization must always keep one active owner, or it becomes
-  // unmanageable and only a platform operator could ever repair it.
+  if (input.role === 'owner' && membership.role !== 'owner') {
+    throw errors.conflict('A workspace already has its permanent subscriber owner.');
+  }
+
+  // The subscriber's designated owner membership is permanent.  Administrators
+  // may manage members, but cannot use that authority to claim the workspace.
   const losesOwnership =
     (input.role !== undefined && membership.role === 'owner' && input.role !== 'owner') ||
     (input.status !== undefined && membership.role === 'owner' && input.status !== 'active');
-  if (losesOwnership && (await otherActiveOwners(db, input.organizationId, input.userId)) === 0) {
-    throw errors.conflict('The organization must keep at least one active owner.');
+  if (losesOwnership) {
+    throw errors.conflict(
+      'The subscriber owner is permanent and its workspace membership cannot be changed.',
+    );
   }
 
   await db.transaction().execute(async (trx) => {

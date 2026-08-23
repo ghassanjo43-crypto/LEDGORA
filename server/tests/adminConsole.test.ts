@@ -1215,7 +1215,7 @@ describe('subscriber lifecycle', () => {
     expect(organization.status).toBe('archived');
   });
 
-  it('transfers ownership to an existing member and demotes the outgoing owner', async () => {
+  it('refuses to transfer ownership to an existing member', async () => {
     const { admin, organizationId, ownerUserId } = await subscriber();
 
     const invite = await ctx.app.inject({
@@ -1232,7 +1232,7 @@ describe('subscriber lifecycle', () => {
       headers: authHeaders(admin.cookies),
       payload: { newOwnerUserId: successorId, reason: 'Founder stepped down.' },
     });
-    expect(response.statusCode).toBe(200);
+    expect(response.statusCode).toBe(409);
 
     const memberships = await ctx.db
       .selectFrom('organization_memberships')
@@ -1240,10 +1240,8 @@ describe('subscriber lifecycle', () => {
       .where('organization_id', '=', organizationId)
       .execute();
     const byUser = new Map(memberships.map((m) => [m.user_id, m]));
-    expect(byUser.get(successorId)!.role).toBe('owner');
-    expect(byUser.get(successorId)!.status).toBe('active');
-    // The organization never has zero owners, and the founder keeps access.
-    expect(byUser.get(ownerUserId)!.role).toBe('accountant');
+    expect(byUser.get(successorId)!.role).toBe('accountant');
+    expect(byUser.get(ownerUserId)!.role).toBe('owner');
     expect(memberships.filter((m) => m.role === 'owner' && m.status === 'active')).toHaveLength(1);
   });
 
@@ -1257,7 +1255,7 @@ describe('subscriber lifecycle', () => {
       headers: authHeaders(admin.cookies),
       payload: { newOwnerUserId: outsider.userId, reason: 'Wrong person.' },
     });
-    expect(notAMember.statusCode).toBe(400);
+    expect(notAMember.statusCode).toBe(409);
 
     // An operator must never become a tenant owner.
     await ctx.db
@@ -1270,7 +1268,7 @@ describe('subscriber lifecycle', () => {
       headers: authHeaders(admin.cookies),
       payload: { newOwnerUserId: admin.userId, reason: 'Should be refused.' },
     });
-    expect(operatorAttempt.statusCode).toBe(400);
+    expect(operatorAttempt.statusCode).toBe(409);
   });
 });
 
@@ -1459,7 +1457,7 @@ describe('safeguards', () => {
       payload: { organizationId, role: 'viewer' },
     });
     expect(demote.statusCode).toBe(409);
-    expect(demote.json().error.message).toMatch(/at least one active owner/i);
+    expect(demote.json().error.message).toMatch(/subscriber owner is permanent/i);
 
     // …suspension of the membership too…
     const suspend = await ctx.app.inject({
@@ -1489,7 +1487,7 @@ describe('safeguards', () => {
     expect(membership.status).toBe('active');
   });
 
-  it('allows the demotion once a second owner exists', async () => {
+  it('never creates a second owner or demotes the immutable subscriber', async () => {
     const admin = await operator();
     const { body } = await createSubscriberViaApi(admin.cookies, { email: 'first-owner@newco.test' });
     const organizationId = body.organizationId as string;
@@ -1502,12 +1500,13 @@ describe('safeguards', () => {
     });
     const secondId = invite.json().member.userId;
 
-    await ctx.app.inject({
+    const promote = await ctx.app.inject({
       method: 'PATCH',
       url: `/api/admin/members/${secondId}/membership`,
       headers: authHeaders(admin.cookies),
       payload: { organizationId, role: 'owner', status: 'active' },
     });
+    expect(promote.statusCode).toBe(409);
 
     const demote = await ctx.app.inject({
       method: 'PATCH',
@@ -1515,8 +1514,7 @@ describe('safeguards', () => {
       headers: authHeaders(admin.cookies),
       payload: { organizationId, role: 'accountant' },
     });
-    expect(demote.statusCode).toBe(200);
-    expect(demote.json().role).toBe('accountant');
+    expect(demote.statusCode).toBe(409);
   });
 
   it('refuses to let an administrator disable their own account', async () => {

@@ -34,6 +34,7 @@ import { requirePlatformCapability } from '../guards/platform.js';
 import {
   SUBSCRIBER_SORT_FIELDS,
   changeSubscriberOwner,
+  resolveSubscriberWorkspace,
   createSubscriber,
   getSubscriber,
   listSubscribers,
@@ -322,6 +323,12 @@ export async function adminSubscriberRoutes(app: FastifyInstance): Promise<void>
         ),
       );
     },
+  );
+
+  app.get<{ Params: { organizationId: string } }>(
+    '/api/admin/subscribers/:organizationId/workspace',
+    { preHandler: requirePlatformCapability('subscribers.read') },
+    async (request, reply) => reply.send(await resolveSubscriberWorkspace(app.db, request.params.organizationId)),
   );
 
   app.patch<{ Params: { organizationId: string } }>(

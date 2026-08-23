@@ -156,7 +156,7 @@ export function ProfilePage() {
           <ProfileRow label="Email" value={user.email} />
           <ProfileRow label="Mobile" value={user.mobile} />
           <ProfileRow label="Role" value={user.role} />
-          <ProfileRow label="Organization" value={organization?.legalName ?? '—'} />
+          <ProfileRow label="Company" value={organization?.legalName ?? '—'} />
         </dl>
       ) : (
         <Alert variant="info">Sign in to view your profile.</Alert>

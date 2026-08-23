@@ -26,7 +26,7 @@ const HIGHLIGHTS = [
   {
     icon: ShieldCheck,
     title: 'Controlled access',
-    body: 'Subscription entitlements decide which modules each organization can open.',
+    body: 'Subscription entitlements decide which modules each company workspace can open.',
   },
 ];
 

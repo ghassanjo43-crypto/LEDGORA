@@ -22,7 +22,7 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 import { sql } from 'kysely';
-import { createTestContext, type TestContext } from './helpers/testApp.js';
+import { createTestContext, seedUser, type TestContext } from './helpers/testApp.js';
 import type { AccountingActor } from '../src/services/accounting/audit.js';
 import * as accounts from '../src/services/accounting/accountService.js';
 import * as journals from '../src/services/accounting/journalService.js';
@@ -36,12 +36,12 @@ import * as Money from '../src/services/accounting/money.js';
 let ctx: TestContext;
 
 async function organization(name: string, currency: string): Promise<string> {
-  const { rows } = await sql<{ id: string }>`
-    INSERT INTO organizations (legal_name, country, base_currency, data_classification)
-    VALUES (${name}, 'JO', ${currency}, 'test')
-    RETURNING id
-  `.execute(ctx.db);
-  return rows[0]!.id;
+  const owner = await seedUser(ctx, { email: `${name.toLowerCase().replace(/\W+/gu, '-')}@precision.test` });
+  return ctx.db.transaction().execute(async (trx) => {
+    const org = await trx.insertInto('organizations').values({ subscriber_owner_user_id: owner.id, legal_name: name, country: 'JO', base_currency: currency, fiscal_year_start: '01-01', data_classification: 'test' }).returning('id').executeTakeFirstOrThrow();
+    await trx.insertInto('organization_memberships').values({ organization_id: org.id, user_id: owner.id, role: 'owner' }).execute();
+    return org.id;
+  });
 }
 
 async function user(email: string): Promise<string> {

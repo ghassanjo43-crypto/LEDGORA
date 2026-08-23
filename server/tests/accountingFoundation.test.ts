@@ -16,7 +16,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { sql } from 'kysely';
-import { createTestContext, type TestContext } from './helpers/testApp.js';
+import { createTestContext, seedUser, type TestContext } from './helpers/testApp.js';
 
 let ctx: TestContext;
 let orgA: string;
@@ -24,12 +24,12 @@ let orgB: string;
 
 /** A bare organization row — enough to hang accounting off. */
 async function organization(name: string): Promise<string> {
-  const { rows } = await sql<{ id: string }>`
-    INSERT INTO organizations (legal_name, country, base_currency, data_classification)
-    VALUES (${name}, 'JO', 'JOD', 'test')
-    RETURNING id
-  `.execute(ctx.db);
-  return rows[0]!.id;
+  const owner = await seedUser(ctx, { email: `${name.toLowerCase().replace(/\W+/gu, '-')}@foundation.test` });
+  return ctx.db.transaction().execute(async (trx) => {
+    const org = await trx.insertInto('organizations').values({ subscriber_owner_user_id: owner.id, legal_name: name, country: 'JO', base_currency: 'JOD', fiscal_year_start: '01-01', data_classification: 'test' }).returning('id').executeTakeFirstOrThrow();
+    await trx.insertInto('organization_memberships').values({ organization_id: org.id, user_id: owner.id, role: 'owner' }).execute();
+    return org.id;
+  });
 }
 
 async function account(org: string, code: string, type = 'asset', normal = 'debit'): Promise<string> {
@@ -400,6 +400,11 @@ describe('version history and audit', () => {
     const je = await entry(orgA, 'JE-0001');
     await line(orgA, je, acc, 1, 100, 0);
 
+    // Ownership is immutable, so the workspace shell may only be destroyed once
+    // its permanent claim has been retired — exactly what the purge path does
+    // before it removes the tenant. Without this the delete is refused.
+    await sql`UPDATE subscriber_workspace_ownership_claims
+      SET retired_at = now() WHERE workspace_id = ${orgA} AND retired_at IS NULL`.execute(ctx.db);
     await sql`DELETE FROM organizations WHERE id = ${orgA}`.execute(ctx.db);
 
     for (const table of ['accounts', 'journal_entries', 'journal_lines', 'accounting_audit_events']) {

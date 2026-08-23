@@ -121,7 +121,7 @@ describe('server-authoritative startup routing', () => {
 
     render(<AppShell />);
 
-    expect(await screen.findByText(/Set up your organization/i)).toBeTruthy();
+    expect(await screen.findByText(/Set up your company/i)).toBeTruthy();
   });
 
   it('shows a blank loading surface instead of onboarding before session hydration', () => {

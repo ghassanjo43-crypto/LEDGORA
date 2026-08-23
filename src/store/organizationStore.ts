@@ -249,7 +249,7 @@ export const useOrganizationStore = create<OrganizationState>()(
           // API call is scoped to the organization the server actually holds.
           id,
           ownerUserId: asText(payload.ownerUserId) || getCurrentUser()?.id || existing?.ownerUserId || '',
-          legalName: asText(payload.legalName, 'Your organization'),
+          legalName: asText(payload.legalName, 'Your company'),
           tradingName: asText(payload.tradingName),
           country: asText(payload.country),
           registrationNumber: asText(payload.registrationNumber),
@@ -333,7 +333,7 @@ export const useOrganizationStore = create<OrganizationState>()(
               hydration: {
                 status: 'error',
                 confirmedOrganizationId: s.hydration.confirmedOrganizationId,
-                error: error instanceof ApiError ? error.message : 'We could not load your organization.',
+                error: error instanceof ApiError ? error.message : 'We could not load your company workspace.',
               },
             }));
             return { status: 'error', organizationId: null };
@@ -358,7 +358,7 @@ export const useOrganizationStore = create<OrganizationState>()(
           return { ok: false, error: 'Please fix the highlighted fields.', fieldErrors };
         }
         const user = getCurrentUser();
-        if (!user) return { ok: false, error: 'You must be signed in to create an organization.' };
+        if (!user) return { ok: false, error: 'You must be signed in to create a company workspace.' };
         if (!user.emailVerified) return { ok: false, error: 'Verify your email before onboarding.' };
 
         const org: Organization = {
@@ -393,7 +393,7 @@ export const useOrganizationStore = create<OrganizationState>()(
       /* ── Draft subscription (cart) ─────────────────────────────────────── */
       saveDraftSubscription: (cart) => {
         const org = get().organization;
-        if (!org) return { ok: false, error: 'Create your organization first.' };
+        if (!org) return { ok: false, error: 'Create your company workspace first.' };
         const config = useMeteringConfigStore.getState().config;
         const pricing = priceSubscription(config, cart);
         if (!config.basePlans.some((p) => p.code === cart.basePlanCode && p.isActive)) {
@@ -681,7 +681,7 @@ export const useOrganizationStore = create<OrganizationState>()(
         const bootstrapped: Organization = {
           id: orgId,
           ownerUserId: userId,
-          legalName: settings.companyName || 'Demo Organization',
+          legalName: settings.companyName || 'Demo Company',
           tradingName: settings.tradingName || '',
           country: settings.country || 'AE',
           registrationNumber: settings.registrationNumber || '',

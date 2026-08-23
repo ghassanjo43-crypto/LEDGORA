@@ -566,6 +566,12 @@ export const adminSubscriberApi = {
     return api.get<AdminSubscriberDetail>(`/api/admin/subscribers/${id(organizationId)}`, signal);
   },
 
+  resolveWorkspace(organizationId: string, signal?: AbortSignal) {
+    return api.get<{ organizationId: string; workspaceName: string; ownerUserId: string }>(
+      `/api/admin/subscribers/${id(organizationId)}/workspace`, signal,
+    );
+  },
+
   /** The response carries a one-time onboarding secret. Do not persist it. */
   create(input: CreateSubscriberInput) {
     return api.post<CreateSubscriberResponse>('/api/admin/subscribers', input);

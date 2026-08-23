@@ -44,7 +44,7 @@ describe('the Organization step', () => {
 
     render(<Stepper current="Subscription" />);
 
-    expect(isTicked('Organization')).toBe(true);
+    expect(isTicked('Company')).toBe(true);
   });
 
   it('is NOT ticked when the backend confirmed there is no organization', () => {
@@ -56,7 +56,7 @@ describe('the Organization step', () => {
 
     render(<Stepper current="Subscription" />);
 
-    expect(isTicked('Organization')).toBe(false);
+    expect(isTicked('Company')).toBe(false);
   });
 
   it('is NOT ticked while the lookup is still in flight', () => {
@@ -66,7 +66,7 @@ describe('the Organization step', () => {
 
     render(<Stepper current="Subscription" />);
 
-    expect(isTicked('Organization')).toBe(false);
+    expect(isTicked('Company')).toBe(false);
   });
 
   it('is NOT ticked merely because a local organization object exists', () => {
@@ -78,7 +78,7 @@ describe('the Organization step', () => {
 
     render(<Stepper current="Subscription" />);
 
-    expect(isTicked('Organization')).toBe(false);
+    expect(isTicked('Company')).toBe(false);
   });
 });
 
@@ -102,9 +102,9 @@ describe('the other steps', () => {
       hydration: { status: 'ready', confirmedOrganizationId: 'org-1', error: null },
     });
 
-    render(<Stepper current="Organization" />);
+    render(<Stepper current="Company" />);
 
-    expect(isTicked('Organization')).toBe(false);
+    expect(isTicked('Company')).toBe(false);
     expect(isTicked('Subscription')).toBe(false);
   });
 });

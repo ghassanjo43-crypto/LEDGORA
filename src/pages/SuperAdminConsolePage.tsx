@@ -214,7 +214,7 @@ export function SuperAdminConsolePage() {
           message: credentialResult.message,
         });
         setMissingCredential(null);
-        setNotice(`${form.fullName} created as the owner of a new subscriber organization.`);
+        setNotice(`${form.fullName} created as the owner of a new subscriber workspace.`);
       } else {
         // Never report unqualified success when the credential is missing.
         setCredential(null);
@@ -323,7 +323,7 @@ export function SuperAdminConsolePage() {
             button in the platform header invites an operator to answer that
             question with a dropdown, which is the wrong workflow. The
             subscriber's own Owner or Organization Admin adds their people from
-            inside their workspace (Users & Roles), where the organization comes
+            inside their workspace (Users & Roles), where the company context comes
             from their authenticated session and cannot be chosen at all.
 
             Operator support for a specific tenant has not been removed: it
@@ -458,7 +458,7 @@ export function SuperAdminConsolePage() {
         onClose={() => setPackageTarget(null)}
         onAssigned={(result) => {
           setNotice(
-            `Package changed to ${result.newPlanCode} for the whole organization (${result.direction}). Entitlements recalculated.`,
+            `Package changed to ${result.newPlanCode} for the whole subscriber account (${result.direction}). Entitlements recalculated.`,
           );
           void reloadSubscribers({ limit: 25, offset: 0, sort: 'created_at', direction: 'desc' });
         }}

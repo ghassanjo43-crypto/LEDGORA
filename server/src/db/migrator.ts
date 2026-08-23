@@ -27,6 +27,7 @@ import * as accountingFoundation from './migrations/013_accounting_foundation.js
 import * as commercialPackageCatalogue from './migrations/014_commercial_package_catalogue.js';
 import * as accountPostingStates from './migrations/015_account_posting_states.js';
 import * as openingBalances from './migrations/016_opening_balances.js';
+import * as immutableSubscriberOwnership from './migrations/017_immutable_subscriber_ownership.js';
 
 const MIGRATIONS: Record<string, Migration> = {
   '001_initial_schema': initialSchema,
@@ -45,6 +46,7 @@ const MIGRATIONS: Record<string, Migration> = {
   '014_commercial_package_catalogue': commercialPackageCatalogue,
   '015_account_posting_states': accountPostingStates,
   '016_opening_balances': openingBalances,
+  '017_immutable_subscriber_ownership': immutableSubscriberOwnership,
 };
 
 class StaticMigrationProvider implements MigrationProvider {

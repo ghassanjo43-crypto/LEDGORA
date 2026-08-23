@@ -1088,10 +1088,9 @@ export interface UpdateMembershipInput {
 /**
  * Change a member's role or membership status inside a named organization.
  *
- * The last-active-owner rule lives here as well as in `memberService`, because
- * this is a different entry point and a safeguard that is only in one caller is
- * not a safeguard. Promotion TO owner is allowed (that is ownership transfer's
- * building block); leaving zero active owners is not.
+ * Subscriber ownership is immutable.  This service refuses both promotion to
+ * owner and any change that would alter the designated owner's membership;
+ * the database repeats the invariant for every other write path.
  */
 export async function updateMembershipAsAdmin(
   db: Kysely<Database>,
@@ -1112,25 +1111,19 @@ export async function updateMembershipAsAdmin(
       .executeTakeFirst();
     if (!membership) throw errors.notFound('Member');
 
+    if (input.role === 'owner' && membership.role !== 'owner') {
+      throw errors.conflict('A workspace already has its permanent subscriber owner.');
+    }
+
     const losesOwnership =
       membership.role === 'owner' &&
       ((input.role !== undefined && input.role !== 'owner') ||
         (input.status !== undefined && input.status !== 'active'));
 
     if (losesOwnership) {
-      const others = await trx
-        .selectFrom('organization_memberships')
-        .select('id')
-        .where('organization_id', '=', input.organizationId)
-        .where('role', '=', 'owner')
-        .where('status', '=', 'active')
-        .where('user_id', '!=', input.userId)
-        .execute();
-      if (others.length === 0) {
-        throw errors.conflict(
-          'The organization must keep at least one active owner. Transfer ownership first.',
-        );
-      }
+      throw errors.conflict(
+        'The subscriber owner is permanent and its workspace membership cannot be changed.',
+      );
     }
 
     const updated = await trx

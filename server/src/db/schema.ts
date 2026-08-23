@@ -140,6 +140,7 @@ export interface PlatformUserRolesTable {
 
 export interface OrganizationsTable {
   id: Generated<string>;
+  subscriber_owner_user_id: string;
   legal_name: string;
   trading_name: string | null;
   country: string;
