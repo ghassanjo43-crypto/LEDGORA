@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Plus, Trash2, Send, Save, Info, Eye, Palette, LayoutTemplate, Wand2 } from 'lucide-react';
+import { Plus, Send, Save, Info, Eye, Palette, LayoutTemplate, Wand2 } from 'lucide-react';
 import type { BusinessEntity } from '@/types';
 import type { Invoice, InvoiceLine } from '@/types/invoice';
 import { useStore } from '@/store/useStore';
@@ -16,7 +16,8 @@ import { Badge } from '@/components/ui/Badge';
 import { useInvoiceTemplateStore, INVOICE_ENTITY_ID } from '@/store/invoiceTemplateStore';
 import { useInvoiceTemplateEditor } from '@/store/invoiceTemplateEditorStore';
 import { InvoicePreviewModal } from '@/components/invoices/InvoicePreviewModal';
-import { calculateInvoiceLine, calculateInvoiceTotals } from '@/lib/invoiceCalculations';
+import { InvoiceLineItems, InvoiceLineTotals } from '@/components/invoices/InvoiceLineItems';
+import { calculateInvoiceTotals } from '@/lib/invoiceCalculations';
 import { formatCurrency } from '@/lib/money';
 import { ReadOnlyValue } from '@/components/ui/ReadOnlyValue';
 import { describeCurrency, useTransactionCurrency } from '@/lib/transactionCurrency';
@@ -27,13 +28,8 @@ import { Field, Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { useToast } from '@/components/ui/Toast';
 import { EntityPicker } from '@/components/shared/EntityPicker';
-import { AccountSelect } from '@/components/journal/AccountSelect';
-import { CostCenterLineControl } from '@/components/cost-centers/CostCenterLineControl';
-import { ProjectPicker } from '@/components/projects/ProjectPicker';
 import { useProjectStore } from '@/store/projectStore';
 import { useHasModule } from '@/store/entitlementHooks';
-import { InventoryLineControl } from '@/components/inventory/InventoryLineControl';
-import { ItemSelector } from '@/components/items/ItemSelector';
 import { salesItemDefaults } from '@/lib/itemCatalogue';
 import { useInventoryStore } from '@/store/inventoryStore';
 import { useTaxCodeStore } from '@/store/taxCodeStore';
@@ -66,7 +62,6 @@ export function InvoiceEditorDrawer({ open, invoiceId, onClose }: Props) {
   const showInventory = useHasModule('inventory_basic');
   const catalogueItems = useInventoryStore((s) => s.items);
   const taxCodes = useTaxCodeStore((s) => s.taxCodes);
-  const showDimensions = showCostCenter || showProject || showInventory;
   const setActiveView = useStore((s) => s.setActiveView);
   const entities = useEntityStore((s) => s.entities);
   const invoice = useInvoiceStore((s) => (invoiceId ? s.invoices.find((i) => i.id === invoiceId) : undefined));
@@ -273,58 +268,28 @@ export function InvoiceEditorDrawer({ open, invoiceId, onClose }: Props) {
             <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400">Line items</h3>
             {!readOnly && <Button type="button" variant="outline" size="sm" onClick={addLine}><Plus className="h-4 w-4" /> Add line</Button>}
           </div>
-          <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
-            <table className="min-w-full text-xs">
-              <thead className="bg-slate-50 text-[10px] uppercase tracking-wide text-slate-400 dark:bg-slate-800/40">
-                <tr>
-                  <th className="px-2 py-2 text-left">Item</th>
-                  <th className="px-2 py-2 text-left">Revenue account</th>
-                  <th className="px-2 py-2 text-left">Description</th>
-                  <th className="px-2 py-2 text-right">Qty</th>
-                  <th className="px-2 py-2 text-right">Unit price</th>
-                  <th className="px-2 py-2 text-right">Disc %</th>
-                  <th className="px-2 py-2 text-right">Tax %</th>
-                  <th className="px-2 py-2 text-right">Line total</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                {lines.map((line) => {
-                  const c = calculateInvoiceLine(line);
-                  return (
-                    <tr key={line.id}>
-                      <td className="min-w-[12rem] px-2 py-1.5"><ItemSelector mode="sales" value={line.itemId} disabled={readOnly} onChange={(id) => selectItem(line.id, id)} /></td>
-                      <td className="px-2 py-1.5 min-w-[12rem]"><AccountSelect value={line.accountId} accounts={accounts} onChange={(a) => setLine(line.id, { accountId: a.id })} disabled={readOnly} /></td>
-                      <td className="px-2 py-1.5 min-w-[10rem]"><Input value={line.description} onChange={(e) => setLine(line.id, { description: e.target.value })} disabled={readOnly} className="h-8" placeholder="Description" /></td>
-                      <td className="px-2 py-1.5 w-20"><Input type="number" step="0.01" value={line.quantity} onChange={(e) => setLine(line.id, { quantity: Number(e.target.value) })} disabled={readOnly} className="h-8 text-right" /></td>
-                      <td className="px-2 py-1.5 w-24"><Input type="number" step={moneyStep} data-money="true" value={line.unitPrice} onChange={(e) => setLine(line.id, { unitPrice: Number(e.target.value) })} disabled={readOnly} className="h-8 text-right" /></td>
-                      <td className="px-2 py-1.5 w-20"><Input type="number" step="0.01" value={line.discountValue ?? 0} onChange={(e) => setLine(line.id, { discountType: 'percentage', discountValue: Number(e.target.value) })} disabled={readOnly} className="h-8 text-right" /></td>
-                      <td className="px-2 py-1.5 w-20"><Input type="number" step="0.01" value={line.taxRate} onChange={(e) => setLine(line.id, { taxRate: Number(e.target.value) })} disabled={readOnly} className="h-8 text-right" /></td>
-                      <td className="px-2 py-1.5 text-right font-mono">{money(c.lineTotal)}</td>
-                      <td className="px-2 py-1.5">{!readOnly && <button type="button" onClick={() => removeLine(line.id)} className="text-slate-400 hover:text-red-600" aria-label="Remove line"><Trash2 className="h-4 w-4" /></button>}</td>
-                    </tr>
-                  );
-                }).flatMap((row, i) => showDimensions ? [row, (
-                  <tr key={`${lines[i]!.id}-cc`}>
-                    <td colSpan={9} className="px-2 pb-2">
-                      <div className="flex flex-wrap items-start gap-x-6 gap-y-2">
-                        {showCostCenter && <CostCenterLineControl amount={calculateInvoiceLine(lines[i]!).taxableAmount} costCenterId={lines[i]!.costCenterId} assignments={lines[i]!.costCenterAssignments} postingDate={issueDate} currency={currency} disabled={readOnly} onChange={(patch) => setLine(lines[i]!.id, patch)} />}
-                        {showProject && <div className="flex items-center gap-2"><span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Project</span><div className="w-52"><ProjectPicker value={lines[i]!.projectId ?? ''} projects={projects} postingDate={issueDate} disabled={readOnly} onChange={(id) => setLine(lines[i]!.id, { projectId: id || undefined })} /></div></div>}
-                        {showInventory && <InventoryLineControl mode="issue" itemId={lines[i]!.inventoryItemId} warehouseId={lines[i]!.warehouseId} enabled={lines[i]!.inventoryFulfillmentMode === 'issue-on-invoice'} disabled={readOnly} onChange={(p) => setLine(lines[i]!.id, { inventoryItemId: p.itemId, warehouseId: p.warehouseId, inventoryFulfillmentMode: p.enabled ? 'issue-on-invoice' : 'none' })} />}
-                      </div>
-                    </td>
-                  </tr>
-                )] : [row])}
-              </tbody>
-              <tfoot>
-                <tr className="border-t border-slate-200 dark:border-slate-700">
-                  <td colSpan={7} className="px-2 py-1.5 text-right text-slate-500">Subtotal · Tax · Total</td>
-                  <td className="px-2 py-1.5 text-right font-mono font-semibold">{money(totals.subtotal)} · {money(totals.taxTotal)} · {money(totals.grandTotal)}</td>
-                  <td />
-                </tr>
-              </tfoot>
-            </table>
-          </div>
+          <InvoiceLineItems
+            lines={lines}
+            accounts={accounts}
+            projects={projects}
+            currency={currency}
+            issueDate={issueDate}
+            moneyStep={moneyStep}
+            money={money}
+            readOnly={readOnly}
+            showCostCenter={showCostCenter}
+            showProject={showProject}
+            showInventory={showInventory}
+            onChange={setLine}
+            onSelectItem={selectItem}
+            onRemove={removeLine}
+          />
+          <InvoiceLineTotals
+            subtotal={totals.subtotal}
+            taxTotal={totals.taxTotal}
+            grandTotal={totals.grandTotal}
+            money={money}
+          />
         </section>
 
         <Field label="Notes"><Input value={notes} onChange={(e) => setNotes(e.target.value)} disabled={readOnly} placeholder="Optional notes shown on the invoice" /></Field>
