@@ -17,11 +17,11 @@ const iStore = () => useInvoiceStore.getState();
 const firstCustomerId = () => useEntityStore.getState().entities.find((e) => e.entityType === 'customer' || e.entityType === 'both')!.id;
 const revenueId = () => useStore.getState().accounts.find((a) => a.code === '4120')!.id;
 
-function issuedInvoice(qty: number, unitPrice: number, taxRate: number): string {
-  const { id } = iStore().createDraft({ customerId: firstCustomerId() });
+async function issuedInvoice(qty: number, unitPrice: number, taxRate: number): Promise<string>{
+  const { id } = await iStore().createDraft({ customerId: firstCustomerId() });
   const inv = iStore().getInvoice(id!)!;
-  iStore().updateDraft(id!, { lines: [{ ...inv.lines[0]!, accountId: revenueId(), description: 'Service', quantity: qty, unitPrice, taxRate }] });
-  iStore().issueInvoice(id!);
+  await iStore().updateDraft(id!, { lines: [{ ...inv.lines[0]!, accountId: revenueId(), description: 'Service', quantity: qty, unitPrice, taxRate }] });
+  await iStore().issueInvoice(id!);
   return id!;
 }
 /** Create a credit note against an invoice for a given amount, optionally issue it. */
@@ -33,7 +33,7 @@ function creditNote(invoiceId: string, amount: number, issue = true): string {
   return id!;
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   useJournalStore.getState().resetToDefault();
   useInvoiceTemplateStore.getState().resetToDefault();
   useInvoiceStore.getState().resetToDefault();
@@ -43,8 +43,8 @@ beforeEach(() => {
 });
 
 describe('invoice settlement summary (INV total 8,000, CN 3,000 → 5,000)', () => {
-  it('applies the issued credit note, keeps the original total and derives the balance', () => {
-    const invId = issuedInvoice(1, 8000, 0);
+  it('applies the issued credit note, keeps the original total and derives the balance', async () => {
+    const invId = await issuedInvoice(1, 8000, 0);
     const cnId = creditNote(invId, 3000);
     // Excluded noise: a draft and a voided credit note against the same invoice.
     creditNote(invId, 1000, false); // draft
@@ -66,8 +66,8 @@ describe('invoice settlement summary (INV total 8,000, CN 3,000 → 5,000)', () 
     expect(deriveSettlementStatus(summary)).toBe('partially-credited');
   });
 
-  it('later credit notes update the current settlement summary', () => {
-    const invId = issuedInvoice(1, 8000, 0);
+  it('later credit notes update the current settlement summary', async () => {
+    const invId = await issuedInvoice(1, 8000, 0);
     creditNote(invId, 3000);
     let summary = buildInvoiceSettlementSummary(iStore().getInvoice(invId)!, cnStore().creditNotes, useReceiptStore.getState().receipts);
     expect(summary.balanceDue).toBe(5000);
@@ -79,8 +79,8 @@ describe('invoice settlement summary (INV total 8,000, CN 3,000 → 5,000)', () 
     expect(iStore().getInvoice(invId)!.grandTotal).toBe(8000); // still immutable
   });
 
-  it('combines receipts and credits (paid-after-credit when fully settled)', () => {
-    const invId = issuedInvoice(1, 8000, 0);
+  it('combines receipts and credits (paid-after-credit when fully settled)', async () => {
+    const invId = await issuedInvoice(1, 8000, 0);
     creditNote(invId, 3000); // balance 5,000
     // Receipt settling the remaining 5,000.
     const r = useReceiptStore.getState().createDraft({ customerId: firstCustomerId(), amount: 5000 });
@@ -96,8 +96,8 @@ describe('invoice settlement summary (INV total 8,000, CN 3,000 → 5,000)', () 
     expect(deriveSettlementStatus(summary)).toBe('paid-after-credit');
   });
 
-  it('fully-credited when a credit alone clears the balance', () => {
-    const invId = issuedInvoice(1, 8000, 0);
+  it('fully-credited when a credit alone clears the balance', async () => {
+    const invId = await issuedInvoice(1, 8000, 0);
     creditNote(invId, 8000);
     const summary = buildInvoiceSettlementSummary(iStore().getInvoice(invId)!, cnStore().creditNotes, useReceiptStore.getState().receipts);
     expect(summary.balanceDue).toBe(0);
@@ -106,8 +106,8 @@ describe('invoice settlement summary (INV total 8,000, CN 3,000 → 5,000)', () 
 });
 
 describe('the View action opens the linked credit note', () => {
-  it('requestOpen queues the credit note for the editor and consume returns it', () => {
-    const invId = issuedInvoice(1, 8000, 0);
+  it('requestOpen queues the credit note for the editor and consume returns it', async () => {
+    const invId = await issuedInvoice(1, 8000, 0);
     const cnId = creditNote(invId, 3000);
     useCreditNoteEditor.getState().requestOpen(cnId);
     expect(useCreditNoteEditor.getState().requestedEditorId).toBe(cnId);
@@ -117,8 +117,8 @@ describe('the View action opens the linked credit note', () => {
 });
 
 describe('printed invoice: original vs current copy', () => {
-  it('the original document omits the account-position panel; the current copy shows it', () => {
-    const invId = issuedInvoice(1, 8000, 0);
+  it('the original document omits the account-position panel; the current copy shows it', async () => {
+    const invId = await issuedInvoice(1, 8000, 0);
     creditNote(invId, 3000);
     const invoice = iStore().getInvoice(invId)!;
     const snap = iStore().previewSnapshot(invId)!;

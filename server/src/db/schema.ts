@@ -820,6 +820,16 @@ export interface InvoicesTable {
   journal_entry_id: string | null;
   reversal_journal_entry_id: string | null;
   void_reason: string | null;
+  /**
+   * The accounts this invoice posted against, recorded at issue.
+   *
+   * A receipt credits the receivable the invoice DEBITED; without this the
+   * settlement path would have to be told, and any account it was told would
+   * balance the entry while leaving the real receivable outstanding.
+   */
+  receivable_account_id: string | null;
+  tax_account_id: string | null;
+  additional_charges_account_id: string | null;
   issued_at: Timestamp | null;
   sent_at: Timestamp | null;
   paid_at: Timestamp | null;
@@ -876,6 +886,14 @@ export interface InvoicePaymentsTable {
   bank_account_id: string | null;
   journal_entry_id: string | null;
   receipt_id: string | null;
+  /**
+   * A receipt recorded in error is reversed, never deleted: the row stays, a
+   * reversing entry is posted, and both remain findable. Deleting would balance
+   * the subledger by making the mistake invisible.
+   */
+  reversed_at: Timestamp | null;
+  reversal_journal_entry_id: string | null;
+  reversal_reason: string | null;
   created_by: string | null;
   created_at: Timestamp;
 }

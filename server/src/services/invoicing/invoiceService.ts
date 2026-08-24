@@ -73,6 +73,14 @@ export interface InvoiceLineInput {
 
 export interface InvoiceInput {
   issuingEntityId: string;
+  /**
+   * Delivery, handling and the like, as a single total.
+   *
+   * Carried on the invoice rather than as a line because that is how the
+   * browser held it, and a migrated invoice whose charges became an extra line
+   * would not match the document the customer already has.
+   */
+  additionalChargesTotal?: string;
   customerId: string;
   issueDate: string;
   dueDate: string;
@@ -130,6 +138,7 @@ export interface InvoiceRecord {
   subtotal: string;
   discountTotal: string;
   taxTotal: string;
+  additionalChargesTotal: string;
   grandTotal: string;
   amountPaid: string;
   creditsApplied: string;
@@ -220,6 +229,7 @@ function toInvoice(row: any, lines: any[]): InvoiceRecord {
     subtotal: display(row.subtotal, decimals),
     discountTotal: display(row.discount_total, decimals),
     taxTotal: display(row.tax_total, decimals),
+    additionalChargesTotal: display(row.additional_charges_total, decimals),
     grandTotal: display(row.grand_total, decimals),
     amountPaid: display(row.amount_paid, decimals),
     creditsApplied: display(row.credits_applied, decimals),
@@ -351,10 +361,11 @@ interface ComputedLine {
  * client that can supply the wrong one, and the figure on a tax document is not
  * a matter of opinion — least of all once an authority holds a copy of it.
  */
-function computeTotals(lines: InvoiceLineInput[]): {
+function computeTotals(lines: InvoiceLineInput[], additionalCharges = '0'): {
   computed: ComputedLine[];
   subtotal: Money.Amount;
   taxTotal: Money.Amount;
+  chargesTotal: Money.Amount;
   grandTotal: Money.Amount;
 } {
   const computed: ComputedLine[] = lines.map((line, index) => {
@@ -382,7 +393,13 @@ function computeTotals(lines: InvoiceLineInput[]): {
 
   const subtotal = Money.sum(computed.map((c) => c.lineSubtotal));
   const taxTotal = Money.sum(computed.map((c) => c.taxAmount));
-  return { computed, subtotal, taxTotal, grandTotal: subtotal + taxTotal };
+
+  const chargesTotal = amount(additionalCharges ?? '0', 'additionalChargesTotal');
+  if (Money.isNegative(chargesTotal)) {
+    throw errors.validation('Additional charges cannot be negative.');
+  }
+
+  return { computed, subtotal, taxTotal, chargesTotal, grandTotal: subtotal + taxTotal + chargesTotal };
 }
 
 /**
@@ -516,7 +533,8 @@ export async function createDraft(
   if (!input.issuingEntityId) throw errors.validation('An issuing entity is required.');
   if (!input.lines || input.lines.length === 0) throw errors.validation('An invoice needs at least one line.');
 
-  const { computed, subtotal, taxTotal, grandTotal } = computeTotals(input.lines);
+  const { computed, subtotal, taxTotal, chargesTotal, grandTotal } =
+    computeTotals(input.lines, input.additionalChargesTotal);
 
   return db.transaction().execute(async (trx) => {
     await assertAccountsArePostable(trx, actor, input.lines);
@@ -544,6 +562,7 @@ export async function createDraft(
       template_version_id: input.templateVersionId ?? null,
       subtotal: Money.toDecimalString(subtotal),
       tax_total: Money.toDecimalString(taxTotal),
+      additional_charges_total: Money.toDecimalString(chargesTotal),
       grand_total: Money.toDecimalString(grandTotal),
       balance_due: Money.toDecimalString(grandTotal),
       notes: input.notes ?? '',
@@ -568,7 +587,8 @@ export async function updateDraft(
 ): Promise<InvoiceRecord> {
   assertDates(input);
   if (!input.lines || input.lines.length === 0) throw errors.validation('An invoice needs at least one line.');
-  const { computed, subtotal, taxTotal, grandTotal } = computeTotals(input.lines);
+  const { computed, subtotal, taxTotal, chargesTotal, grandTotal } =
+    computeTotals(input.lines, input.additionalChargesTotal);
 
   return db.transaction().execute(async (trx) => {
     const current = await lockInvoice(trx, actor, id, options.expectedVersion);
@@ -592,6 +612,7 @@ export async function updateDraft(
       cost_center_id: input.costCenterId ?? null,
       subtotal: Money.toDecimalString(subtotal),
       tax_total: Money.toDecimalString(taxTotal),
+      additional_charges_total: Money.toDecimalString(chargesTotal),
       grand_total: Money.toDecimalString(grandTotal),
       balance_due: Money.toDecimalString(grandTotal - Money.toAmount(current.amount_paid)),
       notes: input.notes ?? '',
@@ -667,6 +688,8 @@ export async function issueInvoice(
   id: string,
   options: MutationOptions,
   receivableAccountId: string,
+  taxAccountId?: string,
+  chargesAccountId?: string,
 ): Promise<InvoiceRecord> {
   const prepared = await db.transaction().execute(async (trx) => {
     const current = await lockInvoice(trx, actor, id, options.expectedVersion);
@@ -693,6 +716,36 @@ export async function issueInvoice(
    * an unattached draft rather than bound to a document it no longer describes.
    */
   const total = Money.toAmount(prepared.current.grand_total);
+  const taxDue = Money.toAmount(prepared.current.tax_total);
+
+  /*
+   * Tax is credited to a LIABILITY account, never back to the receivable.
+   *
+   * Crediting it to the receivable balances the entry — which is why this was
+   * invisible — but it nets the customer's ledger balance down to the sale
+   * value while the invoice itself says they owe the tax-inclusive total. The
+   * subledger and the general ledger then disagree by exactly the tax, and the
+   * tax collected on the authority's behalf is recorded as owed to nobody.
+   */
+  if (!Money.isZero(taxDue) && !taxAccountId) {
+    throw errors.validation('This invoice carries tax, so a tax account is required to post it.', {
+      fieldErrors: { taxAccountId: 'Choose the liability account that holds tax collected.' },
+    });
+  }
+
+  /*
+   * Additional charges are part of what the customer owes, so they are inside
+   * the receivable debit and need a credit of their own. Without one the entry
+   * is out of balance by exactly the charges — which `journalService` would
+   * refuse, turning a missing account into an unexplained posting failure.
+   */
+  const charges = Money.toAmount(prepared.current.additional_charges_total);
+  if (!Money.isZero(charges) && !chargesAccountId) {
+    throw errors.validation('This invoice carries additional charges, so an account is required to post them.', {
+      fieldErrors: { chargesAccountId: 'Choose the income account that receives delivery or handling charges.' },
+    });
+  }
+
   const entry = await journals.createDraft(db, actor, {
     transactionDate: dateText(prepared.current.issue_date),
     reference: prepared.current.invoice_number,
@@ -709,12 +762,19 @@ export async function issueInvoice(
         projectId: line.project_id,
         costCenterId: line.cost_center_id,
       })),
-      ...(Money.isZero(Money.toAmount(prepared.current.tax_total))
+      ...(Money.isZero(taxDue)
         ? []
         : [{
-            accountId: receivableAccountId,
-            credit: Money.toDecimalString(Money.toAmount(prepared.current.tax_total)),
+            accountId: taxAccountId!,
+            credit: Money.toDecimalString(taxDue),
             memo: 'Tax',
+          }]),
+      ...(Money.isZero(charges)
+        ? []
+        : [{
+            accountId: chargesAccountId!,
+            credit: Money.toDecimalString(charges),
+            memo: 'Additional charges',
           }]),
     ],
   });
@@ -726,6 +786,14 @@ export async function issueInvoice(
     await trx.updateTable('invoices').set({
       status: 'issued',
       journal_entry_id: posted.id,
+      /*
+       * Recorded so settlement credits the receivable this invoice DEBITED.
+       * A receipt told to use some other account balances its own entry while
+       * leaving this invoice's receivable outstanding forever.
+       */
+      receivable_account_id: receivableAccountId,
+      tax_account_id: taxAccountId ?? null,
+      additional_charges_account_id: chargesAccountId ?? null,
       issued_at: new Date(),
       version: current.version + 1,
       updated_by: actor.userId,

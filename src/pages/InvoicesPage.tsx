@@ -4,6 +4,7 @@ import type { Invoice, InvoiceStatus } from '@/types/invoice';
 import { useStore } from '@/store/useStore';
 import { useEntityStore } from '@/store/useEntityStore';
 import { useInvoiceStore } from '@/store/invoiceStore';
+import { useInvoiceBackendSync } from '@/services/invoices/useInvoiceBackendSync';
 import { useCreditNoteStore } from '@/store/creditNoteStore';
 import { useCreditNoteEditor } from '@/store/creditNoteEditorStore';
 import { useReceiptStore } from '@/store/receiptStore';
@@ -38,8 +39,18 @@ export function InvoicesPage() {
   const settings = useStore((s) => s.settings);
   const setActiveView = useStore((s) => s.setActiveView);
   const entities = useEntityStore((s) => s.entities);
+  /*
+   * Point the store at this company's actual backend before anything reads it.
+   * For a company still on browser storage this is a no-op; for a migrated one
+   * it loads from the API. Either way the rest of this page is unchanged — the
+   * whole purpose of hydrating the store rather than branching per screen.
+   */
+  useInvoiceBackendSync();
+
   const invoices = useInvoiceStore((s) => s.invoices);
   const createDraft = useInvoiceStore((s) => s.createDraft);
+  const syncing = useInvoiceStore((s) => s.syncing);
+  const syncError = useInvoiceStore((s) => s.syncError);
   const store = useInvoiceStore();
   const createCreditNote = useCreditNoteStore((s) => s.createCreditNoteFromInvoice);
   const requestOpenCreditNote = useCreditNoteEditor((s) => s.requestOpen);
@@ -83,14 +94,34 @@ export function InvoicesPage() {
   const customerOptions = [{ value: '', label: 'All customers' }, ...entities.filter((e) => e.entityType === 'customer' || e.entityType === 'both').map((e) => ({ value: e.id, label: e.legalName }))];
   const statusOptions = [{ value: 'ALL', label: 'All statuses' }, ...(['draft', 'issued', 'sent', 'partially-paid', 'paid', 'void'] as const).map((s) => ({ value: s, label: s }))];
 
-  const onNew = (): void => {
-    const res = createDraft({ customerId: customerFilter || undefined, issueDate: today(), dueDate: today() });
+  const onNew = async (): Promise<void> => {
+    const res = await createDraft({ customerId: customerFilter || undefined, issueDate: today(), dueDate: today() });
     if (res.ok && res.id) setEditorId(res.id);
+    else if (!res.ok) notify(res.error ?? 'Could not create the invoice.', 'error');
   };
 
-  const act = (fn: () => { ok: boolean; error?: string }, success: string): void => {
-    const res = fn();
-    if (res.ok) notify(success, 'success'); else notify(res.error ?? 'Action failed.', 'error');
+  /*
+   * Accepts a synchronous OR asynchronous action.
+   *
+   * The lifecycle actions post over the network for a server-backed company and
+   * the browser-only ones do not, and this page should not have to know which is
+   * which. `await` on a plain value is a no-op, so one wrapper covers both.
+   */
+  const act = (
+    fn: () => { ok: boolean; error?: string } | Promise<{ ok: boolean; error?: string }>,
+    success: string,
+  ): void => {
+    void (async () => {
+      try {
+        const res = await fn();
+        if (res.ok) notify(success, 'success');
+        else notify(res.error ?? 'Action failed.', 'error');
+      } catch (cause) {
+        // A rejected promise would otherwise vanish, leaving the user looking at
+        // a menu that did nothing and said nothing.
+        notify(cause instanceof Error ? cause.message : 'Action failed.', 'error');
+      }
+    })();
   };
 
   const onCreateCreditNote = (invoiceId: string): void => {
@@ -129,7 +160,21 @@ export function InvoicesPage() {
         <div className="relative min-w-[180px] flex-1"><Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search number or customer…" className="h-9" /></div>
       </div>
 
-      {rows.length === 0 ? (
+      {/*
+        * A failed load is reported, never rendered as an empty book. "No
+        * invoices yet" on a company that has hundreds is the most alarming
+        * thing this screen could say, and it would be saying it about a network
+        * problem.
+        */}
+      {syncError && (
+        <div role="alert" className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-3 text-sm text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
+          These invoices are held on the server and could not be loaded: {syncError}. What is shown may be out of date.
+        </div>
+      )}
+
+      {syncing && rows.length === 0 ? (
+        <Card><CardBody><EmptyState icon={FileText} title="Loading invoices…" description="Fetching this company's invoices from the server." /></CardBody></Card>
+      ) : rows.length === 0 ? (
         <Card><CardBody><EmptyState icon={FileText} title="No invoices yet" description="Create your first invoice — it stays a draft until you issue it, which posts the sale to the ledger." /></CardBody></Card>
       ) : (
         <Card className="overflow-hidden">

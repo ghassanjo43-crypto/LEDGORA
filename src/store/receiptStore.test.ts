@@ -25,11 +25,11 @@ const je = (id: string) => useJournalStore.getState().entries.find((e) => e.id =
 const rStore = () => useReceiptStore.getState();
 const iStore = () => useInvoiceStore.getState();
 
-function issuedInvoice(customerId: string, qty: number, unitPrice: number, taxRate: number): string {
-  const { id } = iStore().createDraft({ customerId });
+async function issuedInvoice(customerId: string, qty: number, unitPrice: number, taxRate: number): Promise<string>{
+  const { id } = await iStore().createDraft({ customerId });
   const inv = iStore().getInvoice(id!)!;
-  iStore().updateDraft(id!, { lines: [{ ...inv.lines[0]!, accountId: revenueId(), description: 'Service', quantity: qty, unitPrice, taxRate }] });
-  iStore().issueInvoice(id!);
+  await iStore().updateDraft(id!, { lines: [{ ...inv.lines[0]!, accountId: revenueId(), description: 'Service', quantity: qty, unitPrice, taxRate }] });
+  await iStore().issueInvoice(id!);
   return id!;
 }
 
@@ -42,7 +42,7 @@ function allocation(receiptId: string, inv: Invoice, amount: number): ReceiptAll
   };
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   useJournalStore.getState().resetToDefault();
   useInvoiceTemplateStore.getState().resetToDefault();
   useInvoiceStore.getState().resetToDefault();
@@ -52,7 +52,7 @@ beforeEach(() => {
 });
 
 describe('draft receipts', () => {
-  it('creating and editing a draft posts nothing', () => {
+  it('creating and editing a draft posts nothing', async () => {
     const before = journalCount();
     const { id } = rStore().createDraft({ customerId: custA(), amount: 500 });
     expect(rStore().getReceiptById(id!)!.status).toBe('draft');
@@ -62,8 +62,8 @@ describe('draft receipts', () => {
 });
 
 describe('acceptance 1 — full invoice receipt', () => {
-  it('posts Dr bank / Cr receivables and marks the invoice paid', () => {
-    const invId = issuedInvoice(custA(), 1, 1000, 16); // 1,160
+  it('posts Dr bank / Cr receivables and marks the invoice paid', async () => {
+    const invId = await issuedInvoice(custA(), 1, 1000, 16); // 1,160
     const r = rStore().createReceiptForInvoice(invId);
     rStore().updateDraft(r.id!, { transactionReference: 'TRX-10001' });
     const before = journalCount();
@@ -96,8 +96,8 @@ describe('acceptance 1 — full invoice receipt', () => {
 });
 
 describe('acceptance 2 — partial receipt', () => {
-  it('marks the invoice partially paid with the correct balance', () => {
-    const invId = issuedInvoice(custA(), 1, 1000, 16); // 1,160
+  it('marks the invoice partially paid with the correct balance', async () => {
+    const invId = await issuedInvoice(custA(), 1, 1000, 16); // 1,160
     const inv = iStore().getInvoice(invId)!;
     const { id } = rStore().createDraft({ customerId: custA(), amount: 500 });
     rStore().updateDraft(id!, { transactionReference: 'TRX', allocations: [allocation(id!, inv, 500)] });
@@ -114,10 +114,10 @@ describe('acceptance 2 — partial receipt', () => {
 });
 
 describe('acceptance 3 — multiple invoices', () => {
-  it('settles several invoices from one receipt with one journal and three allocations', () => {
-    const a = issuedInvoice(custA(), 1, 2000, 0);
-    const b = issuedInvoice(custA(), 1, 1500, 0);
-    const c = issuedInvoice(custA(), 1, 2500, 0);
+  it('settles several invoices from one receipt with one journal and three allocations', async () => {
+    const a = await issuedInvoice(custA(), 1, 2000, 0);
+    const b = await issuedInvoice(custA(), 1, 1500, 0);
+    const c = await issuedInvoice(custA(), 1, 2500, 0);
     const invA = iStore().getInvoice(a)!, invB = iStore().getInvoice(b)!, invC = iStore().getInvoice(c)!;
     const { id } = rStore().createDraft({ customerId: custA(), amount: 5000 });
     rStore().updateDraft(id!, { transactionReference: 'TRX', allocations: [allocation(id!, invA, 2000), allocation(id!, invB, 1500), allocation(id!, invC, 1500)] });
@@ -139,8 +139,8 @@ describe('acceptance 3 — multiple invoices', () => {
 });
 
 describe('allocation guards', () => {
-  it('allocation cannot exceed the receipt amount', () => {
-    const invId = issuedInvoice(custA(), 1, 2000, 0);
+  it('allocation cannot exceed the receipt amount', async () => {
+    const invId = await issuedInvoice(custA(), 1, 2000, 0);
     const inv = iStore().getInvoice(invId)!;
     const { id } = rStore().createDraft({ customerId: custA(), amount: 1000 });
     rStore().updateDraft(id!, { transactionReference: 'TRX', allocations: [allocation(id!, inv, 1500)] });
@@ -149,8 +149,8 @@ describe('allocation guards', () => {
     expect(res.error).toMatch(/exceed the receipt amount/i);
   });
 
-  it('allocation cannot exceed the invoice balance', () => {
-    const invId = issuedInvoice(custA(), 1, 500, 0);
+  it('allocation cannot exceed the invoice balance', async () => {
+    const invId = await issuedInvoice(custA(), 1, 500, 0);
     const inv = iStore().getInvoice(invId)!;
     const { id } = rStore().createDraft({ customerId: custA(), amount: 2000 });
     rStore().updateDraft(id!, { transactionReference: 'TRX', allocations: [allocation(id!, inv, 800)] });
@@ -159,8 +159,8 @@ describe('allocation guards', () => {
     expect(res.error).toMatch(/balance due/i);
   });
 
-  it('overpayment remains unapplied (no forced allocation, no fake revenue)', () => {
-    const invId = issuedInvoice(custA(), 1, 1500, 0);
+  it('overpayment remains unapplied (no forced allocation, no fake revenue)', async () => {
+    const invId = await issuedInvoice(custA(), 1, 1500, 0);
     const inv = iStore().getInvoice(invId)!;
     const { id } = rStore().createDraft({ customerId: custA(), amount: 2000 });
     rStore().updateDraft(id!, { transactionReference: 'TRX', allocations: [allocation(id!, inv, 1500)] });
@@ -171,8 +171,8 @@ describe('allocation guards', () => {
     expect(iStore().getInvoice(invId)!.status).toBe('paid');
   });
 
-  it('blocks allocating to another customer’s invoice', () => {
-    const invB = iStore().getInvoice(issuedInvoice(custB(), 1, 1000, 0))!;
+  it('blocks allocating to another customer’s invoice', async () => {
+    const invB = iStore().getInvoice(await issuedInvoice(custB(), 1, 1000, 0))!;
     const { id } = rStore().createDraft({ customerId: custA(), amount: 1000 });
     rStore().updateDraft(id!, { transactionReference: 'TRX', allocations: [allocation(id!, invB, 1000)] });
     const res = rStore().postReceipt(id!);
@@ -182,7 +182,7 @@ describe('allocation guards', () => {
 });
 
 describe('acceptance 4 — customer advance', () => {
-  it('posts Dr bank / Cr customer advances with the full amount unapplied', () => {
+  it('posts Dr bank / Cr customer advances with the full amount unapplied', async () => {
     const { id } = rStore().createDraft({ receiptType: 'customer-advance', customerId: custB(), amount: 10000 });
     rStore().updateDraft(id!, { transactionReference: 'TRX' });
     expect(rStore().postReceipt(id!).ok).toBe(true);
@@ -196,8 +196,8 @@ describe('acceptance 4 — customer advance', () => {
 });
 
 describe('acceptance 5 — bank fee', () => {
-  it('splits the deposit: Dr bank 990 / Dr fee 10 / Cr receivables 1000', () => {
-    const invId = issuedInvoice(custA(), 1, 1000, 0);
+  it('splits the deposit: Dr bank 990 / Dr fee 10 / Cr receivables 1000', async () => {
+    const invId = await issuedInvoice(custA(), 1, 1000, 0);
     const inv = iStore().getInvoice(invId)!;
     const { id } = rStore().createDraft({ customerId: custA(), amount: 1000 });
     rStore().updateDraft(id!, { transactionReference: 'TRX', bankFeeAmount: 10, bankFeeAccountId: acc('6900').id, allocations: [allocation(id!, inv, 1000)] });
@@ -215,8 +215,8 @@ describe('acceptance 5 — bank fee', () => {
 });
 
 describe('withholding tax', () => {
-  it('splits: Dr bank 950 / Dr WHT 50 / Cr receivables 1000', () => {
-    const invId = issuedInvoice(custA(), 1, 1000, 0);
+  it('splits: Dr bank 950 / Dr WHT 50 / Cr receivables 1000', async () => {
+    const invId = await issuedInvoice(custA(), 1, 1000, 0);
     const inv = iStore().getInvoice(invId)!;
     const { id } = rStore().createDraft({ customerId: custA(), amount: 1000 });
     rStore().updateDraft(id!, { transactionReference: 'TRX', withholdingTaxAmount: 50, withholdingTaxAccountId: acc('1223').id, allocations: [allocation(id!, inv, 1000)] });
@@ -230,8 +230,8 @@ describe('withholding tax', () => {
 });
 
 describe('receipt types & accounts', () => {
-  it('cash receipt posts to the cash-on-hand account', () => {
-    const invId = issuedInvoice(custA(), 1, 500, 0);
+  it('cash receipt posts to the cash-on-hand account', async () => {
+    const invId = await issuedInvoice(custA(), 1, 500, 0);
     const inv = iStore().getInvoice(invId)!;
     const { id } = rStore().createDraft({ customerId: custA(), amount: 500, method: 'cash' });
     rStore().updateDraft(id!, { method: 'cash', bankAccountId: acc('1251').id, allocations: [allocation(id!, inv, 500)] });
@@ -239,7 +239,7 @@ describe('receipt types & accounts', () => {
     expect(je(rStore().getReceiptById(id!)!.journalEntryId!).lines.find((l) => l.accountCode === '1251')!.debit).toBe(500);
   });
 
-  it('owner contribution posts to equity (financing)', () => {
+  it('owner contribution posts to equity (financing)', async () => {
     const { id } = rStore().createDraft({ receiptType: 'owner-contribution', amount: 100000 });
     rStore().updateDraft(id!, { payerName: 'Owner', transactionReference: 'TRX', creditAccountId: acc('3100').id });
     expect(rStore().postReceipt(id!).ok).toBe(true);
@@ -248,7 +248,7 @@ describe('receipt types & accounts', () => {
     expect(acc('3100').cashFlowCategory).toBe('FINANCING'); // cash-flow classification via account metadata
   });
 
-  it('loan proceeds post to a borrowing liability (financing)', () => {
+  it('loan proceeds post to a borrowing liability (financing)', async () => {
     const { id } = rStore().createDraft({ receiptType: 'loan-proceeds', amount: 50000 });
     rStore().updateDraft(id!, { payerName: 'Bank', transactionReference: 'TRX', creditAccountId: acc('2240').id });
     expect(rStore().postReceipt(id!).ok).toBe(true);
@@ -256,7 +256,7 @@ describe('receipt types & accounts', () => {
     expect(acc('2240').cashFlowCategory).toBe('FINANCING');
   });
 
-  it('an "other" receipt requires an explicit credit account', () => {
+  it('an "other" receipt requires an explicit credit account', async () => {
     const { id } = rStore().createDraft({ receiptType: 'other', amount: 100 });
     rStore().updateDraft(id!, { payerName: 'X', transactionReference: 'TRX' });
     const res = rStore().postReceipt(id!);
@@ -264,8 +264,8 @@ describe('receipt types & accounts', () => {
     expect(res.error).toMatch(/credit account/i);
   });
 
-  it('a customer receipt credits the OPERATING receivables control', () => {
-    const invId = issuedInvoice(custA(), 1, 100, 0);
+  it('a customer receipt credits the OPERATING receivables control', async () => {
+    const invId = await issuedInvoice(custA(), 1, 100, 0);
     const inv = iStore().getInvoice(invId)!;
     const { id } = rStore().createDraft({ customerId: custA(), amount: 100 });
     rStore().updateDraft(id!, { transactionReference: 'TRX', allocations: [allocation(id!, inv, 100)] });
@@ -275,13 +275,13 @@ describe('receipt types & accounts', () => {
 });
 
 describe('unapplied receipt & later application', () => {
-  it('an unapplied receipt persists and can be applied later without a second bank journal', () => {
+  it('an unapplied receipt persists and can be applied later without a second bank journal', async () => {
     const { id } = rStore().createDraft({ receiptType: 'unapplied-customer-receipt', customerId: custA(), amount: 1000 });
     rStore().updateDraft(id!, { transactionReference: 'TRX' });
     rStore().postReceipt(id!);
     expect(rStore().getReceiptById(id!)!.unappliedAmount).toBe(1000);
 
-    const invId = issuedInvoice(custA(), 1, 600, 0); // issue first (posts its own journal)
+    const invId = await issuedInvoice(custA(), 1, 600, 0); // issue first (posts its own journal)
     const jcount = journalCount();
     const res = rStore().applyReceiptToInvoices(id!, [{ invoiceId: invId, amount: 600 }]);
     expect(res.ok).toBe(true);
@@ -294,17 +294,17 @@ describe('unapplied receipt & later application', () => {
 });
 
 describe('immutability, reversal & numbering', () => {
-  it('a posted receipt cannot be edited', () => {
-    const invId = issuedInvoice(custA(), 1, 500, 0);
+  it('a posted receipt cannot be edited', async () => {
+    const invId = await issuedInvoice(custA(), 1, 500, 0);
     const inv = iStore().getInvoice(invId)!;
     const { id } = rStore().createDraft({ customerId: custA(), amount: 500 });
     rStore().updateDraft(id!, { transactionReference: 'TRX', allocations: [allocation(id!, inv, 500)] });
     rStore().postReceipt(id!);
-    expect(rStore().updateDraft(id!, { narration: 'x' }).ok).toBe(false);
+    expect((rStore().updateDraft(id!, { narration: 'x' })).ok).toBe(false);
   });
 
-  it('reversal creates the exact opposite journal and restores the invoice', () => {
-    const invId = issuedInvoice(custA(), 1, 1000, 16); // 1,160
+  it('reversal creates the exact opposite journal and restores the invoice', async () => {
+    const invId = await issuedInvoice(custA(), 1, 1000, 16); // 1,160
     const r = rStore().createReceiptForInvoice(invId);
     rStore().updateDraft(r.id!, { transactionReference: 'TRX' });
     rStore().postReceipt(r.id!);
@@ -329,7 +329,7 @@ describe('immutability, reversal & numbering', () => {
     expect(rev.lines.find((l) => l.accountCode === '1252')!.credit).toBe(1160);
   });
 
-  it('receipt numbers are unique and RCT-prefixed', () => {
+  it('receipt numbers are unique and RCT-prefixed', async () => {
     const a = rStore().createDraft({ customerId: custA(), amount: 1 });
     const b = rStore().createDraft({ customerId: custA(), amount: 1 });
     const na = rStore().getReceiptById(a.id!)!.receiptNumber;
@@ -340,14 +340,14 @@ describe('immutability, reversal & numbering', () => {
 });
 
 describe('multi-currency & persistence', () => {
-  it('computes the base-currency amount from the exchange rate', () => {
+  it('computes the base-currency amount from the exchange rate', async () => {
     const { id } = rStore().createDraft({ receiptType: 'miscellaneous-income', currency: 'EUR', amount: 100 });
     rStore().updateDraft(id!, { exchangeRate: 1.1, creditAccountId: acc('4300').id });
     expect(rStore().getReceiptById(id!)!.baseCurrencyAmount).toBe(110);
   });
 
-  it('replaceAll rehydrates receipts without loss', () => {
-    const invId = issuedInvoice(custA(), 1, 500, 0);
+  it('replaceAll rehydrates receipts without loss', async () => {
+    const invId = await issuedInvoice(custA(), 1, 500, 0);
     const inv = iStore().getInvoice(invId)!;
     const { id } = rStore().createDraft({ customerId: custA(), amount: 500 });
     rStore().updateDraft(id!, { transactionReference: 'TRX', allocations: [allocation(id!, inv, 500)] });

@@ -19,7 +19,7 @@
  * against the real stores, and then check the stores and the navigation.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, cleanup, fireEvent } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent, act } from '@testing-library/react';
 import { DashboardHeaderActions } from './DashboardControls';
 import { ToastProvider } from '@/components/ui/Toast';
 import { useStore } from '@/store/useStore';
@@ -66,6 +66,18 @@ function menu(role: OrganizationRole = 'owner') {
   return view;
 }
 
+/**
+ * Click a menu item and let the action it starts finish.
+ *
+ * Creating an invoice posts over the network for a server-backed company, so
+ * the handler is async even when the browser path resolves immediately. A bare
+ * `fireEvent.click` returns before the store has been written, and the
+ * assertion that follows would be reading the state from before the click.
+ */
+const clickItem = async (label: string | RegExp): Promise<void> => {
+  await act(async () => { fireEvent.click(item(label)!); });
+};
+
 const item = (label: string | RegExp): HTMLElement | null =>
   screen.queryAllByRole('menuitem').find((el) => {
     const text = (el.textContent ?? '').trim();
@@ -84,7 +96,7 @@ function entitleAll(): void {
   useEntitlementStore.getState().enableModule('purchases');
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   navigated = [];
   useInvoiceStore.setState({ invoices: [] });
   useBillStore.setState({ bills: [] });
@@ -103,7 +115,7 @@ afterEach(() => {
 /* ══ The stale placeholders ════════════════════════════════════════════════ */
 
 describe('the obsolete "Soon" placeholders', () => {
-  it('are gone for invoice, bill and payment', () => {
+  it('are gone for invoice, bill and payment', async () => {
     menu();
     expect(screen.queryByText(/New invoice · Soon/i)).toBeNull();
     expect(screen.queryByText(/New bill · Soon/i)).toBeNull();
@@ -112,7 +124,7 @@ describe('the obsolete "Soon" placeholders', () => {
     expect(document.querySelector('[role="menu"]')?.textContent).not.toMatch(/soon/i);
   });
 
-  it('leaves the three actions present and enabled', () => {
+  it('leaves the three actions present and enabled', async () => {
     menu();
     for (const label of ['New invoice', 'New bill', 'Record payment']) {
       const el = item(label);
@@ -121,7 +133,7 @@ describe('the obsolete "Soon" placeholders', () => {
     }
   });
 
-  it('lists the whole Create menu in the specified order', () => {
+  it('lists the whole Create menu in the specified order', async () => {
     menu();
     expect(screen.getAllByRole('menuitem').map((el) => (el.textContent ?? '').trim())).toEqual([
       'New journal entry',
@@ -137,10 +149,10 @@ describe('the obsolete "Soon" placeholders', () => {
 /* ══ The three actions ═════════════════════════════════════════════════════ */
 
 describe('New invoice', () => {
-  it('creates exactly one draft, navigates to Invoices and asks for its editor', () => {
+  it('creates exactly one draft, navigates to Invoices and asks for its editor', async () => {
     menu();
     const before = counts().invoices;
-    fireEvent.click(item('New invoice')!);
+    await clickItem('New invoice');
 
     expect(counts().invoices).toBe(before + 1);
     expect(navigated).toEqual(['invoices']);
@@ -151,9 +163,9 @@ describe('New invoice', () => {
     expect(useInvoiceEditor.getState().requestedEditorId).toBe(created.id);
   });
 
-  it('creates the draft in the company’s functional currency', () => {
+  it('creates the draft in the company’s functional currency', async () => {
     menu();
-    fireEvent.click(item('New invoice')!);
+    await clickItem('New invoice');
     const created = useInvoiceStore.getState().invoices.at(-1)!;
     // Derived by the store, never passed from the Dashboard.
     expect(created.currency).toBe('JOD');
@@ -162,10 +174,10 @@ describe('New invoice', () => {
 });
 
 describe('New bill', () => {
-  it('creates exactly one draft, navigates to Bills and asks for its editor', () => {
+  it('creates exactly one draft, navigates to Bills and asks for its editor', async () => {
     menu();
     const before = counts().bills;
-    fireEvent.click(item('New bill')!);
+    await clickItem('New bill');
 
     expect(counts().bills).toBe(before + 1);
     expect(navigated).toEqual(['bills']);
@@ -173,18 +185,18 @@ describe('New bill', () => {
       .toBe(useBillStore.getState().bills.at(-1)!.id);
   });
 
-  it('creates the draft in the company’s functional currency', () => {
+  it('creates the draft in the company’s functional currency', async () => {
     menu();
-    fireEvent.click(item('New bill')!);
+    await clickItem('New bill');
     expect(useBillStore.getState().bills.at(-1)!.currency).toBe('JOD');
   });
 });
 
 describe('Record payment', () => {
-  it('creates exactly one draft, navigates to Payments and asks for its editor', () => {
+  it('creates exactly one draft, navigates to Payments and asks for its editor', async () => {
     menu();
     const before = counts().payments;
-    fireEvent.click(item('Record payment')!);
+    await clickItem('Record payment');
 
     expect(counts().payments).toBe(before + 1);
     expect(navigated).toEqual(['payments']);
@@ -192,10 +204,10 @@ describe('Record payment', () => {
       .toBe(usePaymentStore.getState().payments.at(-1)!.id);
   });
 
-  it('creates a STANDALONE payment, not one allocated to a bill', () => {
+  it('creates a STANDALONE payment, not one allocated to a bill', async () => {
     // The user asked to record a payment, not to pay a particular bill.
     menu();
-    fireEvent.click(item('Record payment')!);
+    await clickItem('Record payment');
     const payment = usePaymentStore.getState().payments.at(-1)!;
     expect(payment.supplierId ?? '').toBe('');
     expect(payment.allocations ?? []).toHaveLength(0);
@@ -206,7 +218,7 @@ describe('Record payment', () => {
 /* ══ One click, one draft ══════════════════════════════════════════════════ */
 
 describe('a single click creates a single draft', () => {
-  it('does not double-create for any of the three actions', () => {
+  it('does not double-create for any of the three actions', async () => {
     for (const [label, read] of [
       ['New invoice', () => counts().invoices],
       ['New bill', () => counts().bills],
@@ -218,13 +230,13 @@ describe('a single click creates a single draft', () => {
       useBillStore.setState({ bills: [] });
       usePaymentStore.setState({ payments: [] });
       menu();
-      fireEvent.click(item(label)!);
+      await clickItem(label);
       expect(read(), label).toBe(1);
       expect(navigated, label).toHaveLength(1);
     }
   });
 
-  it('consumes the editor request exactly once, so a remount does not reopen it', () => {
+  it('consumes the editor request exactly once, so a remount does not reopen it', async () => {
     /*
      * The destination page reads the request in an effect, and React StrictMode
      * runs effects twice. `consume` clears as it reads, so the second call sees
@@ -232,7 +244,7 @@ describe('a single click creates a single draft', () => {
      * drawer the user has closed.
      */
     menu();
-    fireEvent.click(item('New invoice')!);
+    await clickItem('New invoice');
     const first = useInvoiceEditor.getState().consume();
     const second = useInvoiceEditor.getState().consume();
     expect(first).not.toBeNull();
@@ -243,16 +255,18 @@ describe('a single click creates a single draft', () => {
 /* ══ Failure ═══════════════════════════════════════════════════════════════ */
 
 describe('when creation fails', () => {
-  it('does not navigate, and does not open an editor for a record that was refused', () => {
+  it('does not navigate, and does not open an editor for a record that was refused', async () => {
     // The store refuses — a subscription restriction, a validation failure, a
     // missing company context. Whatever the reason, the Dashboard must not walk
     // the user into an empty drawer.
-    vi.spyOn(useInvoiceStore.getState(), 'createDraft').mockReturnValue({
+    // The action is async now, so the refusal has to be a resolved promise --
+    // a bare object would make the caller's `await` yield the object's `then`.
+    vi.spyOn(useInvoiceStore.getState(), 'createDraft').mockResolvedValue({
       ok: false,
       error: 'Persistence is not allowed on this subscription.',
     });
     menu();
-    fireEvent.click(item('New invoice')!);
+    await clickItem('New invoice');
 
     expect(navigated).toEqual([]);
     expect(useInvoiceEditor.getState().requestedEditorId).toBeNull();
@@ -265,7 +279,7 @@ describe('when creation fails', () => {
 /* ══ Entitlement and permission ════════════════════════════════════════════ */
 
 describe('entitlement and permission', () => {
-  it('hides an unentitled module rather than calling it "Soon"', () => {
+  it('hides an unentitled module rather than calling it "Soon"', async () => {
     /*
      * The established Ledgora behaviour for something the organization's package
      * does not include is to HIDE it — the sidebar does exactly this. "Soon"
@@ -282,7 +296,7 @@ describe('entitlement and permission', () => {
     expect(item('New bill')).not.toBeNull();
   });
 
-  it('hides quick-create from a role that may not create documents', () => {
+  it('hides quick-create from a role that may not create documents', async () => {
     menu('viewer');
     expect(item('New invoice')).toBeNull();
     expect(item('New bill')).toBeNull();
@@ -291,14 +305,14 @@ describe('entitlement and permission', () => {
     expect(item('New journal entry')).not.toBeNull();
   });
 
-  it('refuses at the STORE, so a restricted user cannot bypass the hidden menu', () => {
+  it('refuses at the STORE, so a restricted user cannot bypass the hidden menu', async () => {
     /*
      * The menu is an affordance, not the gate. Calling the store directly — as
      * devtools or any other code path would — must be refused on its own.
      */
     signInAs('viewer');
 
-    const invoice = useInvoiceStore.getState().createDraft({});
+    const invoice = await useInvoiceStore.getState().createDraft({});
     const bill = useBillStore.getState().createDraft();
     const payment = usePaymentStore.getState().createDraft();
 
@@ -309,7 +323,7 @@ describe('entitlement and permission', () => {
     expect(counts()).toEqual({ invoices: 0, bills: 0, payments: 0 });
   });
 
-  it('lets an accountant quick-create all three', () => {
+  it('lets an accountant quick-create all three', async () => {
     menu('accountant');
     expect(item('New invoice')).not.toBeNull();
     expect(item('New bill')).not.toBeNull();
@@ -320,7 +334,7 @@ describe('entitlement and permission', () => {
 /* ══ The existing actions ══════════════════════════════════════════════════ */
 
 describe('the actions that already worked', () => {
-  it('still navigate, and create nothing', () => {
+  it('still navigate, and create nothing', async () => {
     for (const [label, view] of [
       ['New journal entry', 'journal'],
       ['New customer', 'customers'],
@@ -329,7 +343,7 @@ describe('the actions that already worked', () => {
       cleanup();
       navigated = [];
       menu();
-      fireEvent.click(item(label)!);
+      await clickItem(label);
       expect(navigated, label).toEqual([view]);
     }
     // These three are navigation only — none of them mints a document.
@@ -340,17 +354,17 @@ describe('the actions that already worked', () => {
 /* ══ The active company ════════════════════════════════════════════════════ */
 
 describe('the active organization', () => {
-  it('creates under whichever company is active at the time of the click', () => {
+  it('creates under whichever company is active at the time of the click', async () => {
     // Switching company changes the functional currency the store derives, so
     // the created document follows the company rather than a captured value.
     menu();
-    fireEvent.click(item('New invoice')!);
+    await clickItem('New invoice');
     expect(useInvoiceStore.getState().invoices.at(-1)!.currency).toBe('JOD');
 
     cleanup();
     useStore.setState((s) => ({ settings: { ...s.settings, baseCurrency: 'EUR' } }));
     menu();
-    fireEvent.click(item('New invoice')!);
+    await clickItem('New invoice');
     expect(useInvoiceStore.getState().invoices.at(-1)!.currency).toBe('EUR');
   });
 });

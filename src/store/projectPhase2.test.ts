@@ -38,7 +38,7 @@ function reportInput() {
   };
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   useJournalStore.getState().resetToDefault();
   useInvoiceTemplateStore.getState().resetToDefault();
   useInvoiceStore.getState().resetToDefault();
@@ -54,21 +54,21 @@ beforeEach(() => {
 });
 
 /* helpers */
-function issuedInvoice(lines: Partial<InvoiceLine>[]): string {
-  const { id } = useInvoiceStore.getState().createDraft({ customerId: firstCustomerId() });
+async function issuedInvoice(lines: Partial<InvoiceLine>[]): Promise<string> {
+  const { id } = await useInvoiceStore.getState().createDraft({ customerId: firstCustomerId() });
   const base = useInvoiceStore.getState().getInvoice(id!)!.lines[0]!;
   // Fixed issue date so invoice-based revenue is stable regardless of the clock.
-  useInvoiceStore.getState().updateDraft(id!, { issueDate: '2026-03-01', dueDate: '2026-04-01', lines: lines.map((l, i) => ({ ...base, accountId: acc('4120'), description: 'Work', quantity: 1, unitPrice: 1000, taxRate: 0, id: `il${i}`, ...l })) });
-  expect(useInvoiceStore.getState().issueInvoice(id!).ok).toBe(true);
+  await useInvoiceStore.getState().updateDraft(id!, { issueDate: '2026-03-01', dueDate: '2026-04-01', lines: lines.map((l, i) => ({ ...base, accountId: acc('4120'), description: 'Work', quantity: 1, unitPrice: 1000, taxRate: 0, id: `il${i}`, ...l })) });
+  expect((await useInvoiceStore.getState().issueInvoice(id!)).ok).toBe(true);
   return id!;
 }
 /** Post a receipt of `amount` against an invoice (fixed method/reference so it posts). */
-function postReceipt(invId: string, amount: number): void {
+async function postReceipt(invId: string, amount: number): Promise<void>{
   const r = useReceiptStore.getState().createReceiptForInvoice(invId);
   useReceiptStore.getState().updateDraft(r.id!, { amount, method: 'cash', transactionReference: 'TRX', allocations: [{ id: 'a1', entityId: useInvoiceStore.getState().getInvoice(invId)!.entityId, receiptId: r.id!, invoiceId: invId, invoiceNumber: '', allocationType: 'invoice', amount, baseCurrencyAmount: amount, allocationDate: '2026-05-01', createdAt: '', updatedAt: '' }] });
   expect(useReceiptStore.getState().postReceipt(r.id!).ok).toBe(true);
 }
-function postedBill(lines: Partial<BillLine>[], inv = 'P2-1'): string {
+async function postedBill(lines: Partial<BillLine>[], inv = 'P2-1'): Promise<string>{
   const { id } = useBillStore.getState().createDraft({ supplierId: firstSupplierId(), billDate: '2026-03-01', dueDate: '2026-04-01', currency: 'USD' });
   const base = useBillStore.getState().getBill(id!)!.lines[0]!;
   useBillStore.getState().updateDraft(id!, { supplierInvoiceNumber: inv, lines: lines.map((l, i) => ({ ...base, accountId: acc('6300'), description: 'Work', quantity: 1, unitPrice: 1000, taxRate: 0, id: `bl${i}`, billId: id!, ...l })) });
@@ -79,27 +79,27 @@ function postedBill(lines: Partial<BillLine>[], inv = 'P2-1'): string {
 /* ───────────────────── Requirement rules ───────────────────── */
 
 describe('project requirement rules', () => {
-  it('required rule blocks invoice posting; prohibited on bank stays valid', () => {
+  it('required rule blocks invoice posting; prohibited on bank stays valid', async () => {
     const rules = [{ id: 'r', entityId: 'primary', accountIds: [acc('4120')], requirement: 'required' as const, effectiveFrom: '2026-01-01', status: 'active' as const }];
     expect(validateProjectRequirement(useStore.getState().accounts.find((a) => a.code === '4120'), false, rules, '2026-06-01').length).toBe(1);
     expect(validateProjectRequirement(useStore.getState().accounts.find((a) => a.code === '1252'), false, useProjectStore.getState().requirementRules, '2026-06-01').length).toBe(0);
     expect(validateProjectRequirement(useStore.getState().accounts.find((a) => a.code === '1252'), true, useProjectStore.getState().requirementRules, '2026-06-01').length).toBe(1);
   });
-  it('a configured required rule blocks issuing an invoice without a project', () => {
+  it('a configured required rule blocks issuing an invoice without a project', async () => {
     useProjectStore.getState().upsertRequirementRule({ id: 'req-rev', entityId: 'primary', accountIds: [acc('4120')], requirement: 'required', effectiveFrom: '2026-01-01', status: 'active' });
-    const { id } = useInvoiceStore.getState().createDraft({ customerId: firstCustomerId() });
+    const { id } = await useInvoiceStore.getState().createDraft({ customerId: firstCustomerId() });
     const base = useInvoiceStore.getState().getInvoice(id!)!.lines[0]!;
-    useInvoiceStore.getState().updateDraft(id!, { lines: [{ ...base, accountId: acc('4120'), quantity: 1, unitPrice: 1000, taxRate: 0 }] });
-    expect(useInvoiceStore.getState().issueInvoice(id!).ok).toBe(false);
-    useInvoiceStore.getState().updateDraft(id!, { lines: [{ ...base, accountId: acc('4120'), quantity: 1, unitPrice: 1000, taxRate: 0, projectId: P.SOLAR }] });
-    expect(useInvoiceStore.getState().issueInvoice(id!).ok).toBe(true);
+    await useInvoiceStore.getState().updateDraft(id!, { lines: [{ ...base, accountId: acc('4120'), quantity: 1, unitPrice: 1000, taxRate: 0 }] });
+    expect((await useInvoiceStore.getState().issueInvoice(id!)).ok).toBe(false);
+    await useInvoiceStore.getState().updateDraft(id!, { lines: [{ ...base, accountId: acc('4120'), quantity: 1, unitPrice: 1000, taxRate: 0, projectId: P.SOLAR }] });
+    expect((await useInvoiceStore.getState().issueInvoice(id!)).ok).toBe(true);
   });
 });
 
 /* ───────────────────── Budgets ───────────────────── */
 
 describe('versioned monthly budgets', () => {
-  it('spreads annual, blocks duplicate lines, and locks on approval', () => {
+  it('spreads annual, blocks duplicate lines, and locks on approval', async () => {
     const store = useProjectBudgetStore.getState();
     const b = store.createBudget({ projectId: P.SOLAR, name: 'Original', scenario: 'original', fiscalYear: 2026 });
     store.spreadAnnual(b.id!, 'revenue', 120000);
@@ -110,8 +110,8 @@ describe('versioned monthly budgets', () => {
     useProjectBudgetStore.getState().approveBudget(b.id!);
     expect(useProjectBudgetStore.getState().spreadAnnual(b.id!, 'labor', 1000).ok).toBe(false);
   });
-  it('budget vs actual compares posted revenue', () => {
-    issuedInvoice([{ unitPrice: 10000, taxRate: 0, projectId: P.SOLAR }]);
+  it('budget vs actual compares posted revenue', async () => {
+    await issuedInvoice([{ unitPrice: 10000, taxRate: 0, projectId: P.SOLAR }]);
     const b = useProjectBudgetStore.getState().createBudget({ projectId: P.SOLAR, fiscalYear: 2026 });
     useProjectBudgetStore.getState().spreadAnnual(b.id!, 'revenue', 12000);
     const bva = calculateProjectBudgetActual({ budget: useProjectBudgetStore.getState().getBudget(b.id!)!, entries: useJournalStore.getState().entries, accounts: useStore.getState().accounts, base: 'USD', throughMonth: 12 });
@@ -123,7 +123,7 @@ describe('versioned monthly budgets', () => {
 /* ───────────────────── Change orders ───────────────────── */
 
 describe('change orders', () => {
-  it('approved change orders revise the contract value without rewriting the original', () => {
+  it('approved change orders revise the contract value without rewriting the original', async () => {
     useProjectStore.getState().addChangeOrder(P.SOLAR, { number: 'CO-1', revenueChange: 50000, costChange: 30000, status: 'submitted', date: '2026-04-01' });
     const co = useProjectStore.getState().getProject(P.SOLAR)!.changeOrders![0]!;
     // Not approved → no effect yet.
@@ -138,8 +138,8 @@ describe('change orders', () => {
 /* ───────────────────── Profitability & cash flow ───────────────────── */
 
 describe('profitability & cash flow', () => {
-  it('does not equate billed, recognised and cash; receipts drive project cash', () => {
-    const invId = issuedInvoice([{ unitPrice: 20000, taxRate: 0, projectId: P.SOLAR }]); // billed + recognised 20,000
+  it('does not equate billed, recognised and cash; receipts drive project cash', async () => {
+    const invId = await issuedInvoice([{ unitPrice: 20000, taxRate: 0, projectId: P.SOLAR }]); // billed + recognised 20,000
     postedBill([{ unitPrice: 8000, taxRate: 0, projectId: P.SOLAR }]); // cost 8,000
     // Receipt of 12,000 against the invoice → cash collected 12,000 (partial).
     postReceipt(invId, 12000);
@@ -156,9 +156,9 @@ describe('profitability & cash flow', () => {
     expect(cf.cashInflow).toBe(12000);
   });
 
-  it('apportions a receipt across several projects by invoice line share', () => {
+  it('apportions a receipt across several projects by invoice line share', async () => {
     // One invoice, revenue split 60/40 across two projects.
-    const invId = issuedInvoice([{ unitPrice: 6000, taxRate: 0, projectId: P.SOLAR }, { unitPrice: 4000, taxRate: 0, projectId: P.ERP, id: 'il1' }]);
+    const invId = await issuedInvoice([{ unitPrice: 6000, taxRate: 0, projectId: P.SOLAR }, { unitPrice: 4000, taxRate: 0, projectId: P.ERP, id: 'il1' }]);
     postReceipt(invId, 10000);
     expect(projectCashInflow(P.SOLAR, useInvoiceStore.getState().invoices, useReceiptStore.getState().receipts)).toBe(6000);
     expect(projectCashInflow(P.ERP, useInvoiceStore.getState().invoices, useReceiptStore.getState().receipts)).toBe(4000);
@@ -168,7 +168,7 @@ describe('profitability & cash flow', () => {
 /* ───────────────────── Revenue recognition ───────────────────── */
 
 describe('revenue recognition', () => {
-  it('percentage-of-completion current-period revenue posts a balanced WIP journal', () => {
+  it('percentage-of-completion current-period revenue posts a balanced WIP journal', async () => {
     // SOLAR: revised contract 300,000, estimated cost 220,000. Post 110,000 cost → 50% complete → recognise 150,000.
     postedBill([{ unitPrice: 110000, taxRate: 0, projectId: P.SOLAR }], 'POC-1');
     expect(calculatePercentageOfCompletion(110000, 220000)).toBe(0.5);
@@ -193,9 +193,9 @@ describe('revenue recognition', () => {
     expect(rev.lines.find((l) => l.accountCode === '1230')!.credit).toBe(150000);
   });
 
-  it('defers revenue when billed exceeds recognised (Cr contract liability)', () => {
+  it('defers revenue when billed exceeds recognised (Cr contract liability)', async () => {
     // Invoice 100,000 on a POC project but recognise only 40% → target 120,000... use ERP (invoice basis) manual override.
-    issuedInvoice([{ unitPrice: 100000, taxRate: 0, projectId: P.SOLAR }]); // GL revenue 100,000
+    await issuedInvoice([{ unitPrice: 100000, taxRate: 0, projectId: P.SOLAR }]); // GL revenue 100,000
     // Manually recognise a lower cumulative via manual method.
     useProjectStore.getState().updateProject(P.SOLAR, { revenueRecognitionMethod: 'manual' });
     const built = useProjectRecognitionStore.getState().buildRun(P.SOLAR, '2026-06-30', 70000); // target 70,000 < 100,000 billed
@@ -210,14 +210,14 @@ describe('revenue recognition', () => {
 /* ───────────────────── Billing calculators ───────────────────── */
 
 describe('billing calculators', () => {
-  it('cost-plus applies markup to unbilled approved cost', () => {
+  it('cost-plus applies markup to unbilled approved cost', async () => {
     const d = useProjectDeliveryStore.getState();
     const t = d.addTimeEntry({ projectId: P.SOLAR, employeeName: 'A', date: '2026-05-01', hours: 10, billingRate: 100, costRate: 60 });
     d.approveTime(t.id!);
     const sug = calculateCostPlus({ project: { ...useProjectStore.getState().getProject(P.SOLAR)!, markupPercent: 15 }, timeEntries: useProjectDeliveryStore.getState().timeEntries, expenses: [], alreadyBilled: 0 });
     expect(sug.amount).toBe(690); // 600 cost × 1.15
   });
-  it('time-and-materials sums billable time and expenses; fixed price caps at revised contract', () => {
+  it('time-and-materials sums billable time and expenses; fixed price caps at revised contract', async () => {
     const d = useProjectDeliveryStore.getState();
     const t = d.addTimeEntry({ projectId: P.ERP, employeeName: 'A', date: '2026-05-01', hours: 10, billingRate: 120, costRate: 60 });
     d.approveTime(t.id!);
@@ -231,7 +231,7 @@ describe('billing calculators', () => {
     const fp = calculateFixedPrice({ project: useProjectStore.getState().getProject('prj_PRJ-OFFICE')!, timeEntries: [], expenses: [], alreadyBilled: 60000 });
     expect(fp.amount).toBe(5000);
   });
-  it('prevents duplicate time billing', () => {
+  it('prevents duplicate time billing', async () => {
     const d = useProjectDeliveryStore.getState();
     const t = d.addTimeEntry({ projectId: P.ERP, employeeName: 'A', date: '2026-05-01', hours: 5, billingRate: 100, costRate: 60 });
     d.approveTime(t.id!);
@@ -243,7 +243,7 @@ describe('billing calculators', () => {
 /* ───────────────────── Billing → draft invoice ───────────────────── */
 
 describe('generate draft invoice from billing', () => {
-  it('creates a draft invoice through the invoice module and marks the time billed (no duplicate)', () => {
+  it('creates a draft invoice through the invoice module and marks the time billed (no duplicate)', async () => {
     // ERP is time-and-materials; link a customer and add approved billable time.
     useProjectStore.getState().updateProject(P.ERP, { customerId: firstCustomerId() });
     const d = useProjectDeliveryStore.getState();
@@ -254,9 +254,9 @@ describe('generate draft invoice from billing', () => {
     expect(suggestion.amount).toBe(1200);
 
     // Compose the billing flow (as the Delivery page does): draft invoice + tagged line + mark billed.
-    const created = useInvoiceStore.getState().createDraft({ customerId: project.customerId! });
+    const created = await useInvoiceStore.getState().createDraft({ customerId: project.customerId! });
     const base = useInvoiceStore.getState().getInvoice(created.id!)!.lines[0]!;
-    useInvoiceStore.getState().updateDraft(created.id!, { lines: [{ ...base, accountId: acc('4120'), description: 'ERP billing', quantity: 1, unitPrice: suggestion.amount, taxRate: 0, projectId: P.ERP }] });
+    await useInvoiceStore.getState().updateDraft(created.id!, { lines: [{ ...base, accountId: acc('4120'), description: 'ERP billing', quantity: 1, unitPrice: suggestion.amount, taxRate: 0, projectId: P.ERP }] });
     expect(useProjectDeliveryStore.getState().billTime([t.id!], created.id!).ok).toBe(true);
 
     const inv = useInvoiceStore.getState().getInvoice(created.id!)!;
@@ -271,7 +271,7 @@ describe('generate draft invoice from billing', () => {
 /* ───────────────────── Commitments & closeout ───────────────────── */
 
 describe('commitments & closeout', () => {
-  it('tracks committed/invoiced/remaining without touching the GL', () => {
+  it('tracks committed/invoiced/remaining without touching the GL', async () => {
     const journalCount = useJournalStore.getState().entries.length;
     const d = useProjectDeliveryStore.getState();
     const c = d.addCommitment({ projectId: P.SOLAR, type: 'purchase-order', reference: 'PO-1', committedAmount: 10000, date: '2026-03-01' });
@@ -279,7 +279,7 @@ describe('commitments & closeout', () => {
     expect(useProjectDeliveryStore.getState().openCommitment(P.SOLAR)).toBe(6000);
     expect(useJournalStore.getState().entries.length).toBe(journalCount); // no GL effect
   });
-  it('closeout blocks on unbilled approved time and reopen requires a reason', () => {
+  it('closeout blocks on unbilled approved time and reopen requires a reason', async () => {
     const d = useProjectDeliveryStore.getState();
     const t = d.addTimeEntry({ projectId: P.ERP, employeeName: 'A', date: '2026-05-01', hours: 5, billingRate: 100, costRate: 60 });
     d.approveTime(t.id!);
@@ -299,7 +299,7 @@ describe('commitments & closeout', () => {
 /* ───────────────────── Hydration ───────────────────── */
 
 describe('persistence', () => {
-  it('replaceAll rehydrates projects + requirement rules', () => {
+  it('replaceAll rehydrates projects + requirement rules', async () => {
     const snap = JSON.parse(JSON.stringify(useProjectStore.getState().projects));
     useProjectStore.getState().replaceAll({ projects: snap });
     expect(useProjectStore.getState().getProject(P.SOLAR)).toBeTruthy();

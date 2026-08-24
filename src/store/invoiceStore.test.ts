@@ -21,13 +21,13 @@ const bankId = () => useStore.getState().accounts.find((a) => a.code === '1252')
 const journalCount = () => useJournalStore.getState().entries.length;
 const je = (id: string) => useJournalStore.getState().entries.find((e) => e.id === id)!;
 
-function addLine(invoiceId: string, unitPrice: number, taxRate: number): void {
+async function addLine(invoiceId: string, unitPrice: number, taxRate: number): Promise<void> {
   const inv = useInvoiceStore.getState().getInvoice(invoiceId)!;
   const line = { ...inv.lines[0]!, accountId: revenueId(), description: 'Consulting', quantity: 1, unitPrice, taxRate };
-  useInvoiceStore.getState().updateDraft(invoiceId, { lines: [line] });
+  await useInvoiceStore.getState().updateDraft(invoiceId, { lines: [line] });
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   useJournalStore.getState().resetToDefault();
   useInvoiceTemplateStore.getState().resetToDefault();
   useInvoiceStore.getState().resetToDefault();
@@ -36,7 +36,7 @@ beforeEach(() => {
 });
 
 describe('logo persists through the template → snapshot → invoice data path', () => {
-  it('a custom logo saved on a template version is frozen onto issued invoices', () => {
+  it('a custom logo saved on a template version is frozen onto issued invoices', async () => {
     const LOGO = 'data:image/png;base64,TEMPLATELOGO';
     const ts = useInvoiceTemplateStore.getState();
     // Save a custom logo on a new Professional Blue draft, then publish it.
@@ -48,26 +48,26 @@ describe('logo persists through the template → snapshot → invoice data path'
     ts.publishVersion(draft.id!);
 
     setCustomerTemplate(firstCustomerId(), BLUE_TEMPLATE_ID);
-    const { id } = useInvoiceStore.getState().createDraft({ customerId: firstCustomerId() });
-    addLine(id!, 100, 0);
-    useInvoiceStore.getState().issueInvoice(id!);
+    const { id } = await useInvoiceStore.getState().createDraft({ customerId: firstCustomerId() });
+    await addLine(id!, 100, 0);
+    await useInvoiceStore.getState().issueInvoice(id!);
     const inv = useInvoiceStore.getState().getInvoice(id!)!;
     expect(inv.templateSnapshot!.companySnapshot.logoUrl).toBe(LOGO); // appears on the issued invoice
   });
 
-  it('the company default logo flows onto invoices when the template uses entity-default', () => {
+  it('the company default logo flows onto invoices when the template uses entity-default', async () => {
     useStore.getState().updateSettings({ logoUrl: 'data:image/png;base64,COMPANYLOGO' });
-    const { id } = useInvoiceStore.getState().createDraft({ customerId: firstCustomerId() }); // no customer template → system default (entity-default logo)
-    addLine(id!, 100, 0);
-    useInvoiceStore.getState().issueInvoice(id!);
+    const { id } = await useInvoiceStore.getState().createDraft({ customerId: firstCustomerId() }); // no customer template → system default (entity-default logo)
+    await addLine(id!, 100, 0);
+    await useInvoiceStore.getState().issueInvoice(id!);
     expect(useInvoiceStore.getState().getInvoice(id!)!.templateSnapshot!.companySnapshot.logoUrl).toBe('data:image/png;base64,COMPANYLOGO');
   });
 
-  it('a later logo change does not alter an already-issued invoice', () => {
+  it('a later logo change does not alter an already-issued invoice', async () => {
     useStore.getState().updateSettings({ logoUrl: 'data:image/png;base64,ORIGINAL' });
-    const { id } = useInvoiceStore.getState().createDraft({ customerId: firstCustomerId() });
-    addLine(id!, 100, 0);
-    useInvoiceStore.getState().issueInvoice(id!);
+    const { id } = await useInvoiceStore.getState().createDraft({ customerId: firstCustomerId() });
+    await addLine(id!, 100, 0);
+    await useInvoiceStore.getState().issueInvoice(id!);
     // change the company logo afterwards
     useStore.getState().updateSettings({ logoUrl: 'data:image/png;base64,CHANGED' });
     expect(useInvoiceStore.getState().getInvoice(id!)!.templateSnapshot!.companySnapshot.logoUrl).toBe('data:image/png;base64,ORIGINAL');
@@ -75,7 +75,7 @@ describe('logo persists through the template → snapshot → invoice data path'
 });
 
 describe('renaming an invoice template', () => {
-  it('renames in place — ID unchanged, customers stay assigned, new invoices still resolve', () => {
+  it('renames in place — ID unchanged, customers stay assigned, new invoices still resolve', async () => {
     const ts = useInvoiceTemplateStore.getState();
     setCustomerTemplate(firstCustomerId(), BLUE_TEMPLATE_ID); // customer assigned by ID
 
@@ -86,13 +86,13 @@ describe('renaming an invoice template', () => {
     expect(t.name).toBe('Modern Professional Invoice'); // trimmed
 
     // Customer still references the same ID → new invoice resolves to the (renamed) template.
-    const { id } = useInvoiceStore.getState().createDraft({ customerId: firstCustomerId() });
+    const { id } = await useInvoiceStore.getState().createDraft({ customerId: firstCustomerId() });
     const inv = useInvoiceStore.getState().getInvoice(id!)!;
     expect(inv.templateResolutionSource).toBe('customer-preference');
     expect(inv.templateId).toBe(BLUE_TEMPLATE_ID);
   });
 
-  it('rejects blank, over-80-char and duplicate names', () => {
+  it('rejects blank, over-80-char and duplicate names', async () => {
     const ts = useInvoiceTemplateStore.getState();
     expect(ts.renameTemplate(BLUE_TEMPLATE_ID, '   ').error).toBe('Template name is required.');
     expect(ts.renameTemplate(BLUE_TEMPLATE_ID, 'x'.repeat(81)).error).toBe('Template name cannot exceed 80 characters.');
@@ -100,11 +100,11 @@ describe('renaming an invoice template', () => {
     expect(ts.renameTemplate(BLUE_TEMPLATE_ID, 'standard invoice').error).toBe('An invoice template with this name already exists.');
   });
 
-  it('does not alter an already-issued invoice snapshot when the template is renamed later', () => {
+  it('does not alter an already-issued invoice snapshot when the template is renamed later', async () => {
     setCustomerTemplate(firstCustomerId(), BLUE_TEMPLATE_ID);
-    const { id } = useInvoiceStore.getState().createDraft({ customerId: firstCustomerId() });
-    addLine(id!, 100, 0);
-    useInvoiceStore.getState().issueInvoice(id!);
+    const { id } = await useInvoiceStore.getState().createDraft({ customerId: firstCustomerId() });
+    await addLine(id!, 100, 0);
+    await useInvoiceStore.getState().issueInvoice(id!);
     const before = useInvoiceStore.getState().getInvoice(id!)!.templateSnapshot!.templateName;
     useInvoiceTemplateStore.getState().renameTemplate(BLUE_TEMPLATE_ID, 'Renamed After Issue');
     expect(useInvoiceStore.getState().getInvoice(id!)!.templateSnapshot!.templateName).toBe(before); // frozen
@@ -112,10 +112,10 @@ describe('renaming an invoice template', () => {
 });
 
 describe('draft invoices do not affect accounting', () => {
-  it('creating and editing a draft posts nothing to the journal', () => {
+  it('creating and editing a draft posts nothing to the journal', async () => {
     const before = journalCount();
-    const { id } = useInvoiceStore.getState().createDraft({ customerId: firstCustomerId() });
-    addLine(id!, 1000, 16);
+    const { id } = await useInvoiceStore.getState().createDraft({ customerId: firstCustomerId() });
+    await addLine(id!, 1000, 16);
     expect(useInvoiceStore.getState().getInvoice(id!)!.status).toBe('draft');
     expect(useInvoiceStore.getState().getInvoice(id!)!.journalEntryId).toBeUndefined();
     expect(journalCount()).toBe(before);
@@ -123,11 +123,11 @@ describe('draft invoices do not affect accounting', () => {
 });
 
 describe('issuing an invoice', () => {
-  it('creates a balanced Dr receivable / Cr revenue + tax journal entry', () => {
+  it('creates a balanced Dr receivable / Cr revenue + tax journal entry', async () => {
     const before = journalCount();
-    const { id } = useInvoiceStore.getState().createDraft({ customerId: firstCustomerId() });
-    addLine(id!, 1000, 16);
-    const res = useInvoiceStore.getState().issueInvoice(id!);
+    const { id } = await useInvoiceStore.getState().createDraft({ customerId: firstCustomerId() });
+    await addLine(id!, 1000, 16);
+    const res = await useInvoiceStore.getState().issueInvoice(id!);
     expect(res.ok).toBe(true);
     expect(journalCount()).toBe(before + 1);
 
@@ -146,10 +146,10 @@ describe('issuing an invoice', () => {
     expect(entry.lines.find((l) => l.accountCode === '2270')!.credit).toBe(160); // output VAT
   });
 
-  it('a later template edit does not change the issued invoice snapshot', () => {
-    const { id } = useInvoiceStore.getState().createDraft({ customerId: firstCustomerId(), overrideTemplateVersionId: undefined });
-    addLine(id!, 500, 0);
-    useInvoiceStore.getState().issueInvoice(id!);
+  it('a later template edit does not change the issued invoice snapshot', async () => {
+    const { id } = await useInvoiceStore.getState().createDraft({ customerId: firstCustomerId(), overrideTemplateVersionId: undefined });
+    await addLine(id!, 500, 0);
+    await useInvoiceStore.getState().issueInvoice(id!);
     const snapTitleBefore = useInvoiceStore.getState().getInvoice(id!)!.templateSnapshot!.contentConfig.title;
     // create + publish a new version and mutate — snapshot must be unaffected
     const draft = useInvoiceTemplateStore.getState().createDraftVersion(BLUE_TEMPLATE_ID);
@@ -159,14 +159,14 @@ describe('issuing an invoice', () => {
 });
 
 describe('payments', () => {
-  it('a partial payment updates balance due and posts a separate receipt entry', () => {
-    const { id } = useInvoiceStore.getState().createDraft({ customerId: firstCustomerId() });
-    addLine(id!, 1000, 0);
-    useInvoiceStore.getState().issueInvoice(id!);
+  it('a partial payment updates balance due and posts a separate receipt entry', async () => {
+    const { id } = await useInvoiceStore.getState().createDraft({ customerId: firstCustomerId() });
+    await addLine(id!, 1000, 0);
+    await useInvoiceStore.getState().issueInvoice(id!);
     const invoiceJe = useInvoiceStore.getState().getInvoice(id!)!.journalEntryId;
     const countAfterIssue = journalCount();
 
-    const res = useInvoiceStore.getState().recordPayment(id!, { amount: 400, date: '2026-04-01', bankAccountId: bankId() });
+    const res = await useInvoiceStore.getState().recordPayment(id!, { amount: 400, date: '2026-04-01', bankAccountId: bankId() });
     expect(res.ok).toBe(true);
     const inv = useInvoiceStore.getState().getInvoice(id!)!;
     expect(inv.amountPaid).toBe(400);
@@ -179,23 +179,23 @@ describe('payments', () => {
     expect(receipt.lines.find((l) => l.accountCode === '1221')!.credit).toBe(400);
   });
 
-  it('paying the balance marks the invoice paid', () => {
-    const { id } = useInvoiceStore.getState().createDraft({ customerId: firstCustomerId() });
-    addLine(id!, 1000, 0);
-    useInvoiceStore.getState().issueInvoice(id!);
-    useInvoiceStore.getState().recordPayment(id!, { amount: 1000, date: '2026-04-01', bankAccountId: bankId() });
+  it('paying the balance marks the invoice paid', async () => {
+    const { id } = await useInvoiceStore.getState().createDraft({ customerId: firstCustomerId() });
+    await addLine(id!, 1000, 0);
+    await useInvoiceStore.getState().issueInvoice(id!);
+    await useInvoiceStore.getState().recordPayment(id!, { amount: 1000, date: '2026-04-01', bankAccountId: bankId() });
     expect(useInvoiceStore.getState().getInvoice(id!)!.status).toBe('paid');
     expect(useInvoiceStore.getState().getInvoice(id!)!.balanceDue).toBe(0);
   });
 });
 
 describe('voiding', () => {
-  it('creates a reversing journal entry and preserves the original invoice', () => {
-    const { id } = useInvoiceStore.getState().createDraft({ customerId: firstCustomerId() });
-    addLine(id!, 1000, 16);
-    useInvoiceStore.getState().issueInvoice(id!);
+  it('creates a reversing journal entry and preserves the original invoice', async () => {
+    const { id } = await useInvoiceStore.getState().createDraft({ customerId: firstCustomerId() });
+    await addLine(id!, 1000, 16);
+    await useInvoiceStore.getState().issueInvoice(id!);
     const count = journalCount();
-    const res = useInvoiceStore.getState().voidInvoice(id!, 'Issued in error');
+    const res = await useInvoiceStore.getState().voidInvoice(id!, 'Issued in error');
     expect(res.ok).toBe(true);
     const inv = useInvoiceStore.getState().getInvoice(id!)!;
     expect(inv.status).toBe('void');
@@ -206,36 +206,36 @@ describe('voiding', () => {
 });
 
 describe('numbering & assignment rules', () => {
-  it('assigns unique sequential invoice numbers', () => {
-    const a = useInvoiceStore.getState().createDraft({ customerId: firstCustomerId() });
-    const b = useInvoiceStore.getState().createDraft({ customerId: firstCustomerId() });
+  it('assigns unique sequential invoice numbers', async () => {
+    const a = await useInvoiceStore.getState().createDraft({ customerId: firstCustomerId() });
+    const b = await useInvoiceStore.getState().createDraft({ customerId: firstCustomerId() });
     const na = useInvoiceStore.getState().getInvoice(a.id!)!.invoiceNumber;
     const nb = useInvoiceStore.getState().getInvoice(b.id!)!.invoiceNumber;
     expect(na).not.toBe(nb);
     expect(new Set([na, nb]).size).toBe(2);
   });
 
-  it('the customer’s preferred template (stored on the customer) drives resolution for a new invoice', () => {
-    const { id } = useInvoiceStore.getState().createDraft({ customerId: firstCustomerId() });
+  it('the customer’s preferred template (stored on the customer) drives resolution for a new invoice', async () => {
+    const { id } = await useInvoiceStore.getState().createDraft({ customerId: firstCustomerId() });
     // default: no customer preference → system default
     expect(useInvoiceStore.getState().getInvoice(id!)!.templateResolutionSource).toBe('system-default');
 
     // set the customer's preferred template on the customer record, then create another invoice
     setCustomerTemplate(firstCustomerId(), BLUE_TEMPLATE_ID);
-    const { id: id2 } = useInvoiceStore.getState().createDraft({ customerId: firstCustomerId() });
+    const { id: id2 } = await useInvoiceStore.getState().createDraft({ customerId: firstCustomerId() });
     const inv2 = useInvoiceStore.getState().getInvoice(id2!)!;
     expect(inv2.templateResolutionSource).toBe('customer-preference');
     expect(inv2.templateId).toBe(BLUE_TEMPLATE_ID);
   });
 
-  it('an archived customer template is ignored → falls back to the system default', () => {
+  it('an archived customer template is ignored → falls back to the system default', async () => {
     setCustomerTemplate(firstCustomerId(), BLUE_TEMPLATE_ID);
     useInvoiceTemplateStore.getState().archiveTemplate(BLUE_TEMPLATE_ID);
-    const { id } = useInvoiceStore.getState().createDraft({ customerId: firstCustomerId() });
+    const { id } = await useInvoiceStore.getState().createDraft({ customerId: firstCustomerId() });
     expect(useInvoiceStore.getState().getInvoice(id!)!.templateResolutionSource).toBe('system-default');
   });
 
-  it('the system default template always resolves even with no preference', () => {
+  it('the system default template always resolves even with no preference', async () => {
     const resolved = useInvoiceTemplateStore.getState().resolve({ entityId: INVOICE_ENTITY_ID });
     expect(resolved.resolutionSource).toBe('system-default');
   });

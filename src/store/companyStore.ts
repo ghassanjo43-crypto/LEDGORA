@@ -44,6 +44,21 @@ export interface CompanyBooks {
    * deserve no less care than the operator's console gives them.
    */
   archivedAt?: string | null;
+  /**
+   * When this company's invoices were migrated into the database, or absent
+   * while they still live in this browser.
+   *
+   * This IS the invoice backend switch — see `services/invoices/invoiceBackend`,
+   * which derives the backend from it rather than from a separate flag. Storing
+   * the migration timestamp instead of a boolean makes "use the server for a
+   * company whose invoices were never uploaded" unrepresentable, and that state
+   * loses invoices.
+   *
+   * It is per company because invoice numbers are allocated per issuing entity,
+   * and two allocators running against one company would hand out the same
+   * number twice.
+   */
+  invoicesMigratedAt?: string | null;
 }
 
 export type EntityStatus = 'active' | 'inactive' | 'archived';

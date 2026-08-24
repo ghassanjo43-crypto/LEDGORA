@@ -38,6 +38,10 @@ import {
   transactionCurrencyCode,
 } from '@/lib/transactionCurrency';
 import { roundToCompanyPrecision } from '@/lib/monetaryPrecision';
+import { invoicesApi } from '@/services/api/invoicesApi';
+import { toBrowserInvoice } from '@/services/invoices/serverInvoiceMapping';
+import { backendFor, type InvoiceBackend, type InvoiceBackendState } from '@/services/invoices/invoiceBackend';
+import * as serverActions from '@/services/invoices/serverInvoiceActions';
 
 const ACTOR = 'Finance Manager';
 
@@ -130,19 +134,52 @@ export function makeEmptyInvoiceLine(sortOrder: number): InvoiceLine {
 interface InvoiceState {
   invoices: Invoice[];
 
+  /**
+   * Where this company's invoices actually live.
+   *
+   * Every screen reads `invoices` off this store — nineteen of them — so the
+   * cutover hydrates the store rather than converting each consumer. A screen
+   * therefore needs no knowledge of the backend to show the right data.
+   *
+   * Writes are a different matter: see `syncFromServer` and the refusal guard
+   * below for why a browser write path must not run for a migrated company.
+   */
+  backend: InvoiceBackend;
+  /** True while `syncFromServer` is in flight, so a list can say so. */
+  syncing: boolean;
+  syncError?: string;
+
+  /**
+   * Load this company's invoices from the server and hold them here.
+   *
+   * Deliberately REPLACES rather than merges. The server is authoritative for a
+   * migrated company, and a merge would resurrect a locally-cached invoice that
+   * was voided elsewhere.
+   */
+  syncFromServer: (company: InvoiceBackendState | undefined) => Promise<void>;
+
   getInvoice: (id: string) => Invoice | undefined;
   usedNumbers: () => Set<string>;
   /** A snapshot for rendering: the frozen one if issued, else built live from the resolved version. */
   previewSnapshot: (id: string) => import('@/types/invoice').InvoiceTemplateSnapshot | null;
 
-  createDraft: (input: { customerId?: string; issueDate?: string; dueDate?: string; currency?: string; overrideTemplateVersionId?: string }) => InvoiceActionResult;
-  updateDraft: (id: string, patch: Partial<Invoice>) => InvoiceActionResult;
-  deleteDraft: (id: string) => InvoiceActionResult;
+  /*
+   * The six lifecycle actions are ASYNC because a server-backed company posts
+   * over the network. They stay one API rather than two so no screen has to
+   * know which backend it is talking to -- the reason the store hydrates at all.
+   *
+   * The remaining actions stay synchronous: they are browser-only features
+   * (credit-note allocation, receipt allocation, template duplication) with no
+   * server endpoint, and they refuse outright for a migrated company.
+   */
+  createDraft: (input: { customerId?: string; issueDate?: string; dueDate?: string; currency?: string; overrideTemplateVersionId?: string }) => Promise<InvoiceActionResult>;
+  updateDraft: (id: string, patch: Partial<Invoice>) => Promise<InvoiceActionResult>;
+  deleteDraft: (id: string) => Promise<InvoiceActionResult>;
   duplicateInvoice: (id: string) => InvoiceActionResult;
 
-  issueInvoice: (id: string) => InvoiceActionResult;
+  issueInvoice: (id: string) => Promise<InvoiceActionResult>;
   markSent: (id: string) => InvoiceActionResult;
-  recordPayment: (id: string, input: { amount: number; date: string; bankAccountId: string; method?: string; reference?: string }) => InvoiceActionResult;
+  recordPayment: (id: string, input: { amount: number; date: string; bankAccountId: string; method?: string; reference?: string }) => Promise<InvoiceActionResult>;
   /** Allocate credit-note value against this invoice (subledger; no cash journal). */
   applyCredit: (id: string, amount: number, creditNoteNumber?: string) => InvoiceActionResult;
   /** Undo a previously-applied credit (used when a credit note is voided). */
@@ -151,16 +188,87 @@ interface InvoiceState {
   applyReceiptAllocation: (id: string, input: { amount: number; date: string; method: string; reference?: string; bankAccountId?: string; receiptId: string; journalEntryId?: string }) => InvoiceActionResult;
   /** Remove every payment linked to a receipt (used when a receipt is reversed). */
   removeReceiptAllocations: (id: string, receiptId: string) => InvoiceActionResult;
-  voidInvoice: (id: string, reason: string) => InvoiceActionResult;
+  voidInvoice: (id: string, reason: string) => Promise<InvoiceActionResult>;
 
   replaceAll: (invoices: Invoice[]) => void;
   resetToDefault: () => void;
+}
+
+/**
+ * A browser write attempted against a company whose books are on the server.
+ *
+ * Refused rather than allowed: the browser path would write to localStorage,
+ * the server would never hear about it, and the two copies would diverge — with
+ * the localStorage one silently winning on the next read until a sync replaced
+ * it, losing the write entirely. A visible refusal is the lesser failure, and
+ * it is temporary: these paths gain server routing as each is converted.
+ */
+/**
+ * How a server action writes its result back into this store.
+ *
+ * The server is authoritative, so the returned record REPLACES the local one
+ * rather than being merged into it — a merge would keep a stale local total
+ * next to a server one that had already been posted.
+ */
+function serverContext(
+  set: (fn: (state: { invoices: Invoice[] }) => { invoices: Invoice[] }) => void,
+  get: () => { invoices: Invoice[] },
+): serverActions.ServerActionContext {
+  return {
+    decimals: documentDecimals(transactionCurrencyCode()),
+    upsert: (invoice) =>
+      set((state) => ({
+        invoices: state.invoices.some((i) => i.id === invoice.id)
+          ? state.invoices.map((i) => (i.id === invoice.id ? invoice : i))
+          : [...state.invoices, invoice],
+      })),
+    remove: (id) => set((state) => ({ invoices: state.invoices.filter((i) => i.id !== id) })),
+    find: (id) => get().invoices.find((i) => i.id === id),
+  };
+}
+
+function serverBackedRefusal(action: string): InvoiceActionResult {
+  return {
+    ok: false,
+    error: `This company's invoices are held on the server, where ${action} is not available yet. `
+      + 'No change was made.',
+  };
 }
 
 export const useInvoiceStore = create<InvoiceState>()(
   persist(
     (set, get) => ({
       invoices: [],
+      backend: 'browser',
+      syncing: false,
+
+      syncFromServer: async (company) => {
+        const backend = backendFor(company);
+        if (backend !== 'server') {
+          set({ backend: 'browser', syncing: false, syncError: undefined });
+          return;
+        }
+        set({ syncing: true, syncError: undefined });
+        try {
+          const records = await invoicesApi.list();
+          set({
+            invoices: records.map(toBrowserInvoice),
+            backend: 'server',
+            syncing: false,
+          });
+        } catch (cause) {
+          /*
+           * The previously-held invoices are LEFT IN PLACE on failure. Emptying
+           * the list would present "you have no invoices" as though it were a
+           * fact, when the truth is that we could not reach the server.
+           */
+          set({
+            syncing: false,
+            backend: 'server',
+            syncError: cause instanceof Error ? cause.message : String(cause),
+          });
+        }
+      },
 
       getInvoice: (id) => get().invoices.find((i) => i.id === id),
       usedNumbers: () => new Set(get().invoices.map((i) => i.invoiceNumber).filter(Boolean)),
@@ -176,7 +284,7 @@ export const useInvoiceStore = create<InvoiceState>()(
         return createInvoiceTemplateSnapshot(template, version, companySnapshot(useStore.getState().settings), customerSnapshot(customerById(invoice.customerId)));
       },
 
-      createDraft: (input) => {
+      createDraft: async (input) => {
         /*
          * The authorization point for starting a invoice.
          *
@@ -184,9 +292,23 @@ export const useInvoiceStore = create<InvoiceState>()(
          * through the same rule — the invoice page, the Dashboard quick-create,
          * and anything added later. A menu that merely hides itself is an
          * affordance, not a gate.
+         *
+         * Checked BEFORE the backend branch, so the permission rule is the same
+         * whichever backend the company is on. A gate that only one path applies
+         * is not a gate.
          */
         const permitted = assertTransactionDocumentPermission(currentRole(), 'invoice.create');
         if (!permitted.ok) return { ok: false, error: permitted.error };
+
+        if (get().backend === 'server') {
+          const issueDate = input.issueDate ?? new Date().toISOString().slice(0, 10);
+          return serverActions.createDraft(serverContext(set, get), {
+            customerId: input.customerId,
+            issueDate,
+            dueDate: input.dueDate ?? issueDate,
+            entityId: INVOICE_ENTITY_ID,
+          });
+        }
         const templates = useInvoiceTemplateStore.getState();
         const issueDate = input.issueDate ?? new Date().toISOString().slice(0, 10);
         const customer = input.customerId ? customerById(input.customerId) : undefined;
@@ -237,26 +359,39 @@ export const useInvoiceStore = create<InvoiceState>()(
         return { ok: true, id: invoice.id };
       },
 
-      updateDraft: (id, patch) => {
+      updateDraft: async (id, patch) => {
         const { invoices } = get();
         const existing = invoices.find((i) => i.id === id);
         if (!existing) return { ok: false, error: 'Invoice not found.' };
         if (existing.status !== 'draft') return { ok: false, error: 'Only draft invoices can be edited.' };
+
+        if (get().backend === 'server') {
+          /*
+           * The merge is done locally to assemble the payload, but its TOTALS
+           * are discarded: the server recomputes them and returns the result.
+           * Sending a locally-computed total would let a float rounding
+           * difference become the figure on a tax document.
+           */
+          return serverActions.updateDraft(serverContext(set, get), id, { ...existing, ...patch });
+        }
+
         const merged = withTotals({ ...existing, ...patch });
         set({ invoices: invoices.map((i) => (i.id === id ? merged : i)) });
         return { ok: true, id };
       },
 
-      deleteDraft: (id) => {
+      deleteDraft: async (id) => {
         const { invoices } = get();
         const existing = invoices.find((i) => i.id === id);
         if (!existing) return { ok: false, error: 'Invoice not found.' };
         if (existing.status !== 'draft') return { ok: false, error: 'Only draft invoices can be deleted. Void issued invoices instead.' };
+        if (get().backend === 'server') return serverActions.deleteDraft(serverContext(set, get), id);
         set({ invoices: invoices.filter((i) => i.id !== id) });
         return { ok: true, id };
       },
 
       duplicateInvoice: (id) => {
+        if (get().backend === 'server') return serverBackedRefusal('duplicating an invoice');
         const { invoices } = get();
         const src = invoices.find((i) => i.id === id);
         if (!src) return { ok: false, error: 'Invoice not found.' };
@@ -274,11 +409,41 @@ export const useInvoiceStore = create<InvoiceState>()(
         return { ok: true, id: copy.id };
       },
 
-      issueInvoice: (id) => {
+      issueInvoice: async (id) => {
         const { invoices } = get();
         const existing = invoices.find((i) => i.id === id);
         if (!existing) return { ok: false, error: 'Invoice not found.' };
         if (existing.status !== 'draft' && existing.status !== 'approved') return { ok: false, error: 'Only draft invoices can be issued.' };
+
+        if (get().backend === 'server') {
+          /*
+           * Stock is NOT moved here.
+           *
+           * The browser path posts inventory movements before the revenue
+           * journal so insufficient stock blocks the issue atomically; the
+           * server has no equivalent yet. Rather than issue and silently leave
+           * stock overstated, `assessEligibility` refuses to migrate a company
+           * whose invoices carry inventory lines at all — so reaching this point
+           * with one means the invoice changed after the cutover.
+           */
+          const stocked = existing.lines.some((line) => line.inventoryItemId);
+          if (stocked && inventoryEnabled()) {
+            return {
+              ok: false,
+              error: 'This invoice sells inventory items, which cannot be issued server-side yet '
+                + 'because stock would not be depleted. Issue it from a browser-backed company.',
+            };
+          }
+          /*
+           * The customer's default receivable is a BROWSER account id, and the
+           * server needs its own. The account CODE is the only identifier the
+           * two charts share, so it is what crosses the boundary.
+           */
+          const preferred = customerById(existing.customerId)?.defaultReceivableAccount;
+          return serverActions.issueInvoice(serverContext(set, get), id, {
+            preferredReceivableCode: preferred ? accountsMap().get(preferred)?.code : undefined,
+          });
+        }
 
         const templatesStore = useInvoiceTemplateStore.getState();
         const version = templatesStore.getVersion(existing.templateVersionId);
@@ -369,6 +534,7 @@ export const useInvoiceStore = create<InvoiceState>()(
       },
 
       markSent: (id) => {
+        if (get().backend === 'server') return serverBackedRefusal('marking an invoice sent');
         const { invoices } = get();
         const existing = invoices.find((i) => i.id === id);
         if (!existing) return { ok: false, error: 'Invoice not found.' };
@@ -377,7 +543,8 @@ export const useInvoiceStore = create<InvoiceState>()(
         return { ok: true, id };
       },
 
-      recordPayment: (id, input) => {
+      recordPayment: async (id, input) => {
+        if (get().backend === 'server') return serverActions.recordPayment(serverContext(set, get), id, input);
         const { invoices } = get();
         const existing = invoices.find((i) => i.id === id);
         if (!existing) return { ok: false, error: 'Invoice not found.' };
@@ -415,6 +582,7 @@ export const useInvoiceStore = create<InvoiceState>()(
       },
 
       applyCredit: (id, amount, creditNoteNumber) => {
+        if (get().backend === 'server') return serverBackedRefusal('applying a credit note');
         const { invoices } = get();
         const existing = invoices.find((i) => i.id === id);
         if (!existing) return { ok: false, error: 'Invoice not found.' };
@@ -432,6 +600,7 @@ export const useInvoiceStore = create<InvoiceState>()(
       },
 
       reverseCredit: (id, amount, creditNoteNumber) => {
+        if (get().backend === 'server') return serverBackedRefusal('reversing a credit note');
         const { invoices } = get();
         const existing = invoices.find((i) => i.id === id);
         if (!existing) return { ok: false, error: 'Invoice not found.' };
@@ -447,6 +616,7 @@ export const useInvoiceStore = create<InvoiceState>()(
       },
 
       applyReceiptAllocation: (id, input) => {
+        if (get().backend === 'server') return serverBackedRefusal('allocating a receipt');
         const { invoices } = get();
         const existing = invoices.find((i) => i.id === id);
         if (!existing) return { ok: false, error: 'Invoice not found.' };
@@ -468,6 +638,7 @@ export const useInvoiceStore = create<InvoiceState>()(
       },
 
       removeReceiptAllocations: (id, receiptId) => {
+        if (get().backend === 'server') return serverBackedRefusal('removing a receipt allocation');
         const { invoices } = get();
         const existing = invoices.find((i) => i.id === id);
         if (!existing) return { ok: false, error: 'Invoice not found.' };
@@ -482,13 +653,15 @@ export const useInvoiceStore = create<InvoiceState>()(
         return { ok: true, id };
       },
 
-      voidInvoice: (id, reason) => {
+      voidInvoice: async (id, reason) => {
         const { invoices } = get();
         const existing = invoices.find((i) => i.id === id);
         if (!existing) return { ok: false, error: 'Invoice not found.' };
         if (existing.status === 'void') return { ok: false, error: 'Invoice is already void.' };
         if (!existing.journalEntryId) return { ok: false, error: 'Only a posted (issued) invoice can be voided.' };
         if (!reason.trim()) return { ok: false, error: 'A void reason is required.' };
+
+        if (get().backend === 'server') return serverActions.voidInvoice(serverContext(set, get), id, reason);
 
         const reversal = useJournalStore.getState().reverseEntry(existing.journalEntryId);
         if (!reversal.ok || !reversal.id) return { ok: false, error: reversal.error ?? 'Could not create the reversing journal entry.' };

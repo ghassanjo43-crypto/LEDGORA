@@ -32,7 +32,7 @@ const page = (node: React.ReactElement) => render(<ToastProvider>{node}</ToastPr
 /** The drawer is open when its dialog is on screen. */
 const openDrawer = (): HTMLElement | null => document.querySelector('[role="dialog"]');
 
-beforeEach(() => {
+beforeEach(async () => {
   useInvoiceStore.setState({ invoices: [] });
   useBillStore.setState({ bills: [] });
   usePaymentStore.setState({ payments: [] });
@@ -44,8 +44,8 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('a pending editor request opens the draft on arrival', () => {
-  it('Invoices opens the requested invoice', () => {
-    const created = useInvoiceStore.getState().createDraft({});
+  it('Invoices opens the requested invoice', async () => {
+    const created = await useInvoiceStore.getState().createDraft({});
     expect(created.ok).toBe(true);
     useInvoiceEditor.getState().requestOpen(created.id!);
 
@@ -60,7 +60,7 @@ describe('a pending editor request opens the draft on arrival', () => {
     expect(openDrawer()!.textContent).toContain(invoice.invoiceNumber);
   });
 
-  it('Bills opens the requested bill', () => {
+  it('Bills opens the requested bill', async () => {
     const created = useBillStore.getState().createDraft();
     expect(created.ok).toBe(true);
     useBillEditor.getState().requestOpen(created.id!);
@@ -72,7 +72,7 @@ describe('a pending editor request opens the draft on arrival', () => {
     expect(openDrawer()!.textContent).toContain(useBillStore.getState().getBill(created.id!)!.billNumber);
   });
 
-  it('Payments opens the requested payment', () => {
+  it('Payments opens the requested payment', async () => {
     const created = usePaymentStore.getState().createDraft();
     expect(created.ok).toBe(true);
     usePaymentEditor.getState().requestOpen(created.id!);
@@ -85,7 +85,7 @@ describe('a pending editor request opens the draft on arrival', () => {
 });
 
 describe('without a request', () => {
-  it('each page opens no drawer at all', () => {
+  it('each page opens no drawer at all', async () => {
     // Arriving at the module normally must not pop an editor — the request is
     // what distinguishes "the user asked to create one" from "the user browsed
     // to the list".

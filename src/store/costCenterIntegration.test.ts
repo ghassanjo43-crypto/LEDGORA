@@ -20,7 +20,7 @@ const firstSupplierId = () => useEntityStore.getState().entities.find((e) => e.e
 // FIN/HR/SALES/PROD are posting leaves; ADMIN is a summary (non-posting) parent.
 const CC = { FIN: 'cc_CC-FIN', HR: 'cc_CC-HR', SALES: 'cc_CC-SALES-DOM', PROD: 'cc_CC-PROD', ADMIN: 'cc_CC-ADMIN' };
 
-beforeEach(() => {
+beforeEach(async () => {
   useJournalStore.getState().resetToDefault();
   useInvoiceTemplateStore.getState().resetToDefault();
   useInvoiceStore.getState().resetToDefault();
@@ -32,19 +32,19 @@ beforeEach(() => {
 
 /* ───────────────────── Invoice integration ───────────────────── */
 
-function issuedInvoice(lines: Partial<InvoiceLine>[]): string {
-  const { id } = useInvoiceStore.getState().createDraft({ customerId: firstCustomerId() });
+async function issuedInvoice(lines: Partial<InvoiceLine>[]): Promise<string> {
+  const { id } = await useInvoiceStore.getState().createDraft({ customerId: firstCustomerId() });
   const base = useInvoiceStore.getState().getInvoice(id!)!.lines[0]!;
   const built = lines.map((l, i) => ({ ...base, accountId: acc('4120'), description: 'Consulting', quantity: 1, unitPrice: 1000, taxRate: 0, id: `il${i}`, ...l }));
-  useInvoiceStore.getState().updateDraft(id!, { lines: built });
-  const res = useInvoiceStore.getState().issueInvoice(id!);
+  await useInvoiceStore.getState().updateDraft(id!, { lines: built });
+  const res = await useInvoiceStore.getState().issueInvoice(id!);
   expect(res.ok).toBe(true);
   return id!;
 }
 
 describe('invoice cost-center integration', () => {
-  it('propagates a single line cost center to the revenue journal line; AR & tax stay untagged', () => {
-    const id = issuedInvoice([{ unitPrice: 1000, taxRate: 16, costCenterId: CC.SALES }]);
+  it('propagates a single line cost center to the revenue journal line; AR & tax stay untagged', async () => {
+    const id = await issuedInvoice([{ unitPrice: 1000, taxRate: 16, costCenterId: CC.SALES }]);
     const inv = useInvoiceStore.getState().getInvoice(id)!;
     const entry = je(inv.journalEntryId!);
     const revenue = entry.lines.find((l) => l.accountCode === '4120')!;
@@ -55,8 +55,8 @@ describe('invoice cost-center integration', () => {
     expect(entry.lines.find((l) => l.accountCode === '2270')!.costCenter).toBe('');
   });
 
-  it('splits one revenue line across cost centers, preserving the total', () => {
-    const id = issuedInvoice([{ unitPrice: 1000, taxRate: 0, costCenterAssignments: [{ costCenterId: CC.SALES, percentage: 60 }, { costCenterId: CC.HR, percentage: 40 }] }]);
+  it('splits one revenue line across cost centers, preserving the total', async () => {
+    const id = await issuedInvoice([{ unitPrice: 1000, taxRate: 0, costCenterAssignments: [{ costCenterId: CC.SALES, percentage: 60 }, { costCenterId: CC.HR, percentage: 40 }] }]);
     const entry = je(useInvoiceStore.getState().getInvoice(id)!.journalEntryId!);
     const revenueLines = entry.lines.filter((l) => l.accountCode === '4120');
     expect(revenueLines).toHaveLength(2);
@@ -65,25 +65,25 @@ describe('invoice cost-center integration', () => {
     expect(computeTotals(entry.lines).difference).toBe(0);
   });
 
-  it('a required cost-center rule blocks issuing an invoice without one', () => {
+  it('a required cost-center rule blocks issuing an invoice without one', async () => {
     useCostCenterStore.getState().upsertRequirementRule({ id: 'req-rev', entityId: 'primary', accountIds: [acc('4120')], requirement: 'required', effectiveFrom: '2026-01-01', status: 'active' });
-    const { id } = useInvoiceStore.getState().createDraft({ customerId: firstCustomerId() });
+    const { id } = await useInvoiceStore.getState().createDraft({ customerId: firstCustomerId() });
     const base = useInvoiceStore.getState().getInvoice(id!)!.lines[0]!;
-    useInvoiceStore.getState().updateDraft(id!, { lines: [{ ...base, accountId: acc('4120'), quantity: 1, unitPrice: 1000, taxRate: 0 }] });
-    const blocked = useInvoiceStore.getState().issueInvoice(id!);
+    await useInvoiceStore.getState().updateDraft(id!, { lines: [{ ...base, accountId: acc('4120'), quantity: 1, unitPrice: 1000, taxRate: 0 }] });
+    const blocked = await useInvoiceStore.getState().issueInvoice(id!);
     expect(blocked.ok).toBe(false);
     expect(blocked.error).toMatch(/cost center is required/i);
     // Adding a cost center lets it post.
-    useInvoiceStore.getState().updateDraft(id!, { lines: [{ ...base, accountId: acc('4120'), quantity: 1, unitPrice: 1000, taxRate: 0, costCenterId: CC.SALES }] });
-    expect(useInvoiceStore.getState().issueInvoice(id!).ok).toBe(true);
+    await useInvoiceStore.getState().updateDraft(id!, { lines: [{ ...base, accountId: acc('4120'), quantity: 1, unitPrice: 1000, taxRate: 0, costCenterId: CC.SALES }] });
+    expect((await useInvoiceStore.getState().issueInvoice(id!)).ok).toBe(true);
   });
 });
 
 /* ───────────────────── Credit-note inheritance ───────────────────── */
 
 describe('credit-note inheritance', () => {
-  it('inherits the original invoice line cost center and propagates it to the reversal journal', () => {
-    const id = issuedInvoice([{ unitPrice: 1000, taxRate: 0, costCenterId: CC.SALES }]);
+  it('inherits the original invoice line cost center and propagates it to the reversal journal', async () => {
+    const id = await issuedInvoice([{ unitPrice: 1000, taxRate: 0, costCenterId: CC.SALES }]);
     const created = useCreditNoteStore.getState().createCreditNoteFromInvoice(id, { creditType: 'full' });
     const cn = useCreditNoteStore.getState().getCreditNoteById(created.id!)!;
     expect(cn.lines[0]!.costCenterId).toBe(CC.SALES); // inherited, not a current default
@@ -93,8 +93,8 @@ describe('credit-note inheritance', () => {
     expect(reversal!.costCenter).toBe(CC.SALES);
   });
 
-  it('partial credit preserves the original cost-center relationship', () => {
-    const id = issuedInvoice([{ unitPrice: 1000, quantity: 4, taxRate: 0, costCenterId: CC.PROD }]);
+  it('partial credit preserves the original cost-center relationship', async () => {
+    const id = await issuedInvoice([{ unitPrice: 1000, quantity: 4, taxRate: 0, costCenterId: CC.PROD }]);
     const created = useCreditNoteStore.getState().createCreditNoteFromInvoice(id, { creditType: 'selected-lines' });
     const cn = useCreditNoteStore.getState().getCreditNoteById(created.id!)!;
     expect(cn.lines[0]!.costCenterId).toBe(CC.PROD);
@@ -103,7 +103,7 @@ describe('credit-note inheritance', () => {
 
 /* ───────────────────── Bill integration ───────────────────── */
 
-function postedBill(lines: Partial<BillLine>[], invoiceNumber = 'CC-1'): string {
+async function postedBill(lines: Partial<BillLine>[], invoiceNumber = 'CC-1'): Promise<string>{
   const { id } = useBillStore.getState().createDraft({ supplierId: firstSupplierId(), billDate: '2026-03-01', dueDate: '2026-04-01', currency: 'USD' });
   const base = useBillStore.getState().getBill(id!)!.lines[0]!;
   const built = lines.map((l, i) => ({ ...base, accountId: acc('6300'), description: 'Consulting', quantity: 1, unitPrice: 1000, taxRate: 0, id: `bl${i}`, billId: id!, ...l }));
@@ -114,8 +114,8 @@ function postedBill(lines: Partial<BillLine>[], invoiceNumber = 'CC-1'): string 
 }
 
 describe('bill cost-center integration', () => {
-  it('propagates a bill expense cost center to the expense journal line; AP stays untagged', () => {
-    const id = postedBill([{ unitPrice: 1000, taxRate: 16, costCenterId: CC.PROD }]);
+  it('propagates a bill expense cost center to the expense journal line; AP stays untagged', async () => {
+    const id = await postedBill([{ unitPrice: 1000, taxRate: 16, costCenterId: CC.PROD }]);
     const entry = je(useBillStore.getState().getBill(id)!.journalEntryId!);
     const expense = entry.lines.find((l) => l.accountCode === '6300')!;
     expect(expense.costCenter).toBe(CC.PROD);
@@ -124,15 +124,15 @@ describe('bill cost-center integration', () => {
     expect(entry.lines.find((l) => l.accountCode === '2270')!.costCenter).toBe(''); // recoverable input tax untagged
   });
 
-  it('splits a bill expense across cost centers (scenario 2 shape)', () => {
-    const id = postedBill([{ unitPrice: 10000, taxRate: 0, costCenterAssignments: [{ costCenterId: CC.HR, percentage: 40 }, { costCenterId: CC.SALES, percentage: 35 }, { costCenterId: CC.PROD, percentage: 25 }] }]);
+  it('splits a bill expense across cost centers (scenario 2 shape)', async () => {
+    const id = await postedBill([{ unitPrice: 10000, taxRate: 0, costCenterAssignments: [{ costCenterId: CC.HR, percentage: 40 }, { costCenterId: CC.SALES, percentage: 35 }, { costCenterId: CC.PROD, percentage: 25 }] }]);
     const entry = je(useBillStore.getState().getBill(id)!.journalEntryId!);
     const expenses = entry.lines.filter((l) => l.accountCode === '6300');
     expect(expenses.map((l) => l.debit).sort((a, b) => a - b)).toEqual([2500, 3500, 4000]);
     expect(computeTotals(entry.lines).difference).toBe(0);
   });
 
-  it('a required rule blocks posting a bill without a cost center', () => {
+  it('a required rule blocks posting a bill without a cost center', async () => {
     useCostCenterStore.getState().upsertRequirementRule({ id: 'req-exp', entityId: 'primary', accountIds: [acc('6300')], requirement: 'required', effectiveFrom: '2026-01-01', status: 'active' });
     const { id } = useBillStore.getState().createDraft({ supplierId: firstSupplierId(), billDate: '2026-03-01', dueDate: '2026-04-01', currency: 'USD' });
     const base = useBillStore.getState().getBill(id!)!.lines[0]!;
@@ -140,8 +140,8 @@ describe('bill cost-center integration', () => {
     expect(useBillStore.getState().postBill(id!).ok).toBe(false);
   });
 
-  it('supplier credit inherits the original bill line cost center', () => {
-    const id = postedBill([{ unitPrice: 1000, taxRate: 0, costCenterId: CC.FIN }], 'SC-1');
+  it('supplier credit inherits the original bill line cost center', async () => {
+    const id = await postedBill([{ unitPrice: 1000, taxRate: 0, costCenterId: CC.FIN }], 'SC-1');
     const res = useBillStore.getState().createSupplierCredit(id, { netAmount: 500, taxAmount: 0, creditAccountId: acc('6300'), reason: 'Return' });
     expect(res.ok).toBe(true);
     const credit = useBillStore.getState().getBill(id)!.supplierCredits[0]!;
@@ -154,8 +154,8 @@ describe('bill cost-center integration', () => {
 /* ───────────────────── Historical snapshot & reports ───────────────────── */
 
 describe('historical snapshot & hierarchy reports', () => {
-  it('the posted snapshot survives a rename and a hierarchy move; current vs historical reports differ', () => {
-    postedBill([{ unitPrice: 1000, taxRate: 0, costCenterId: CC.FIN }], 'HS-1');
+  it('the posted snapshot survives a rename and a hierarchy move; current vs historical reports differ', async () => {
+    await postedBill([{ unitPrice: 1000, taxRate: 0, costCenterId: CC.FIN }], 'HS-1');
     // Rename Finance and move it under Sales — historical presentation must not change.
     useCostCenterStore.getState().updateCostCenter(CC.FIN, { name: 'Finance & Treasury' });
     useCostCenterStore.getState().moveCostCenter(CC.FIN, 'cc_CC-SALES');
@@ -179,7 +179,7 @@ describe('historical snapshot & hierarchy reports', () => {
 /* ───────────────────── Import dry-run ───────────────────── */
 
 describe('cost-center import dry-run', () => {
-  it('catches duplicate codes, unknown parents, and invalid dates before commit', () => {
+  it('catches duplicate codes, unknown parents, and invalid dates before commit', async () => {
     const centers = useCostCenterStore.getState().costCenters;
     const csv = [
       'entity,code,name,type,parentCode,postingAllowed,effectiveFrom,status',

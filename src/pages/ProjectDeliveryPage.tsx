@@ -297,16 +297,18 @@ function BillingSection({ project }: { project: Project }) {
   const customerName = project.customerId ? entities.find((e) => e.id === project.customerId)?.legalName : undefined;
   const revenueAccount = accounts.find((a) => a.code === '4120');
 
-  const generate = (): void => {
+  const generate = (): void => { void generateAsync(); };
+
+  const generateAsync = async (): Promise<void> => {
     if (!project.customerId) { notify('Link a customer to this project first (edit the project).', 'error'); return; }
     if (!revenueAccount) { notify('No revenue account (4120) found.', 'error'); return; }
     const amount = suggestion.amount;
     if (amount <= 0) { notify('Nothing to bill (no unbilled approved time/expenses or contract remaining).', 'error'); return; }
 
-    const created = createDraft({ customerId: project.customerId });
+    const created = await createDraft({ customerId: project.customerId });
     if (!created.ok || !created.id) { notify(created.error ?? 'Could not create the invoice.', 'error'); return; }
     const base = useInvoiceStore.getState().getInvoice(created.id)!.lines[0]!;
-    updateDraft(created.id, { lines: [{ ...base, accountId: revenueAccount.id, description: `${project.code} — ${suggestion.method} billing`, quantity: 1, unitPrice: amount, taxRate: 0, projectId: project.id }] });
+    await updateDraft(created.id, { lines: [{ ...base, accountId: revenueAccount.id, description: `${project.code} — ${suggestion.method} billing`, quantity: 1, unitPrice: amount, taxRate: 0, projectId: project.id }] });
     // Mark the source time/expenses billed (duplicate-billing prevented by the store).
     if (unbilledTime.length) delivery.billTime(unbilledTime.map((t) => t.id), created.id);
     if (unbilledExp.length) delivery.billExpense(unbilledExp.map((e) => e.id), created.id);

@@ -53,7 +53,7 @@ function counterpartiesPreferringUsd(): { customerId: string; supplierId: string
   return { customerId: customer!.id, supplierId: supplier!.id };
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   useJournalStore.getState().replaceAll([]);
   companyKeepsBooksIn('JOD');
 });
@@ -61,7 +61,7 @@ beforeEach(() => {
 /* ══ The accessor ══════════════════════════════════════════════════════════ */
 
 describe('the canonical accessor', () => {
-  it('reports the company currency, with its display name and minor units', () => {
+  it('reports the company currency, with its display name and minor units', async () => {
     expect(transactionCurrencyCode()).toBe('JOD');
     const described = describeCurrency('JOD');
     expect(described.label).toBe('JOD — Jordanian Dinar');
@@ -69,7 +69,7 @@ describe('the canonical accessor', () => {
     expect(described.decimalPlaces).toBe(3);
   });
 
-  it('resolves each organization’s own currency as the active one changes', () => {
+  it('resolves each organization’s own currency as the active one changes', async () => {
     // Switching between organizations must resolve each one's own currency.
     for (const code of ['JOD', 'EUR', 'KWD', 'USD']) {
       companyKeepsBooksIn(code);
@@ -77,7 +77,7 @@ describe('the canonical accessor', () => {
     }
   });
 
-  it('states that an ordinary transaction is never converted', () => {
+  it('states that an ordinary transaction is never converted', async () => {
     expect(ORDINARY_TRANSACTION_EXCHANGE_RATE).toBe(1);
   });
 });
@@ -85,7 +85,7 @@ describe('the canonical accessor', () => {
 /* ══ Every transaction type ════════════════════════════════════════════════ */
 
 describe('every ordinary transaction takes the company currency', () => {
-  it('a general journal entry does, at par', () => {
+  it('a general journal entry does, at par', async () => {
     const created = useJournalStore.getState().addEntry({
       entryNumber: '', entryDate: '2026-08-01', reference: '', description: 'Test',
       // A payload asking for dollars — as a tampered form submission would.
@@ -98,15 +98,15 @@ describe('every ordinary transaction takes the company currency', () => {
     expect(entry.exchangeRate).toBe(1);
   });
 
-  it('an invoice does, ignoring the customer’s preferred currency', () => {
+  it('an invoice does, ignoring the customer’s preferred currency', async () => {
     const { customerId } = counterpartiesPreferringUsd();
-    const created = useInvoiceStore.getState().createDraft({ customerId });
+    const created = await useInvoiceStore.getState().createDraft({ customerId });
     const invoice = useInvoiceStore.getState().getInvoice(created.id!)!;
     expect(invoice.currency).toBe('JOD');
     expect(invoice.exchangeRate).toBe(1);
   });
 
-  it('a bill does, ignoring the supplier’s preferred currency', () => {
+  it('a bill does, ignoring the supplier’s preferred currency', async () => {
     const { supplierId } = counterpartiesPreferringUsd();
     const created = useBillStore.getState().createDraft({ supplierId });
     const bill = useBillStore.getState().getBill(created.id!)!;
@@ -114,7 +114,7 @@ describe('every ordinary transaction takes the company currency', () => {
     expect(bill.exchangeRate).toBe(1);
   });
 
-  it('a payment does', () => {
+  it('a payment does', async () => {
     const { supplierId } = counterpartiesPreferringUsd();
     const created = usePaymentStore.getState().createDraft({
       paymentType: 'supplier-payment', supplierId, grossAmount: 100,
@@ -122,7 +122,7 @@ describe('every ordinary transaction takes the company currency', () => {
     expect(usePaymentStore.getState().getPayment(created.id!)!.currency).toBe('JOD');
   });
 
-  it('a receipt does', () => {
+  it('a receipt does', async () => {
     const { customerId } = counterpartiesPreferringUsd();
     const created = useReceiptStore.getState().createDraft({
       receiptType: 'customer-payment', customerId, amount: 100,
@@ -130,18 +130,18 @@ describe('every ordinary transaction takes the company currency', () => {
     expect(useReceiptStore.getState().getReceiptById(created.id!)!.currency).toBe('JOD');
   });
 
-  it('follows the company when the company currency differs', () => {
+  it('follows the company when the company currency differs', async () => {
     // The same paths, for a euro company — nothing is hard-coded to JOD either.
     companyKeepsBooksIn('EUR');
     const { customerId, supplierId } = counterpartiesPreferringUsd();
     expect(
       useInvoiceStore.getState().getInvoice(
-        useInvoiceStore.getState().createDraft({ customerId }).id!,
+        (await useInvoiceStore.getState().createDraft({ customerId })).id!,
       )!.currency,
     ).toBe('EUR');
     expect(
       useBillStore.getState().getBill(
-        useBillStore.getState().createDraft({ supplierId }).id!,
+        (useBillStore.getState().createDraft({ supplierId })).id!,
       )!.currency,
     ).toBe('EUR');
   });
@@ -150,7 +150,7 @@ describe('every ordinary transaction takes the company currency', () => {
 /* ══ No drift after creation ═══════════════════════════════════════════════ */
 
 describe('the currency cannot drift after creation', () => {
-  it('survives an edit that asks for a different one', () => {
+  it('survives an edit that asks for a different one', async () => {
     const created = useJournalStore.getState().addEntry({
       entryNumber: '', entryDate: '2026-08-01', reference: '', description: 'Test',
       currency: 'JOD', exchangeRate: 1,
@@ -172,7 +172,7 @@ describe('the currency cannot drift after creation', () => {
     expect(entry.exchangeRate).toBe(1);
   });
 
-  it('does not restate an existing entry when the company currency changes', () => {
+  it('does not restate an existing entry when the company currency changes', async () => {
     /*
      * The protection that matters most. Changing the company's functional
      * currency must not silently re-denominate records that are already
@@ -206,7 +206,7 @@ describe('the currency cannot drift after creation', () => {
 /* ══ The multi-currency module is still there ══════════════════════════════ */
 
 describe('foreign currency remains possible as a deliberate capability', () => {
-  it('a source-document posting carries its own denomination', () => {
+  it('a source-document posting carries its own denomination', async () => {
     /*
      * Section 7 of the policy: the currency catalogue and the exchange-rate
      * infrastructure stay. What has gone is the unrestricted per-transaction

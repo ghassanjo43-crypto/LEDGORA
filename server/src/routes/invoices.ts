@@ -20,6 +20,7 @@ import type { AccountingActor } from '../services/accounting/audit.js';
 import type { SalesInvoiceStatus } from '../db/schema.js';
 import * as invoices from '../services/invoicing/invoiceService.js';
 import * as imports from '../services/invoicing/invoiceImportService.js';
+import * as settlement from '../services/invoicing/invoiceSettlementService.js';
 
 /**
  * Who is acting.
@@ -109,7 +110,12 @@ export async function invoiceRoutes(app: FastifyInstance): Promise<void> {
    * making it permanent.
    */
   app.post('/api/invoices/:id/issue', { preHandler: postInvoices }, async (request, reply) => {
-    const body = (request.body ?? {}) as { expectedVersion?: number; receivableAccountId?: string };
+    const body = (request.body ?? {}) as {
+      expectedVersion?: number;
+      receivableAccountId?: string;
+      taxAccountId?: string;
+      chargesAccountId?: string;
+    };
     if (!body.receivableAccountId) {
       throw errors.validation('A receivable account is required to post this invoice.', {
         fieldErrors: { receivableAccountId: 'Choose the account this invoice debits.' },
@@ -120,6 +126,8 @@ export async function invoiceRoutes(app: FastifyInstance): Promise<void> {
         app.db, actorOf(request), idOf(request),
         { expectedVersion: expectedVersionOf(body) },
         body.receivableAccountId,
+        body.taxAccountId,
+        body.chargesAccountId,
       ),
     });
   });
@@ -137,6 +145,37 @@ export async function invoiceRoutes(app: FastifyInstance): Promise<void> {
     const body = (request.body ?? {}) as { invoices?: imports.ImportedInvoice[] };
     return reply.send({
       outcome: await imports.importInvoices(app.db, actorOf(request), body.invoices ?? []),
+    });
+  });
+
+  /*
+   * Receipts.
+   *
+   * Recording one posts to the ledger, so it needs `post` — the same rule
+   * issuing follows. Reversing one also posts (a reversing entry), so it needs
+   * `void`: undoing a settlement is the same class of act as undoing an
+   * invoice, and neither belongs to whoever can merely edit a draft.
+   */
+  app.get('/api/invoices/:id/payments', { preHandler: viewInvoices }, async (request, reply) =>
+    reply.send({ payments: await settlement.listPayments(app.db, actorOf(request), idOf(request)) }),
+  );
+
+  app.post('/api/invoices/:id/payments', { preHandler: postInvoices }, async (request, reply) => {
+    const body = (request.body ?? {}) as settlement.PaymentInput & { expectedVersion?: number };
+    return reply.code(201).send({
+      invoice: await settlement.recordPayment(app.db, actorOf(request), idOf(request), body, {
+        expectedVersion: expectedVersionOf(body),
+      }),
+    });
+  });
+
+  app.post('/api/invoices/payments/:id/reverse', { preHandler: voidInvoices }, async (request, reply) => {
+    const body = (request.body ?? {}) as { expectedVersion?: number; reason?: string };
+    return reply.send({
+      invoice: await settlement.reversePayment(app.db, actorOf(request), idOf(request), {
+        expectedVersion: expectedVersionOf(body),
+        reason: body.reason,
+      }),
     });
   });
 

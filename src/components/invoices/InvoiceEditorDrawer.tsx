@@ -154,9 +154,9 @@ export function InvoiceEditorDrawer({ open, invoiceId, onClose }: Props) {
     templateId: resolved.templateId, templateVersionId: resolved.templateVersionId, templateResolutionSource: resolved.resolutionSource,
   });
 
-  const persist = (): boolean => {
+  const persist = async (): Promise<boolean> => {
     if (!invoiceId) return false;
-    const res = updateDraft(invoiceId, collect());
+    const res = await updateDraft(invoiceId, collect());
     if (!res.ok) { notify(res.error ?? 'Could not save the invoice.', 'error'); return false; }
     if (saveAsCustomerDefault && customerEntity && !resolvedTemplate?.isSystemDefault) {
       // Store the preferred TEMPLATE on the customer record (not on the template).
@@ -167,7 +167,7 @@ export function InvoiceEditorDrawer({ open, invoiceId, onClose }: Props) {
     return true;
   };
 
-  const onPreviewInvoice = (): void => { if (persist()) setShowPreview(true); };
+  const onPreviewInvoice = (): void => { void persist().then((saved) => { if (saved) setShowPreview(true); }); };
   const onEditTemplate = (): void => {
     if (!resolvedTemplate) return;
     templateEditor.setTab('branding'); // open straight on Branding → Company Logo
@@ -183,13 +183,18 @@ export function InvoiceEditorDrawer({ open, invoiceId, onClose }: Props) {
   };
 
   const onSaveDraft = (): void => {
-    if (persist()) { notify('Invoice draft saved.', 'success'); onClose(); }
+    void persist().then((saved) => {
+      if (saved) { notify('Invoice draft saved.', 'success'); onClose(); }
+    });
   };
   const onIssue = (): void => {
-    if (!persist()) return;
-    const res = issueInvoice(invoiceId!);
-    if (res.ok) { notify(`Invoice ${invoice?.invoiceNumber} issued and posted.`, 'success'); onClose(); }
-    else notify(res.error ?? 'Could not issue the invoice.', 'error');
+    void (async () => {
+      // The draft is saved first, so what posts is what is on screen.
+      if (!(await persist())) return;
+      const res = await issueInvoice(invoiceId!);
+      if (res.ok) { notify(`Invoice ${invoice?.invoiceNumber} issued and posted.`, 'success'); onClose(); }
+      else notify(res.error ?? 'Could not issue the invoice.', 'error');
+    })();
   };
 
   if (!invoice) return null;

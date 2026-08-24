@@ -21,12 +21,12 @@ const journalCount = () => useJournalStore.getState().entries.length;
 const je = (id: string) => useJournalStore.getState().entries.find((e) => e.id === id)!;
 
 /** Create and issue an invoice with a single line: qty × unitPrice @ taxRate%. */
-function issuedInvoice(qty: number, unitPrice: number, taxRate: number): string {
-  const { id } = useInvoiceStore.getState().createDraft({ customerId: firstCustomerId() });
+async function issuedInvoice(qty: number, unitPrice: number, taxRate: number): Promise<string> {
+  const { id } = await useInvoiceStore.getState().createDraft({ customerId: firstCustomerId() });
   const inv = useInvoiceStore.getState().getInvoice(id!)!;
   const line = { ...inv.lines[0]!, accountId: revenueId(), description: 'Service', quantity: qty, unitPrice, taxRate };
-  useInvoiceStore.getState().updateDraft(id!, { lines: [line] });
-  useInvoiceStore.getState().issueInvoice(id!);
+  await useInvoiceStore.getState().updateDraft(id!, { lines: [line] });
+  await useInvoiceStore.getState().issueInvoice(id!);
   return id!;
 }
 
@@ -38,7 +38,7 @@ function setCreditQty(cnId: string, quantity: number): void {
 
 const cnStore = () => useCreditNoteStore.getState();
 
-beforeEach(() => {
+beforeEach(async () => {
   useJournalStore.getState().resetToDefault();
   useInvoiceTemplateStore.getState().resetToDefault();
   useInvoiceStore.getState().resetToDefault();
@@ -48,22 +48,22 @@ beforeEach(() => {
 });
 
 describe('crediting eligibility', () => {
-  it('a draft invoice cannot be credited', () => {
-    const { id } = useInvoiceStore.getState().createDraft({ customerId: firstCustomerId() });
+  it('a draft invoice cannot be credited', async () => {
+    const { id } = await useInvoiceStore.getState().createDraft({ customerId: firstCustomerId() });
     const res = cnStore().createCreditNoteFromInvoice(id!);
     expect(res.ok).toBe(false);
     expect(res.error).toMatch(/issued invoice/i);
   });
 
-  it('a void invoice cannot be credited', () => {
-    const id = issuedInvoice(1, 1000, 0);
-    useInvoiceStore.getState().voidInvoice(id, 'error');
+  it('a void invoice cannot be credited', async () => {
+    const id = await issuedInvoice(1, 1000, 0);
+    await useInvoiceStore.getState().voidInvoice(id, 'error');
     const res = cnStore().createCreditNoteFromInvoice(id);
     expect(res.ok).toBe(false);
   });
 
-  it('an issued invoice can create a prefilled credit note', () => {
-    const id = issuedInvoice(2, 500, 16);
+  it('an issued invoice can create a prefilled credit note', async () => {
+    const id = await issuedInvoice(2, 500, 16);
     const res = cnStore().createCreditNoteFromInvoice(id);
     expect(res.ok).toBe(true);
     const cn = cnStore().getCreditNoteById(res.id!)!;
@@ -77,8 +77,8 @@ describe('crediting eligibility', () => {
 });
 
 describe('acceptance scenario — partial credit of INV total 1,160', () => {
-  it('posts Dr sales returns 500 / Dr VAT 80 / Cr receivables 580 and adjusts the invoice balance', () => {
-    const invId = issuedInvoice(2, 500, 16); // revenue 1,000 + VAT 160 = 1,160
+  it('posts Dr sales returns 500 / Dr VAT 80 / Cr receivables 580 and adjusts the invoice balance', async () => {
+    const invId = await issuedInvoice(2, 500, 16); // revenue 1,000 + VAT 160 = 1,160
     expect(useInvoiceStore.getState().getInvoice(invId)!.grandTotal).toBe(1160);
 
     const { id: cnId } = cnStore().createCreditNoteFromInvoice(invId);
@@ -122,8 +122,8 @@ describe('acceptance scenario — partial credit of INV total 1,160', () => {
 });
 
 describe('creditable-balance controls', () => {
-  it('previous issued credits reduce available credit and block over-crediting', () => {
-    const invId = issuedInvoice(10, 100, 16); // 1,000 + 160 = 1,160
+  it('previous issued credits reduce available credit and block over-crediting', async () => {
+    const invId = await issuedInvoice(10, 100, 16); // 1,000 + 160 = 1,160
     const { id: cn1 } = cnStore().createCreditNoteFromInvoice(invId);
     setCreditQty(cn1!, 4); // 400 + 64 = 464
     cnStore().issueCreditNote(cn1!);
@@ -141,8 +141,8 @@ describe('creditable-balance controls', () => {
     expect(res.error).toMatch(/remaining|exceed/i);
   });
 
-  it('draft and void credit notes do not reduce the creditable amount', () => {
-    const invId = issuedInvoice(10, 100, 0);
+  it('draft and void credit notes do not reduce the creditable amount', async () => {
+    const invId = await issuedInvoice(10, 100, 0);
     // A lingering DRAFT credit note (never issued).
     cnStore().createCreditNoteFromInvoice(invId);
     // A voided credit note.
@@ -156,8 +156,8 @@ describe('creditable-balance controls', () => {
     expect(cnStore().getCreditNoteById(full!)!.lines[0]!.quantity).toBe(10);
   });
 
-  it('tax reversal cannot exceed the original remaining tax', () => {
-    const invId = issuedInvoice(1, 1000, 16); // net 1,000, tax 160
+  it('tax reversal cannot exceed the original remaining tax', async () => {
+    const invId = await issuedInvoice(1, 1000, 16); // net 1,000, tax 160
     const { id } = cnStore().createCreditNoteFromInvoice(invId);
     const cn = cnStore().getCreditNoteById(id!)!;
     // Credit only 500 of net (so the amount stays within the 1,160 available) but at
@@ -170,8 +170,8 @@ describe('creditable-balance controls', () => {
 });
 
 describe('approval workflow', () => {
-  it('an approved credit note can still be edited and then issued', () => {
-    const invId = issuedInvoice(2, 500, 0);
+  it('an approved credit note can still be edited and then issued', async () => {
+    const invId = await issuedInvoice(2, 500, 0);
     const { id } = cnStore().createCreditNoteFromInvoice(invId);
     setCreditQty(id!, 1);
     expect(cnStore().approveCreditNote(id!).ok).toBe(true);
@@ -191,8 +191,8 @@ describe('approval workflow', () => {
 });
 
 describe('correct & replace', () => {
-  it('voids the issued note, restores the invoice, and opens a pre-filled replacement draft', () => {
-    const invId = issuedInvoice(2, 500, 16); // 1,160
+  it('voids the issued note, restores the invoice, and opens a pre-filled replacement draft', async () => {
+    const invId = await issuedInvoice(2, 500, 16); // 1,160
     const { id } = cnStore().createCreditNoteFromInvoice(invId);
     setCreditQty(id!, 1); // 580, auto-applied on issue
     cnStore().issueCreditNote(id!);
@@ -224,8 +224,8 @@ describe('correct & replace', () => {
     expect(cnStore().invoiceReference(res.id!)!.previousCreditsTotal).toBe(0);
   });
 
-  it('cannot correct a draft (it is already editable) or a void note', () => {
-    const invId = issuedInvoice(2, 500, 0);
+  it('cannot correct a draft (it is already editable) or a void note', async () => {
+    const invId = await issuedInvoice(2, 500, 0);
     const { id } = cnStore().createCreditNoteFromInvoice(invId);
     expect(cnStore().correctCreditNote(id!).ok).toBe(false); // draft
     setCreditQty(id!, 1);
@@ -236,8 +236,8 @@ describe('correct & replace', () => {
 });
 
 describe('immutability & voiding', () => {
-  it('an issued credit note cannot be directly edited', () => {
-    const invId = issuedInvoice(2, 500, 0);
+  it('an issued credit note cannot be directly edited', async () => {
+    const invId = await issuedInvoice(2, 500, 0);
     const { id } = cnStore().createCreditNoteFromInvoice(invId);
     setCreditQty(id!, 1);
     cnStore().issueCreditNote(id!);
@@ -245,8 +245,8 @@ describe('immutability & voiding', () => {
     expect(res.ok).toBe(false);
   });
 
-  it('voiding posts an exact reversal, reverses the application and restores the invoice balance', () => {
-    const invId = issuedInvoice(2, 500, 16);
+  it('voiding posts an exact reversal, reverses the application and restores the invoice balance', async () => {
+    const invId = await issuedInvoice(2, 500, 16);
     const { id } = cnStore().createCreditNoteFromInvoice(invId);
     setCreditQty(id!, 1); // 580, auto-applied
     cnStore().issueCreditNote(id!);
@@ -270,9 +270,9 @@ describe('immutability & voiding', () => {
 });
 
 describe('paid invoice & refund', () => {
-  it('crediting a fully paid invoice leaves an unapplied customer credit', () => {
-    const invId = issuedInvoice(1, 1000, 0);
-    useInvoiceStore.getState().recordPayment(invId, { amount: 1000, date: '2026-04-01', bankAccountId: bankId() });
+  it('crediting a fully paid invoice leaves an unapplied customer credit', async () => {
+    const invId = await issuedInvoice(1, 1000, 0);
+    await useInvoiceStore.getState().recordPayment(invId, { amount: 1000, date: '2026-04-01', bankAccountId: bankId() });
     expect(useInvoiceStore.getState().getInvoice(invId)!.status).toBe('paid');
 
     const { id } = cnStore().createCreditNoteFromInvoice(invId);
@@ -283,9 +283,9 @@ describe('paid invoice & refund', () => {
     expect(cn.remainingCredit).toBe(1000);
   });
 
-  it('a refund posts a separate Dr receivables / Cr bank entry and reduces remaining credit', () => {
-    const invId = issuedInvoice(1, 1000, 0);
-    useInvoiceStore.getState().recordPayment(invId, { amount: 1000, date: '2026-04-01', bankAccountId: bankId() });
+  it('a refund posts a separate Dr receivables / Cr bank entry and reduces remaining credit', async () => {
+    const invId = await issuedInvoice(1, 1000, 0);
+    await useInvoiceStore.getState().recordPayment(invId, { amount: 1000, date: '2026-04-01', bankAccountId: bankId() });
     const { id } = cnStore().createCreditNoteFromInvoice(invId);
     cnStore().issueCreditNote(id!);
     const issueJe = cnStore().getCreditNoteById(id!)!.journalEntryId;
@@ -306,9 +306,9 @@ describe('paid invoice & refund', () => {
 });
 
 describe('branding, numbering & customer credit', () => {
-  it('a credit note inherits the invoice branding and freezes it on issue', () => {
+  it('a credit note inherits the invoice branding and freezes it on issue', async () => {
     useStore.getState().updateSettings({ logoUrl: 'data:image/png;base64,BRAND' });
-    const invId = issuedInvoice(1, 1000, 0);
+    const invId = await issuedInvoice(1, 1000, 0);
     const invLogo = useInvoiceStore.getState().getInvoice(invId)!.templateSnapshot!.companySnapshot.logoUrl;
     const { id } = cnStore().createCreditNoteFromInvoice(invId);
     cnStore().issueCreditNote(id!);
@@ -321,8 +321,8 @@ describe('branding, numbering & customer credit', () => {
     expect(cnStore().getCreditNoteById(id!)!.templateSnapshot!.companySnapshot.logoUrl).toBe(invLogo);
   });
 
-  it('credit-note numbers are unique and CN-prefixed', () => {
-    const invId = issuedInvoice(10, 100, 0);
+  it('credit-note numbers are unique and CN-prefixed', async () => {
+    const invId = await issuedInvoice(10, 100, 0);
     const a = cnStore().createCreditNoteFromInvoice(invId);
     const b = cnStore().createCreditNoteFromInvoice(invId);
     const na = cnStore().getCreditNoteById(a.id!)!.creditNoteNumber;
@@ -331,9 +331,9 @@ describe('branding, numbering & customer credit', () => {
     expect(na).not.toBe(nb);
   });
 
-  it('customer available credit recalculates across issue, apply and refund', () => {
-    const invId = issuedInvoice(1, 1000, 0);
-    useInvoiceStore.getState().recordPayment(invId, { amount: 1000, date: '2026-04-01', bankAccountId: bankId() });
+  it('customer available credit recalculates across issue, apply and refund', async () => {
+    const invId = await issuedInvoice(1, 1000, 0);
+    await useInvoiceStore.getState().recordPayment(invId, { amount: 1000, date: '2026-04-01', bankAccountId: bankId() });
     const { id } = cnStore().createCreditNoteFromInvoice(invId);
     cnStore().issueCreditNote(id!);
     let summary = computeCustomerCreditSummary(firstCustomerId(), useCreditNoteStore.getState().creditNotes);
@@ -346,8 +346,8 @@ describe('branding, numbering & customer credit', () => {
 });
 
 describe('persistence hydration', () => {
-  it('replaceAll rehydrates credit notes without loss', () => {
-    const invId = issuedInvoice(2, 500, 16);
+  it('replaceAll rehydrates credit notes without loss', async () => {
+    const invId = await issuedInvoice(2, 500, 16);
     const { id } = cnStore().createCreditNoteFromInvoice(invId);
     setCreditQty(id!, 1);
     cnStore().issueCreditNote(id!);

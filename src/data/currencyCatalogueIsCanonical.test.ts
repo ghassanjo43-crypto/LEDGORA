@@ -35,6 +35,23 @@ function sourceFiles(dir = SRC): string[] {
 
 const relative = (f: string): string => path.relative(SRC, f).split(path.sep).join('/');
 
+/*
+ * Read each source file once for the whole suite.
+ *
+ * Every test below scans the entire tree, so an uncached read re-loads several
+ * hundred files nine times over. That was fast enough to look fine in isolation
+ * and slow enough to blow the 5s default timeout under a full parallel run —
+ * a flake that gets worse with every file added to the repository.
+ */
+const CONTENTS = new Map<string, string>();
+const read = (f: string): string => {
+  const cached = CONTENTS.get(f);
+  if (cached !== undefined) return cached;
+  const text = readFileSync(f, 'utf8');
+  CONTENTS.set(f, text);
+  return text;
+};
+
 /** Files that legitimately name several currencies: the catalogue and tests. */
 const ALLOWED = (file: string): boolean =>
   /^data\/currencyCatalog\.ts$/.test(file) ||
@@ -49,7 +66,7 @@ describe('one canonical currency dataset', () => {
     const legacyLabels = ['USD — US Dollar', 'EUR — Euro', 'GBP — British Pound', 'AED — UAE Dirham'];
     const offenders = files.filter((f) => {
       if (ALLOWED(relative(f))) return false;
-      const text = readFileSync(f, 'utf8');
+      const text = read(f);
       return legacyLabels.some((label) => text.includes(label));
     });
     expect(offenders.map(relative), 'hard-coded currency labels').toEqual([]);
@@ -57,7 +74,7 @@ describe('one canonical currency dataset', () => {
 
   it('nothing exports a CURRENCY_OPTIONS list any more', () => {
     const offenders = files.filter(
-      (f) => !ALLOWED(relative(f)) && /export const CURRENCY_OPTIONS/.test(readFileSync(f, 'utf8')),
+      (f) => !ALLOWED(relative(f)) && /export const CURRENCY_OPTIONS/.test(read(f)),
     );
     expect(offenders.map(relative)).toEqual([]);
   });
@@ -74,7 +91,7 @@ describe('one canonical currency dataset', () => {
       // The seed's `allowedCurrencyCodes` is a per-organization permission
       // list, not a catalogue — it restricts, it does not enumerate what exists.
       if (ALLOWED(file)) return false;
-      return pattern.test(readFileSync(f, 'utf8'));
+      return pattern.test(read(f));
     });
     expect(offenders.map(relative), 'ad-hoc currency arrays').toEqual([]);
   });
@@ -89,7 +106,7 @@ describe('one canonical currency dataset', () => {
     for (const f of files) {
       const file = relative(f);
       if (ALLOWED(file)) continue;
-      const text = readFileSync(f, 'utf8');
+      const text = read(f);
       for (const line of text.split('\n')) {
         if (!/<Select\b/.test(line)) continue;
         if (/id="currency"|id="newCompanyCurrency"|CURRENCY_OPTIONS|currencyOptions/i.test(line)) {

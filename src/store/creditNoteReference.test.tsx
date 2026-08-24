@@ -19,11 +19,11 @@ const revenueId = () => useStore.getState().accounts.find((a) => a.code === '412
 const bankId = () => useStore.getState().accounts.find((a) => a.code === '1252')!.id;
 
 /** An issued invoice: qty × unitPrice @ taxRate%. */
-function issuedInvoice(qty: number, unitPrice: number, taxRate: number): string {
-  const { id } = iStore().createDraft({ customerId: firstCustomerId() });
+async function issuedInvoice(qty: number, unitPrice: number, taxRate: number): Promise<string>{
+  const { id } = await iStore().createDraft({ customerId: firstCustomerId() });
   const inv = iStore().getInvoice(id!)!;
-  iStore().updateDraft(id!, { lines: [{ ...inv.lines[0]!, accountId: revenueId(), description: 'Service', quantity: qty, unitPrice, taxRate }] });
-  iStore().issueInvoice(id!);
+  await iStore().updateDraft(id!, { lines: [{ ...inv.lines[0]!, accountId: revenueId(), description: 'Service', quantity: qty, unitPrice, taxRate }] });
+  await iStore().issueInvoice(id!);
   return id!;
 }
 
@@ -35,7 +35,7 @@ function creditByAmount(invoiceId: string, creditAmount: number): string {
   return id!;
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   useJournalStore.getState().resetToDefault();
   useInvoiceTemplateStore.getState().resetToDefault();
   useInvoiceStore.getState().resetToDefault();
@@ -44,8 +44,8 @@ beforeEach(() => {
 });
 
 describe('credit-note invoice reconciliation (8,000 − 3,000 = 5,000)', () => {
-  it('computes previous credits, balance before, and revised balance correctly', () => {
-    const invId = issuedInvoice(1, 8000, 0); // total 8,000
+  it('computes previous credits, balance before, and revised balance correctly', async () => {
+    const invId = await issuedInvoice(1, 8000, 0); // total 8,000
     const cnId = creditByAmount(invId, 3000);
     cnStore().issueCreditNote(cnId);
 
@@ -58,8 +58,8 @@ describe('credit-note invoice reconciliation (8,000 − 3,000 = 5,000)', () => {
     expect(ref.invoiceBalanceAfterCredit).toBe(5000); // 8,000 − 3,000
   });
 
-  it('does not subtract the current credit twice (uses original total, not the updated balance)', () => {
-    const invId = issuedInvoice(1, 8000, 0);
+  it('does not subtract the current credit twice (uses original total, not the updated balance)', async () => {
+    const invId = await issuedInvoice(1, 8000, 0);
     const cnId = creditByAmount(invId, 3000);
     cnStore().issueCreditNote(cnId); // auto-applies → invoice.balanceDue becomes 5,000
     expect(iStore().getInvoice(invId)!.balanceDue).toBe(5000);
@@ -70,8 +70,8 @@ describe('credit-note invoice reconciliation (8,000 − 3,000 = 5,000)', () => {
     expect(live.invoiceBalanceAfterCredit).toBe(5000);
   });
 
-  it('previous credits accumulate across earlier issued notes', () => {
-    const invId = issuedInvoice(1, 8000, 0);
+  it('previous credits accumulate across earlier issued notes', async () => {
+    const invId = await issuedInvoice(1, 8000, 0);
     const cn1 = creditByAmount(invId, 2000);
     cnStore().issueCreditNote(cn1);
     const cn2 = creditByAmount(invId, 1000);
@@ -85,14 +85,14 @@ describe('credit-note invoice reconciliation (8,000 − 3,000 = 5,000)', () => {
 });
 
 describe('frozen reference snapshot immutability', () => {
-  it('remains unchanged after the invoice later receives a payment', () => {
-    const invId = issuedInvoice(1, 8000, 0);
+  it('remains unchanged after the invoice later receives a payment', async () => {
+    const invId = await issuedInvoice(1, 8000, 0);
     const cnId = creditByAmount(invId, 3000);
     cnStore().issueCreditNote(cnId);
     const before = JSON.stringify(cnStore().getCreditNoteById(cnId)!.invoiceReferenceSnapshot);
 
     // Later payment on the invoice.
-    iStore().recordPayment(invId, { amount: 1000, date: '2026-08-01', bankAccountId: bankId() });
+    await iStore().recordPayment(invId, { amount: 1000, date: '2026-08-01', bankAccountId: bankId() });
     expect(iStore().getInvoice(invId)!.amountPaid).toBe(1000);
 
     const after = JSON.stringify(cnStore().getCreditNoteById(cnId)!.invoiceReferenceSnapshot);
@@ -100,8 +100,8 @@ describe('frozen reference snapshot immutability', () => {
     expect(cnStore().invoiceReference(cnId)!.paymentsAppliedBeforeCredit).toBe(0); // still frozen at 0
   });
 
-  it('remains unchanged after a later credit note is issued against the same invoice', () => {
-    const invId = issuedInvoice(1, 8000, 0);
+  it('remains unchanged after a later credit note is issued against the same invoice', async () => {
+    const invId = await issuedInvoice(1, 8000, 0);
     const cn1 = creditByAmount(invId, 3000);
     cnStore().issueCreditNote(cn1);
     const before = JSON.stringify(cnStore().getCreditNoteById(cn1)!.invoiceReferenceSnapshot);
@@ -114,8 +114,8 @@ describe('frozen reference snapshot immutability', () => {
     expect(cnStore().invoiceReference(cn1)!.previousCreditsTotal).toBe(0); // unaffected by cn2
   });
 
-  it('a partial amount credit retains the ORIGINAL line value (8,000), not the credited 3,000', () => {
-    const invId = issuedInvoice(1, 8000, 0);
+  it('a partial amount credit retains the ORIGINAL line value (8,000), not the credited 3,000', async () => {
+    const invId = await issuedInvoice(1, 8000, 0);
     const cnId = creditByAmount(invId, 3000);
     cnStore().issueCreditNote(cnId);
     const line = cnStore().invoiceReference(cnId)!.lines[0]!;
@@ -134,8 +134,8 @@ describe('rendered credit-note document', () => {
     return renderToStaticMarkup(createElement(CreditNoteRenderer, { creditNote: cn, snapshot: snap, reference: ref }));
   }
 
-  it('shows the original invoice number, date, total, the credit deduction and revised balance', () => {
-    const invId = issuedInvoice(1, 8000, 0);
+  it('shows the original invoice number, date, total, the credit deduction and revised balance', async () => {
+    const invId = await issuedInvoice(1, 8000, 0);
     const invoiceNumber = iStore().getInvoice(invId)!.invoiceNumber;
     const invoiceDate = iStore().getInvoice(invId)!.issueDate; // e.g. 2026-07-12
     const cnId = creditByAmount(invId, 3000);
@@ -154,16 +154,16 @@ describe('rendered credit-note document', () => {
     expect(html).toContain('Amount adjustment'); // partial amount credit basis
   });
 
-  it('empty / unlinked datasets render safely (no reference)', () => {
-    const invId = issuedInvoice(1, 8000, 0);
+  it('empty / unlinked datasets render safely (no reference)', async () => {
+    const invId = await issuedInvoice(1, 8000, 0);
     const cnId = creditByAmount(invId, 3000);
     const cn = cnStore().getCreditNoteById(cnId)!;
     const snap = cnStore().previewSnapshot(cnId)!;
     expect(() => renderToStaticMarkup(createElement(CreditNoteRenderer, { creditNote: cn, snapshot: snap, reference: null }))).not.toThrow();
   });
 
-  it('hides the Amount applied / Remaining credit rows when fully applied to the linked invoice', () => {
-    const invId = issuedInvoice(1, 8000, 0);
+  it('hides the Amount applied / Remaining credit rows when fully applied to the linked invoice', async () => {
+    const invId = await issuedInvoice(1, 8000, 0);
     const cnId = creditByAmount(invId, 3000);
     cnStore().issueCreditNote(cnId); // auto-applied 3,000 → remaining 0
     const cn = cnStore().getCreditNoteById(cnId)!;
@@ -177,9 +177,9 @@ describe('rendered credit-note document', () => {
     expect(html).toContain('5,000.00');
   });
 
-  it('still shows Remaining credit for an unapplied credit (e.g. against a paid invoice)', () => {
-    const invId = issuedInvoice(1, 8000, 0);
-    iStore().recordPayment(invId, { amount: 8000, date: '2026-08-01', bankAccountId: bankId() });
+  it('still shows Remaining credit for an unapplied credit (e.g. against a paid invoice)', async () => {
+    const invId = await issuedInvoice(1, 8000, 0);
+    await iStore().recordPayment(invId, { amount: 8000, date: '2026-08-01', bankAccountId: bankId() });
     const cnId = creditByAmount(invId, 3000);
     cnStore().issueCreditNote(cnId); // invoice balance 0 → nothing auto-applied
     const cn = cnStore().getCreditNoteById(cnId)!;
@@ -190,7 +190,7 @@ describe('rendered credit-note document', () => {
 });
 
 describe('print isolation mechanism', () => {
-  it('index.css hides the app shell and shows only the print document in print', () => {
+  it('index.css hides the app shell and shows only the print document in print', async () => {
     const css = readFileSync(fileURLToPath(new URL('../index.css', import.meta.url)), 'utf8');
     expect(css).toMatch(/@media print/);
     expect(css).toMatch(/has-print-document\s+#root\s*\{\s*display:\s*none/);

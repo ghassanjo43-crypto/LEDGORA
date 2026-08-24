@@ -77,10 +77,26 @@ export interface ImportedInvoice {
   taxTotal?: string;
   grandTotal?: string;
   amountPaid?: string;
+  additionalChargesTotal?: string;
+  /**
+   * Receipts already recorded in the browser.
+   *
+   * Carried across so a migrated invoice's history survives, and written with
+   * NO journal entry for the same reason the invoice itself posts nothing: the
+   * entry for that receipt already exists in the books it came from.
+   */
+  payments?: ImportedPayment[];
   issuedAt?: string | null;
   voidedAt?: string | null;
   voidReason?: string | null;
   lines: ImportedLine[];
+}
+
+export interface ImportedPayment {
+  paidOn: string;
+  amount: string;
+  method?: string;
+  reference?: string;
 }
 
 export interface ImportOutcome {
@@ -223,6 +239,7 @@ export async function importInvoices(
           customer_reference: invoice.customerReference ?? '',
           subtotal: invoice.subtotal ?? '0',
           tax_total: invoice.taxTotal ?? '0',
+          additional_charges_total: invoice.additionalChargesTotal ?? '0',
           grand_total: grandTotal,
           amount_paid: amountPaid,
           balance_due: Money.toDecimalString(Money.toAmount(grandTotal) - Money.toAmount(amountPaid)),
@@ -251,6 +268,29 @@ export async function importInvoices(
             tax_amount: entry.line.taxAmount ?? '0',
             line_subtotal: entry.line.lineSubtotal ?? '0',
             line_total: entry.line.lineTotal ?? '0',
+          }).execute();
+        }
+
+        /*
+         * Receipts, carried across with NO journal entry.
+         *
+         * Same rule as the invoice: the entry for this receipt already exists
+         * in the books it came from, and posting one here would double-count
+         * every historical payment. The row preserves the history the customer
+         * statement is built from; `bank_account_id` is null because the
+         * browser's bank account is not this server's.
+         */
+        for (const payment of invoice.payments ?? []) {
+          await trx.insertInto('invoice_payments').values({
+            organization_id: actor.organizationId,
+            invoice_id: created.id,
+            paid_on: payment.paidOn,
+            amount: payment.amount,
+            method: payment.method ?? '',
+            reference: payment.reference ?? '',
+            bank_account_id: null,
+            journal_entry_id: null,
+            created_by: actor.userId,
           }).execute();
         }
 

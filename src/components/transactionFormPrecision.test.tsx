@@ -46,7 +46,7 @@ function monetarySteps(): string[] {
     .map((i) => i.getAttribute('step') ?? '');
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   useJournalStore.getState().replaceAll([]);
   useInvoiceStore.setState({ invoices: [] });
   useBillStore.setState({ bills: [] });
@@ -58,7 +58,7 @@ afterEach(cleanup);
 /* ══ 13 · General Journal ══════════════════════════════════════════════════ */
 
 describe('the General Journal drawer', () => {
-  it('offers thousandths to a JOD company', () => {
+  it('offers thousandths to a JOD company', async () => {
     companyKeepsBooksIn('JOD');
     page(<JournalEntryDrawer open mode={{ kind: 'create' }} onClose={() => {}} />);
 
@@ -67,7 +67,7 @@ describe('the General Journal drawer', () => {
     expect(debit.getAttribute('placeholder')).toBe('0.000');
   });
 
-  it('offers hundredths to a USD company', () => {
+  it('offers hundredths to a USD company', async () => {
     companyKeepsBooksIn('USD');
     page(<JournalEntryDrawer open mode={{ kind: 'create' }} onClose={() => {}} />);
 
@@ -76,7 +76,7 @@ describe('the General Journal drawer', () => {
     expect(debit.getAttribute('placeholder')).toBe('0.00');
   });
 
-  it('offers whole units to a JPY company', () => {
+  it('offers whole units to a JPY company', async () => {
     companyKeepsBooksIn('JPY');
     page(<JournalEntryDrawer open mode={{ kind: 'create' }} onClose={() => {}} />);
 
@@ -85,7 +85,7 @@ describe('the General Journal drawer', () => {
     expect(debit.getAttribute('placeholder')).toBe('0');
   });
 
-  it('applies the same precision to the credit and tax-amount fields', () => {
+  it('applies the same precision to the credit and tax-amount fields', async () => {
     companyKeepsBooksIn('JOD');
     page(<JournalEntryDrawer open mode={{ kind: 'create' }} onClose={() => {}} />);
 
@@ -101,44 +101,44 @@ describe('the General Journal drawer', () => {
 describe('the document editors', () => {
   /** Open each editor on a freshly created draft of its own kind. */
   const editors = [
-    ['Invoice', () => {
-      const id = useInvoiceStore.getState().createDraft({}).id!;
+    ['Invoice', async () => {
+      const id = (await useInvoiceStore.getState().createDraft({})).id!;
       return <InvoiceEditorDrawer open invoiceId={id} onClose={() => {}} />;
     }],
     ['Bill', () => {
-      const id = useBillStore.getState().createDraft().id!;
+      const id = (useBillStore.getState().createDraft()).id!;
       return <BillEditorDrawer open billId={id} onClose={() => {}} />;
     }],
     ['Payment', () => {
-      const id = usePaymentStore.getState().createDraft().id!;
+      const id = (usePaymentStore.getState().createDraft()).id!;
       return <PaymentEditorDrawer open paymentId={id} onClose={() => {}} />;
     }],
     ['Receipt', () => {
-      const id = useReceiptStore.getState().createDraft().id!;
+      const id = (useReceiptStore.getState().createDraft()).id!;
       return <ReceiptEditorDrawer open receiptId={id} onClose={() => {}} />;
     }],
   ] as const;
 
-  it.each(editors)('%s uses thousandths for a JOD company', (_label, open) => {
+  it.each(editors)('%s uses thousandths for a JOD company', async (_label, open) => {
     companyKeepsBooksIn('JOD');
-    page(open());
+    page(await open());
     const steps = monetarySteps();
     expect(steps.length).toBeGreaterThan(0);
     // Every monetary field follows the currency; none is left at a hard 0.01.
     expect(steps.every((s) => s === '0.001')).toBe(true);
   });
 
-  it.each(editors)('%s uses hundredths for a USD company', (_label, open) => {
+  it.each(editors)('%s uses hundredths for a USD company', async (_label, open) => {
     companyKeepsBooksIn('USD');
-    page(open());
+    page(await open());
     const steps = monetarySteps();
     expect(steps.length).toBeGreaterThan(0);
     expect(steps.every((s) => s === '0.01')).toBe(true);
   });
 
-  it.each(editors)('%s uses whole units for a JPY company', (_label, open) => {
+  it.each(editors)('%s uses whole units for a JPY company', async (_label, open) => {
     companyKeepsBooksIn('JPY');
-    page(open());
+    page(await open());
     const steps = monetarySteps();
     expect(steps.length).toBeGreaterThan(0);
     expect(steps.every((s) => s === '1')).toBe(true);
@@ -148,7 +148,7 @@ describe('the document editors', () => {
 /* ══ 25–26 · Switching companies mid-session ═══════════════════════════════ */
 
 describe('switching companies', () => {
-  it('re-resolves the journal precision without a reload', () => {
+  it('re-resolves the journal precision without a reload', async () => {
     companyKeepsBooksIn('JOD');
     page(<JournalEntryDrawer open mode={{ kind: 'create' }} onClose={() => {}} />);
     expect(document.querySelector('[data-col="debit"]')!.getAttribute('step')).toBe('0.001');
@@ -164,7 +164,7 @@ describe('switching companies', () => {
     expect(document.querySelector('[data-col="debit"]')!.getAttribute('step')).toBe('0.001');
   });
 
-  it('shows the company currency beside the amounts', () => {
+  it('shows the company currency beside the amounts', async () => {
     // The label and the precision must agree: "(JOD)" over a 2-decimal field
     // would be worse than either mistake alone.
     companyKeepsBooksIn('JOD');
@@ -177,14 +177,14 @@ describe('switching companies', () => {
 /* ══ 31 · Percentages and quantities are untouched ═════════════════════════ */
 
 describe('non-monetary fields keep their own precision', () => {
-  it('leaves quantity and rate fields alone in a JOD company', () => {
+  it('leaves quantity and rate fields alone in a JOD company', async () => {
     /*
      * A JOD bill still counts whole widgets and charges a 16% tax rate. Only
      * the money follows the currency — sweeping every numeric input into
      * thousandths would be the same class of mistake in the other direction.
      */
     companyKeepsBooksIn('JOD');
-    const id = useBillStore.getState().createDraft().id!;
+    const id = (useBillStore.getState().createDraft()).id!;
     page(<BillEditorDrawer open billId={id} onClose={() => {}} />);
 
     const all = Array.from(document.querySelectorAll<HTMLInputElement>('input[type="number"]'));

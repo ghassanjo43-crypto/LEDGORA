@@ -30,6 +30,7 @@ import * as openingBalances from './migrations/016_opening_balances.js';
 import * as immutableSubscriberOwnership from './migrations/017_immutable_subscriber_ownership.js';
 import * as packageModuleRepair from './migrations/018_package_module_repair.js';
 import * as salesInvoices from './migrations/019_sales_invoices.js';
+import * as invoiceSettlement from './migrations/020_invoice_settlement.js';
 
 const MIGRATIONS: Record<string, Migration> = {
   '001_initial_schema': initialSchema,
@@ -51,6 +52,7 @@ const MIGRATIONS: Record<string, Migration> = {
   '017_immutable_subscriber_ownership': immutableSubscriberOwnership,
   '018_package_module_repair': packageModuleRepair,
   '019_sales_invoices': salesInvoices,
+  '020_invoice_settlement': invoiceSettlement,
 };
 
 class StaticMigrationProvider implements MigrationProvider {

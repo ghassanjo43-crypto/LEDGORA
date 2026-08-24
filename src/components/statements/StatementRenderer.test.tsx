@@ -16,11 +16,11 @@ import type { StatementOptions } from '@/types/statementOfAccount';
 const cid = () => useEntityStore.getState().entities.find((e) => e.entityType === 'customer' || e.entityType === 'both')!.id;
 const revenueId = () => useStore.getState().accounts.find((a) => a.code === '4120')!.id;
 
-function issuedInvoice(customerId: string, issueDate: string, unitPrice: number): string {
-  const { id } = useInvoiceStore.getState().createDraft({ customerId, issueDate, dueDate: issueDate, currency: 'USD' });
+async function issuedInvoice(customerId: string, issueDate: string, unitPrice: number): Promise<string> {
+  const { id } = await useInvoiceStore.getState().createDraft({ customerId, issueDate, dueDate: issueDate, currency: 'USD' });
   const inv = useInvoiceStore.getState().getInvoice(id!)!;
-  useInvoiceStore.getState().updateDraft(id!, { lines: [{ ...inv.lines[0]!, accountId: revenueId(), description: 'Svc', quantity: 1, unitPrice, taxRate: 0 }] });
-  useInvoiceStore.getState().issueInvoice(id!);
+  await useInvoiceStore.getState().updateDraft(id!, { lines: [{ ...inv.lines[0]!, accountId: revenueId(), description: 'Svc', quantity: 1, unitPrice, taxRate: 0 }] });
+  await useInvoiceStore.getState().issueInvoice(id!);
   return id!;
 }
 
@@ -45,7 +45,7 @@ function build(customerId: string) {
   });
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   useJournalStore.getState().resetToDefault();
   useInvoiceTemplateStore.getState().resetToDefault();
   useInvoiceStore.getState().resetToDefault();
@@ -55,10 +55,10 @@ beforeEach(() => {
 });
 
 describe('StatementRenderer', () => {
-  it('renders the statement document with title, customer, balances and aging', () => {
+  it('renders the statement document with title, customer, balances and aging', async () => {
     const customerId = cid();
-    issuedInvoice(customerId, '2026-06-15', 2000); // opening
-    issuedInvoice(customerId, '2026-07-12', 8000);
+    await issuedInvoice(customerId, '2026-06-15', 2000); // opening
+    await issuedInvoice(customerId, '2026-07-12', 8000);
     const st = build(customerId);
     const html = renderToStaticMarkup(createElement(StatementRenderer, { statement: st, snapshot: statementSnapshot(st.customerName) }));
 
@@ -70,7 +70,7 @@ describe('StatementRenderer', () => {
     expect(html).toContain('Aging');
   });
 
-  it('renders an empty customer statement safely', () => {
+  it('renders an empty customer statement safely', async () => {
     const st = build(cid());
     expect(() => renderToStaticMarkup(createElement(StatementRenderer, { statement: st, snapshot: statementSnapshot(st.customerName) }))).not.toThrow();
   });

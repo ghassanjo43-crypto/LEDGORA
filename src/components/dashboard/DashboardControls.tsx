@@ -110,19 +110,28 @@ function useQuickCreate(go: (view: ViewKey) => void) {
    * dropped into an empty editor for a record that was refused. The refusal is
    * reported through the application's ordinary toast.
    */
+  /*
+   * `create` may be synchronous or asynchronous: an invoice posts over the
+   * network for a server-backed company, a bill and a payment never do.
+   * Awaiting a plain value is a no-op, so one wrapper covers all three.
+   */
   const start = (
-    create: () => { ok: boolean; error?: string; id?: string },
+    create: () =>
+      | { ok: boolean; error?: string; id?: string }
+      | Promise<{ ok: boolean; error?: string; id?: string }>,
     requestOpen: (id: string) => void,
     view: ViewKey,
     failure: string,
-  ) => () => {
-    const result = create();
-    if (!result.ok || !result.id) {
-      notify(result.error ?? failure, 'error');
-      return;
-    }
-    requestOpen(result.id);
-    go(view);
+  ) => (): void => {
+    void (async () => {
+      const result = await create();
+      if (!result.ok || !result.id) {
+        notify(result.error ?? failure, 'error');
+        return;
+      }
+      requestOpen(result.id);
+      go(view);
+    })();
   };
 
   return {
