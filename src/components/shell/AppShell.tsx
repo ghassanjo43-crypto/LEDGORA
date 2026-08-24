@@ -35,6 +35,7 @@ import {
   FREE_DEMO_WORKSPACE_ID,
 } from '@/store/businessWorkspace';
 import { LanguageProvider } from '@/contexts/LanguageContext';
+import { LanguageSwitcher } from '@/components/common/LanguageSwitcher';
 import { platformAdminToolsAllowed } from '@/lib/platformAccess';
 import { useBackendSessionBootstrap, useEffectivePlatformRole } from '@/hooks/usePlatformRole';
 import { useBackendSessionStore } from '@/store/backendSessionStore';
@@ -248,6 +249,27 @@ function AppShellInner() {
   if (sessionResolving) return <Blank />;
   if (sessionUnavailable) {
     return <SessionBootstrapError message={backendError} onRetry={() => void refreshBackendSession()} />;
+  }
+
+  /*
+   * The language switcher lives in the Topbar, which only the `app` surface
+   * renders. Every pre-authentication screen -- welcome, register, login,
+   * onboarding -- would therefore offer no way to change language, which is
+   * exactly backwards: someone who cannot read the interface needs the control
+   * BEFORE they sign in, not after.
+   *
+   * Floated over those surfaces rather than added to each page, so a screen
+   * added later cannot forget it.
+   */
+  if (surfaceOf(path) !== 'app') {
+    return (
+      <>
+        <div className="fixed end-3 top-3 z-50">
+          <LanguageSwitcher className="bg-white/90 shadow-sm backdrop-blur dark:bg-slate-900/90" />
+        </div>
+        <Surface path={path} platformRole={platformRole} />
+      </>
+    );
   }
 
   return <Surface path={path} platformRole={platformRole} />;

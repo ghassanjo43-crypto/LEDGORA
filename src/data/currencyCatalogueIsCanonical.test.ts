@@ -58,6 +58,15 @@ const ALLOWED = (file: string): boolean =>
   /^data\/currencySeed\.ts$/.test(file) ||
   /\.test\.tsx?$/.test(file);
 
+/*
+ * These tests read every source file in the tree, which is real filesystem I/O
+ * and grows with the repository. Vitest's 5s default is a budget for a unit
+ * test, not for several hundred file reads on a loaded machine — and a timeout
+ * here reads as a failure of the thing being asserted, which it never is.
+ * Raised deliberately rather than by trimming what is scanned.
+ */
+const SCAN_TIMEOUT_MS = 30_000;
+
 describe('one canonical currency dataset', () => {
   const files = sourceFiles();
 
@@ -70,14 +79,14 @@ describe('one canonical currency dataset', () => {
       return legacyLabels.some((label) => text.includes(label));
     });
     expect(offenders.map(relative), 'hard-coded currency labels').toEqual([]);
-  });
+  }, SCAN_TIMEOUT_MS);
 
   it('nothing exports a CURRENCY_OPTIONS list any more', () => {
     const offenders = files.filter(
       (f) => !ALLOWED(relative(f)) && /export const CURRENCY_OPTIONS/.test(read(f)),
     );
     expect(offenders.map(relative)).toEqual([]);
-  });
+  }, SCAN_TIMEOUT_MS);
 
   it('no module builds its own multi-currency array', () => {
     /*
@@ -94,7 +103,7 @@ describe('one canonical currency dataset', () => {
       return pattern.test(read(f));
     });
     expect(offenders.map(relative), 'ad-hoc currency arrays').toEqual([]);
-  });
+  }, SCAN_TIMEOUT_MS);
 
   it('every currency field uses the shared CurrencyPicker, not a native select', () => {
     /*
@@ -115,7 +124,7 @@ describe('one canonical currency dataset', () => {
       }
     }
     expect(offenders, 'currency fields still on a native <select>').toEqual([]);
-  });
+  }, SCAN_TIMEOUT_MS);
 
   it('the catalogue the pickers read is the complete active ISO set', () => {
     const isoFiat = STANDARD_CURRENCY_CATALOG.filter((c) => c.isIso && c.type === 'fiat');

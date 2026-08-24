@@ -29,8 +29,8 @@ import { Button } from '@/components/ui/Button';
 import { Field, Input, Textarea } from '@/components/ui/Input';
 import { AmountInput } from '@/components/ui/AmountInput';
 import { Select } from '@/components/ui/Select';
-import { postingAccountOptions } from '@/lib/accountEligibility';
 import { AccountSelect } from '@/components/journal/AccountSelect';
+import { postingAccountOptions } from '@/lib/accountEligibility';
 import { CostCenterPicker } from '@/components/cost-centers/CostCenterPicker';
 import { ProjectPicker } from '@/components/projects/ProjectPicker';
 import { Alert } from '@/components/ui/Alert';
@@ -346,8 +346,8 @@ function VoucherEditor({ voucher, onChange, baseCurrency, onSave, onSaveAndSubmi
                     </td>
                     <td className="px-2 py-1">
                       {/*
-                        AmountInput stays generic - it is used for non-monetary
-                        numbers elsewhere - so the company's monetary precision
+                        AmountInput stays generic — it is used for non-monetary
+                        numbers elsewhere — so the company's monetary precision
                         is passed in explicitly rather than assumed inside it.
                       */}
                       <AmountInput
