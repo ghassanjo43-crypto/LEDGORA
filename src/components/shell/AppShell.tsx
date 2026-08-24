@@ -34,6 +34,7 @@ import {
   openBusinessWorkspace,
   FREE_DEMO_WORKSPACE_ID,
 } from '@/store/businessWorkspace';
+import { LanguageProvider } from '@/contexts/LanguageContext';
 import { platformAdminToolsAllowed } from '@/lib/platformAccess';
 import { useBackendSessionBootstrap, useEffectivePlatformRole } from '@/hooks/usePlatformRole';
 import { useBackendSessionStore } from '@/store/backendSessionStore';
@@ -67,7 +68,23 @@ import {
  */
 const readContext = readAccessContext;
 
+/**
+ * The provider lives HERE rather than in `main.tsx`.
+ *
+ * `AppShell` is what every screen-level test renders, so putting the language
+ * context at the bootstrap instead would leave those tests without it — and
+ * `useLanguage` throws rather than silently defaulting to English, precisely so
+ * a missing provider cannot be mistaken for a missing translation.
+ */
 export function AppShell() {
+  return (
+    <LanguageProvider>
+      <AppShellInner />
+    </LanguageProvider>
+  );
+}
+
+function AppShellInner() {
   // Seed public configuration (packages/metering) once, before any effect reads
   // state. Provisioning a ready-made tenant is a DEVELOPMENT aid only: without
   // it an unregistered visitor correctly lands on the welcome page instead of

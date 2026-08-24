@@ -48,6 +48,15 @@ export interface UblInvoiceLine {
   /** Percentage, e.g. "16.00". */
   taxPercent: string;
   itemName: string;
+  /**
+   * The same item name in a second language.
+   *
+   * UBL allows repeated `cbc:Name` elements distinguished by `languageID`, so
+   * one document can carry both without a custom extension. Whether a given
+   * national profile ACCEPTS the repetition is a profile question — see the
+   * note on `secondaryLanguage` below.
+   */
+  itemNameAlt?: string | null;
 }
 
 export interface UblInvoiceInput {
@@ -56,9 +65,27 @@ export interface UblInvoiceInput {
   dueDate?: string | null;
   currencyCode: string;
   note?: string | null;
+  /** `note` in the secondary language. Emitted only when both are present. */
+  noteAlt?: string | null;
 
   supplier: UblParty;
   customer: UblParty;
+
+  /**
+   * BCP-47 tag for a second language carried alongside the first, e.g. 'ar'.
+   *
+   * ⚠️  Emitting it is OPT-IN and unverified against JoFotara. UBL 2.1 permits
+   * repeated `cbc:Name` / `cbc:Note` with `languageID`, and this builder
+   * follows that. But a national profile is free to constrain the cardinality
+   * to one, and ISTD's specification is not in hand — so a document built with
+   * this may be rejected for having two names where the profile allows one.
+   *
+   * Leave it undefined until the specification says otherwise. The bilingual
+   * PDF does not depend on it; only the XML does.
+   */
+  secondaryLanguage?: string | null;
+  /** The primary language of the document's free text. Defaults to 'en'. */
+  primaryLanguage?: string;
 
   lines: UblInvoiceLine[];
 
@@ -166,7 +193,13 @@ function taxTotalXml(
   ];
 }
 
-function invoiceLineXml(depth: number, line: UblInvoiceLine, currency: string, profile: UblProfile): string[] {
+function invoiceLineXml(
+  depth: number,
+  line: UblInvoiceLine,
+  currency: string,
+  profile: UblProfile,
+  languages: { primary: string; secondary?: string | null },
+): string[] {
   return [
     `${indent(depth)}<cac:InvoiceLine>`,
     element(depth + 1, 'cbc:ID', line.id),
@@ -174,7 +207,17 @@ function invoiceLineXml(depth: number, line: UblInvoiceLine, currency: string, p
     amount(depth + 1, 'cbc:LineExtensionAmount', line.lineExtensionAmount, currency),
     ...taxTotalXml(depth + 1, line.taxAmount, line.lineExtensionAmount, line.taxPercent, currency, profile),
     `${indent(depth + 1)}<cac:Item>`,
-    element(depth + 2, 'cbc:Name', line.itemName),
+    /*
+     * `languageID` is only emitted when a SECOND name is actually present.
+     * Tagging a lone name with a language is legal UBL but adds an attribute a
+     * national profile may not expect, and there is no benefit when there is
+     * nothing to disambiguate it from.
+     */
+    element(depth + 2, 'cbc:Name', line.itemName,
+      line.itemNameAlt && languages.secondary ? { languageID: languages.primary } : {}),
+    ...(line.itemNameAlt && languages.secondary
+      ? [element(depth + 2, 'cbc:Name', line.itemNameAlt, { languageID: languages.secondary })]
+      : []),
     `${indent(depth + 1)}</cac:Item>`,
     `${indent(depth + 1)}<cac:Price>`,
     amount(depth + 2, 'cbc:PriceAmount', line.unitPrice, currency),
@@ -199,6 +242,8 @@ const NS = [
  */
 export function buildInvoiceXml(input: UblInvoiceInput, profile: UblProfile): string {
   const currency = input.currencyCode;
+  const primary = input.primaryLanguage ?? 'en';
+  const secondary = input.secondaryLanguage ?? null;
 
   const lines: string[] = [
     '<?xml version="1.0" encoding="UTF-8"?>',
@@ -218,7 +263,13 @@ export function buildInvoiceXml(input: UblInvoiceInput, profile: UblProfile): st
     ...(profile.invoiceTypeCodeName ? { name: profile.invoiceTypeCodeName } : {}),
   }));
 
-  if (input.note) lines.push(element(1, 'cbc:Note', input.note));
+  if (input.note) {
+    lines.push(element(1, 'cbc:Note', input.note,
+      input.noteAlt && secondary ? { languageID: primary } : {}));
+    if (input.noteAlt && secondary) {
+      lines.push(element(1, 'cbc:Note', input.noteAlt, { languageID: secondary }));
+    }
+  }
 
   lines.push(
     element(1, 'cbc:DocumentCurrencyCode', currency),
@@ -244,7 +295,8 @@ export function buildInvoiceXml(input: UblInvoiceInput, profile: UblProfile): st
   lines.push(amount(2, 'cbc:PayableAmount', input.payableAmount, currency));
   lines.push(`${indent(1)}</cac:LegalMonetaryTotal>`);
 
-  input.lines.forEach((line) => lines.push(...invoiceLineXml(1, line, currency, profile)));
+  input.lines.forEach((line) =>
+    lines.push(...invoiceLineXml(1, line, currency, profile, { primary, secondary })));
 
   lines.push('</Invoice>');
   return lines.join('\n');

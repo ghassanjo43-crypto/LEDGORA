@@ -37,6 +37,8 @@ import { CostCenterLineControl } from '@/components/cost-centers/CostCenterLineC
 import { ProjectPicker } from '@/components/projects/ProjectPicker';
 import { InventoryLineControl } from '@/components/inventory/InventoryLineControl';
 import { cn } from '@/lib/utils';
+import { useTranslation } from 'react-i18next';
+import { LtrText } from '@/components/common/RTLWrapper';
 
 /** One labelled field inside a card. */
 function LineField({
@@ -96,6 +98,7 @@ export function InvoiceLineItems({
   onSelectItem,
   onRemove,
 }: InvoiceLineItemsProps) {
+  const { t } = useTranslation('invoices');
   const showDimensions = showCostCenter || showProject || showInventory;
   /*
    * The last line is not removable. `removeLine` already refuses it, but a
@@ -116,7 +119,7 @@ export function InvoiceLineItems({
           >
             {/* ── Row 1: what the line is ─────────────────────────────── */}
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-12">
-              <LineField label="Item" htmlFor={id('item')} className="sm:col-span-4">
+              <LineField label={t('lineItems.item')} htmlFor={id('item')} className="sm:col-span-4">
                 <ItemSelector
                   id={id('item')}
                   mode="sales"
@@ -127,21 +130,21 @@ export function InvoiceLineItems({
               </LineField>
 
               {/* The field people actually read. It gets the remaining width. */}
-              <LineField label="Description" htmlFor={id('description')} className="sm:col-span-8">
+              <LineField label={t('lineItems.description')} htmlFor={id('description')} className="sm:col-span-8">
                 <Input
                   id={id('description')}
                   value={line.description}
                   onChange={(e) => onChange(line.id, { description: e.target.value })}
                   disabled={readOnly}
                   className="h-9"
-                  placeholder="What is being billed"
+                  placeholder={t('lineItems.descriptionPlaceholder')}
                 />
               </LineField>
             </div>
 
             {/* ── Row 2: what it costs ────────────────────────────────── */}
             <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-12">
-              <LineField label="Qty" htmlFor={id('qty')} className="lg:col-span-1">
+              <LineField label={t('lineItems.quantity')} htmlFor={id('qty')} className="lg:col-span-1">
                 <Input
                   id={id('qty')}
                   type="number"
@@ -150,11 +153,11 @@ export function InvoiceLineItems({
                   value={line.quantity}
                   onChange={(e) => onChange(line.id, { quantity: Number(e.target.value) })}
                   disabled={readOnly}
-                  className="h-9 text-right"
+                  className="h-9 text-end"
                 />
               </LineField>
 
-              <LineField label="Unit price" htmlFor={id('price')} className="lg:col-span-2">
+              <LineField label={t('lineItems.unitPrice')} htmlFor={id('price')} className="lg:col-span-2">
                 <Input
                   id={id('price')}
                   type="number"
@@ -164,11 +167,11 @@ export function InvoiceLineItems({
                   value={line.unitPrice}
                   onChange={(e) => onChange(line.id, { unitPrice: Number(e.target.value) })}
                   disabled={readOnly}
-                  className="h-9 text-right"
+                  className="h-9 text-end"
                 />
               </LineField>
 
-              <LineField label="Disc %" htmlFor={id('disc')} className="lg:col-span-1">
+              <LineField label={t('lineItems.discountPercent')} htmlFor={id('disc')} className="lg:col-span-1">
                 <Input
                   id={id('disc')}
                   type="number"
@@ -179,11 +182,11 @@ export function InvoiceLineItems({
                     onChange(line.id, { discountType: 'percentage', discountValue: Number(e.target.value) })
                   }
                   disabled={readOnly}
-                  className="h-9 text-right"
+                  className="h-9 text-end"
                 />
               </LineField>
 
-              <LineField label="Tax %" htmlFor={id('tax')} className="lg:col-span-1">
+              <LineField label={t('lineItems.taxPercent')} htmlFor={id('tax')} className="lg:col-span-1">
                 <Input
                   id={id('tax')}
                   type="number"
@@ -192,12 +195,12 @@ export function InvoiceLineItems({
                   value={line.taxRate}
                   onChange={(e) => onChange(line.id, { taxRate: Number(e.target.value) })}
                   disabled={readOnly}
-                  className="h-9 text-right"
+                  className="h-9 text-end"
                 />
               </LineField>
 
               {/* Wide enough to show a full account name, which was the point. */}
-              <LineField label="Revenue account" htmlFor={id('account')} className="col-span-2 sm:col-span-4 lg:col-span-4">
+              <LineField label={t('lineItems.revenueAccount')} htmlFor={id('account')} className="col-span-2 sm:col-span-4 lg:col-span-4">
                 <AccountSelect
                   id={id('account')}
                   value={line.accountId}
@@ -210,18 +213,23 @@ export function InvoiceLineItems({
               <div className="col-span-2 flex items-end justify-between gap-2 sm:col-span-4 lg:col-span-3">
                 <div className="min-w-0 flex-1 space-y-1">
                   <span className="block text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-                    Line total
+                    {t('lineItems.lineTotal')}
                   </span>
                   {/*
                     * Derived, so it is text rather than a disabled input — a
                     * greyed-out box invites someone to try to type in it.
                     */}
-                  <output
-                    htmlFor={`${id('qty')} ${id('price')} ${id('disc')} ${id('tax')}`}
-                    className="block h-9 truncate rounded-lg bg-slate-50 px-3 py-2 text-right font-mono text-sm font-semibold text-slate-900 dark:bg-slate-800/60 dark:text-slate-100"
+                  {/*
+                    * Pinned LTR: "JOD 232.000" inside an Arabic page is a Latin
+                    * run joined by neutral characters, which bidi is entitled
+                    * to reorder. See RTLWrapper for the full explanation.
+                    */}
+                  <LtrText
+                    as="output"
+                    className="block h-9 truncate rounded-lg bg-slate-50 px-3 py-2 text-end font-mono text-sm font-semibold text-slate-900 dark:bg-slate-800/60 dark:text-slate-100"
                   >
                     {money(computed.lineTotal)}
-                  </output>
+                  </LtrText>
                 </div>
 
                 {canRemove && (
@@ -229,7 +237,9 @@ export function InvoiceLineItems({
                     type="button"
                     onClick={() => onRemove(line.id)}
                     className="mb-0.5 shrink-0 rounded-lg p-2 text-slate-400 transition hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-500/10"
-                    aria-label={`Remove line ${index + 1}${line.description ? `: ${line.description}` : ''}`}
+                    aria-label={line.description
+                      ? t('lineItems.removeLineNamed', { number: index + 1, description: line.description })
+                      : t('lineItems.removeLine', { number: index + 1 })}
                   >
                     <Trash2 className="h-4 w-4" />
                   </button>
@@ -253,7 +263,7 @@ export function InvoiceLineItems({
                 )}
                 {showProject && (
                   <div className="flex items-center gap-2">
-                    <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Project</span>
+                    <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">{t('lineItems.project')}</span>
                     <div className="w-52">
                       <ProjectPicker
                         value={line.projectId ?? ''}
@@ -302,20 +312,21 @@ export function InvoiceLineTotals({
   grandTotal: number;
   money: (value: number) => string;
 }) {
+  const { t } = useTranslation('invoices');
   return (
     <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 dark:border-slate-800 dark:bg-slate-800/40">
       <dl className="ml-auto w-full max-w-xs space-y-1 text-sm">
         <div className="flex justify-between gap-4">
-          <dt className="text-slate-500 dark:text-slate-400">Subtotal</dt>
-          <dd className="font-mono text-slate-700 dark:text-slate-200">{money(subtotal)}</dd>
+          <dt className="text-slate-500 dark:text-slate-400">{t('totals.subtotal')}</dt>
+          <dd><LtrText className="font-mono text-slate-700 dark:text-slate-200">{money(subtotal)}</LtrText></dd>
         </div>
         <div className="flex justify-between gap-4">
-          <dt className="text-slate-500 dark:text-slate-400">Tax</dt>
-          <dd className="font-mono text-slate-700 dark:text-slate-200">{money(taxTotal)}</dd>
+          <dt className="text-slate-500 dark:text-slate-400">{t('totals.tax')}</dt>
+          <dd><LtrText className="font-mono text-slate-700 dark:text-slate-200">{money(taxTotal)}</LtrText></dd>
         </div>
         <div className="flex justify-between gap-4 border-t border-slate-200 pt-1 dark:border-slate-700">
-          <dt className="font-semibold text-slate-700 dark:text-slate-200">Total</dt>
-          <dd className="font-mono font-semibold text-slate-900 dark:text-slate-50">{money(grandTotal)}</dd>
+          <dt className="font-semibold text-slate-700 dark:text-slate-200">{t('totals.total')}</dt>
+          <dd><LtrText className="font-mono font-semibold text-slate-900 dark:text-slate-50">{money(grandTotal)}</LtrText></dd>
         </div>
       </dl>
     </div>

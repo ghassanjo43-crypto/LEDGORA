@@ -36,6 +36,7 @@ import { platformAdminToolsAllowed } from '@/lib/platformAccess';
 import { useIsPlatformAdmin } from '@/hooks/usePlatformRole';
 import { authService } from '@/services';
 import { cn } from '@/lib/utils';
+import { LanguageSwitcher } from '@/components/common/LanguageSwitcher';
 import { CreditCard } from 'lucide-react';
 
 const USER = { name: 'Finance Manager', role: 'Administrator' };
@@ -207,6 +208,8 @@ export function Topbar({
       </button>
 
       <div className="flex-1 md:hidden" />
+
+      <LanguageSwitcher className="hidden sm:inline-flex" />
 
       {/* Development-only edition switcher (hidden in production) */}
       <div className="hidden xl:block">
