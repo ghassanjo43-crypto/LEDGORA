@@ -21,15 +21,19 @@ import enCommon from '@/locales/en/common.json';
 import enInvoices from '@/locales/en/invoices.json';
 import arCommon from '@/locales/ar/common.json';
 import arInvoices from '@/locales/ar/invoices.json';
+import enAuth from '@/locales/en/auth.json';
+import arAuth from '@/locales/ar/auth.json';
+import enOnboarding from '@/locales/en/onboarding.json';
+import arOnboarding from '@/locales/ar/onboarding.json';
 
 export const SUPPORTED_LANGUAGES = ['en', 'ar'] as const;
 export type SupportedLanguage = (typeof SUPPORTED_LANGUAGES)[number];
 
-export const NAMESPACES = ['common', 'invoices'] as const;
+export const NAMESPACES = ['common', 'invoices', 'auth', 'onboarding'] as const;
 
 export const resources = {
-  en: { common: enCommon, invoices: enInvoices },
-  ar: { common: arCommon, invoices: arInvoices },
+  en: { common: enCommon, invoices: enInvoices, auth: enAuth, onboarding: enOnboarding },
+  ar: { common: arCommon, invoices: arInvoices, auth: arAuth, onboarding: arOnboarding },
 } as const;
 
 export function isSupportedLanguage(value: unknown): value is SupportedLanguage {

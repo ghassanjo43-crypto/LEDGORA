@@ -5,6 +5,7 @@
  * key, a stored value or the URL.
  */
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { ArrowRight, BookOpenCheck, LineChart, ShieldCheck, Sparkles } from 'lucide-react';
 import { useRouterStore } from '@/store/routerStore';
 import { ROUTES } from '@/lib/accessControl';
@@ -31,11 +32,12 @@ const HIGHLIGHTS = [
 ];
 
 function LandingHeaderBrand({ onClick }: { onClick: () => void }) {
+  const { t } = useTranslation('onboarding');
   return (
-    <button type="button" onClick={onClick} aria-label="Ledgora home" className="flex shrink-0 items-center">
+    <button type="button" onClick={onClick} aria-label={t('welcome.home')} className="flex shrink-0 items-center">
       <span
         role="img"
-        aria-label="Ledgora"
+        aria-label={t('welcome.brand')}
         className="h-11 w-[148px] rounded bg-center bg-[length:166.4px_auto] bg-no-repeat sm:w-[180px] sm:bg-[length:208px_auto] lg:w-[200px] lg:bg-[length:234px_auto]"
         style={{
           backgroundImage: "url('/ledgora-logo.png')",
@@ -46,6 +48,7 @@ function LandingHeaderBrand({ onClick }: { onClick: () => void }) {
 }
 
 export function WelcomePage() {
+  const { t } = useTranslation('onboarding');
   const navigate = useRouterStore((s) => s.navigate);
   const [demoOpen, setDemoOpen] = useState(false);
 
@@ -59,7 +62,7 @@ export function WelcomePage() {
               Pricing
             </Button>
             <Button variant="outline" size="sm" onClick={() => navigate(ROUTES.login)}>
-              Sign in
+              {t('welcome.signIn')}
             </Button>
           </nav>
         </div>
@@ -69,32 +72,29 @@ export function WelcomePage() {
         <div className="max-w-2xl">
           <span className="inline-flex items-center gap-1.5 rounded-full bg-brand-50 px-3 py-1 text-xs font-medium text-brand-700 dark:bg-brand-500/10 dark:text-brand-300">
             <Sparkles className="h-3.5 w-3.5" aria-hidden />
-            LEDGORA — IFRS Accounting Suite
+            {t('welcome.badge')}
           </span>
           <h1 className="mt-4 text-3xl font-semibold tracking-tight text-slate-900 dark:text-slate-50 sm:text-4xl">
-            Run your books, invoices and reports in one accounting platform
+            {t('welcome.headline')}
           </h1>
           <p className="mt-3 text-base text-slate-600 dark:text-slate-300">
-            LEDGORA is a complete double-entry accounting platform: a chart of accounts, general journal
-            and ledgers, customer and supplier documents, tax, inventory and IFRS financial statements —
-            all driven by one accounting engine.
+            {t('welcome.blurb')}
           </p>
 
           <div className="mt-7 flex flex-col gap-3 sm:flex-row sm:items-center">
             <Button size="md" onClick={() => navigate(ROUTES.register)} className="sm:w-auto">
-              Create account
+              {t('welcome.createAccount')}
               <ArrowRight className="h-4 w-4" aria-hidden />
             </Button>
             <Button variant="outline" size="md" onClick={() => navigate(ROUTES.login)}>
-              Sign in
+              {t('welcome.signIn')}
             </Button>
             <Button variant="ghost" size="md" onClick={() => setDemoOpen(true)}>
-              Explore free demo
+              {t('welcome.exploreDemo')}
             </Button>
           </div>
           <p className="mt-3 max-w-xl text-xs text-slate-500 dark:text-slate-400">
-            The free demo runs in a temporary workspace. Anything you enter is kept for this session only
-            and is not saved for a future session.
+            {t('welcome.demoNote')}
           </p>
         </div>
 
