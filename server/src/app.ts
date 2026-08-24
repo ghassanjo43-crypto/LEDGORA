@@ -29,6 +29,7 @@ import { adminClosureRoutes } from './routes/adminClosure.js';
 import { orgAdminUserRoutes } from './routes/orgAdminUsers.js';
 import { accountingRoutes } from './routes/accounting.js';
 import { invoiceRoutes } from './routes/invoices.js';
+import { joFotaraMockRoutes } from './services/joFotara/index.js';
 import { decoratePermissions } from './guards/permissions.js';
 import { enforcePersistenceEntitlement } from './guards/persistence.js';
 import { enforcePasswordChange } from './guards/passwordChange.js';
@@ -250,6 +251,23 @@ export async function buildApp({
   await app.register(orgAdminUserRoutes);
   await app.register(accountingRoutes);
   await app.register(invoiceRoutes);
+
+  /*
+   * The JoFotara clearance mock, when explicitly enabled.
+   *
+   * `config/env.ts` refuses the flag outright in production, so reaching this
+   * branch there is impossible; the warning is for the deployments where it IS
+   * allowed, so that "why did this invoice clear instantly" has an answer
+   * sitting in the startup log rather than requiring an investigation.
+   */
+  if (config.MOCK_JOFOTARA) {
+    app.log.warn(
+      { mock: 'jofotara', mode: config.MOCK_JOFOTARA_MODE },
+      'JoFotara MOCK is mounted. Clearance verdicts are fabricated and must not be treated as evidence of anything.',
+    );
+    await app.register(joFotaraMockRoutes);
+  }
+
   if (extraRoutes) await extraRoutes(app);
 
   return app;

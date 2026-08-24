@@ -102,6 +102,20 @@ const schema = z.object({
     .enum(['true', 'false'])
     .default('false')
     .transform((v) => v === 'true'),
+  /**
+   * Mount the JoFotara clearance MOCK.
+   *
+   * The mock answers submissions with a fabricated CLEARED verdict. Its danger
+   * is not that it behaves wrongly, but that a `CLEARED` it produced is
+   * indistinguishable six months later from one a tax authority produced — so
+   * it is refused in production below rather than merely defaulted off.
+   */
+  MOCK_JOFOTARA: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  /** Force every mock submission to a given outcome. Per-request overrides win. */
+  MOCK_JOFOTARA_MODE: z.enum(['normal', 'always-error', 'always-rejected']).default('normal'),
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
   /** Render injects this; the server must bind 0.0.0.0 to be reachable. */
   HOST: z.string().default('0.0.0.0'),
@@ -222,6 +236,18 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
     if (value.ALLOW_LEGACY_DATA_CLASSIFICATION) {
       throw new Error(
         'ALLOW_LEGACY_DATA_CLASSIFICATION cannot be enabled in production. Reclassifying a production subscriber as test or demo data would remove it from retention protection.',
+      );
+    }
+    if (value.MOCK_JOFOTARA) {
+      /*
+       * Refused, not ignored — the same rule EXPOSE_INVITATION_TOKENS follows.
+       * A mock clearance service reachable in production would let an invoice
+       * be recorded as cleared by ISTD when it was cleared by a function in
+       * this repository, and that is a compliance record nobody can unpick
+       * after the fact.
+       */
+      throw new Error(
+        'MOCK_JOFOTARA cannot be enabled in production. It fabricates clearance verdicts, and a mocked CLEARED is indistinguishable from a real one once stored.',
       );
     }
     if (value.EXPOSE_INVITATION_TOKENS) {

@@ -17,7 +17,8 @@
     "db:classify-legacy": "tsx src/cli/classifyLegacyData.ts",
     "create-platform-admin": "tsx src/cli/createPlatformAdmin.ts",
     "db:process-deletions": "tsx src/cli/processDeletions.ts",
-    "dev:reset-subscribers": "tsx src/cli/resetSubscriberData.ts"
+    "dev:reset-subscribers": "tsx src/cli/resetSubscriberData.ts",
+    "mock:jofotara": "tsx src/services/joFotara/standalone.ts"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.4",
