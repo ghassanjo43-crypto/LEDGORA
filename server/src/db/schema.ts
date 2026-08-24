@@ -138,6 +138,18 @@ export interface PlatformUserRolesTable {
   created_by: string | null;
 }
 
+/** Why a language changed, kept beyond log retention. */
+export interface OrganizationLanguageChangesTable {
+  id: Generated<string>;
+  organization_id: string;
+  field: 'interface_language' | 'document_language';
+  previous_value: string;
+  new_value: string;
+  reason: string;
+  changed_by: string | null;
+  changed_at: Generated<Timestamp>;
+}
+
 export interface OrganizationsTable {
   id: Generated<string>;
   subscriber_owner_user_id: string;
@@ -148,6 +160,22 @@ export interface OrganizationsTable {
   tax_number: string | null;
   industry: string | null;
   base_currency: string;
+  /**
+   * The language of SCREENS for everyone in this organization.
+   *
+   * A company-wide default so members do not each see a different product.
+   * Whether an individual may override it is `interface_language_locked` —
+   * an Arabic-only bookkeeper and an English-only auditor may both need these
+   * books, and no compliance rule requires forcing one of them out.
+   */
+  interface_language: Generated<string>;
+  /**
+   * The language of DOCUMENTS: invoices sent to customers, UBL submitted to an
+   * authority. This is the compliance-relevant one — a tax document reissued in
+   * a different language from the one already cleared is a different document.
+   */
+  document_language: Generated<string>;
+  interface_language_locked: Generated<boolean>;
   fiscal_year_start: string;
   books_start_date: string | null;
   status: Generated<OrganizationStatus>;
@@ -568,6 +596,7 @@ export interface Database {
   users: UsersTable;
   platform_user_roles: PlatformUserRolesTable;
   organizations: OrganizationsTable;
+  organization_language_changes: OrganizationLanguageChangesTable;
   organization_memberships: OrganizationMembershipsTable;
   subscription_plans: SubscriptionPlansTable;
   subscriptions: SubscriptionsTable;

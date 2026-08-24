@@ -18,6 +18,7 @@ import { describe, expect, it, beforeEach } from 'vitest';
 import { render, screen, cleanup, fireEvent } from '@testing-library/react';
 import { LanguageProvider } from '@/contexts/LanguageContext';
 import { LanguageSwitcher } from './LanguageSwitcher';
+import { useOrganizationLanguageStore } from '@/store/organizationLanguageStore';
 
 function setup() {
   return render(
@@ -32,6 +33,7 @@ beforeEach(() => {
   window.localStorage.clear();
   document.documentElement.removeAttribute('dir');
   document.documentElement.removeAttribute('lang');
+  useOrganizationLanguageStore.setState({ interfaceLanguage: null, documentLanguage: null, locked: false });
 });
 
 describe('the control', () => {
@@ -103,5 +105,42 @@ describe('switching', () => {
     setup();
     // A bad stored value must not leave the app with no translations at all.
     expect(document.documentElement.getAttribute('lang')).toBe('en');
+  });
+});
+
+describe('when the organization decides', () => {
+  it('hides the switcher entirely rather than disabling it', () => {
+    useOrganizationLanguageStore.setState({ interfaceLanguage: 'ar', documentLanguage: 'ar', locked: true });
+    setup();
+    /*
+     * A greyed-out control invites the user to hunt for the permission that
+     * would enable it. There is none — in this configuration language is not a
+     * per-user setting at all.
+     */
+    expect(screen.queryByRole('radiogroup')).toBeNull();
+  });
+
+  it("uses the organization's language, not the one stored in this browser", () => {
+    window.localStorage.setItem('ledgora:language', 'en');
+    useOrganizationLanguageStore.setState({ interfaceLanguage: 'ar', documentLanguage: 'ar', locked: true });
+    setup();
+    // Every member of a company sees the same product.
+    expect(document.documentElement.getAttribute('dir')).toBe('rtl');
+    expect(document.documentElement.getAttribute('lang')).toBe('ar');
+  });
+
+  it('still offers the switcher before sign-in, when no organization is known', () => {
+    // Onboarding and login must be readable by someone who has not identified
+    // themselves yet, so the browser-level choice governs those surfaces.
+    setup();
+    expect(screen.getByRole('radiogroup')).toBeTruthy();
+  });
+
+  it('allows a per-user choice when the organization has not locked it', () => {
+    useOrganizationLanguageStore.setState({ interfaceLanguage: 'en', documentLanguage: 'en', locked: false });
+    setup();
+    expect(screen.getByRole('radiogroup')).toBeTruthy();
+    fireEvent.click(screen.getByRole('radio', { name: 'العربية' }));
+    expect(document.documentElement.getAttribute('dir')).toBe('rtl');
   });
 });

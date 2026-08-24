@@ -24,8 +24,16 @@ const SELF_LABEL: Record<SupportedLanguage, { short: string; full: string }> = {
 };
 
 export function LanguageSwitcher({ className }: { className?: string }) {
-  const { language, setLanguage } = useLanguage();
+  const { language, setLanguage, managedByOrganization } = useLanguage();
   const { t } = useTranslation('common');
+
+  /*
+   * Hidden rather than disabled when the organization has fixed the language.
+   * A greyed-out control invites someone to hunt for the permission that would
+   * enable it; there is none, because this is not a per-user setting in that
+   * configuration. The organization's administrator changes it in Settings.
+   */
+  if (managedByOrganization) return null;
 
   return (
     <div

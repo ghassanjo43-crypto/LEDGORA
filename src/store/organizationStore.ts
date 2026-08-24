@@ -12,6 +12,7 @@
  * Persisted under a NEW key `ledgora-organization`.
  */
 import { create } from 'zustand';
+import { useOrganizationLanguageStore } from '@/store/organizationLanguageStore';
 import { persist } from 'zustand/middleware';
 import type {
   BankInstructions,
@@ -241,6 +242,17 @@ export const useOrganizationStore = create<OrganizationState>()(
       adoptBackendOrganization: (payload) => {
         const id = asText(payload.id);
         if (!id) return null;
+
+        /*
+         * The organization's language, adopted the moment the server names it.
+         * Held in its own store rather than on the Organization record because
+         * `LanguageProvider` sits above this one and must not import it.
+         */
+        useOrganizationLanguageStore.getState().adopt({
+          interfaceLanguage: asText(payload.interfaceLanguage) || null,
+          documentLanguage: asText(payload.documentLanguage) || null,
+          interfaceLanguageLocked: payload.interfaceLanguageLocked !== false,
+        });
 
         const year = new Date().getFullYear();
         const existing = get().organization;

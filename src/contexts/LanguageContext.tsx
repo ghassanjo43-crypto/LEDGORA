@@ -22,6 +22,7 @@
 import { createContext, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { initI18n, isSupportedLanguage, type SupportedLanguage } from '@/i18n';
 import { directionFor, type CalendarPreference } from '@/lib/localeFormatting';
+import { useOrganizationLanguageStore } from '@/store/organizationLanguageStore';
 
 const STORAGE_KEY = 'ledgora:language';
 const NUMERALS_KEY = 'ledgora:arabic-numerals';
@@ -29,6 +30,11 @@ const CALENDAR_KEY = 'ledgora:calendar';
 
 export interface LanguageContextValue {
   language: SupportedLanguage;
+  /**
+   * True when the language comes from the organization rather than this
+   * browser. The switcher is hidden in that case — see `LanguageSwitcher`.
+   */
+  managedByOrganization: boolean;
   direction: 'ltr' | 'rtl';
   isRtl: boolean;
   arabicNumerals: boolean;
@@ -64,9 +70,36 @@ function write(key: string, value: string): void {
 }
 
 export function LanguageProvider({ children }: { children: ReactNode }) {
-  const [language, setLanguageState] = useState<SupportedLanguage>(() =>
-    read<SupportedLanguage>(STORAGE_KEY, 'en', (raw) => (isSupportedLanguage(raw) ? raw : null)),
+  const orgLanguage = useOrganizationLanguageStore((state) => state.interfaceLanguage);
+  const orgLocked = useOrganizationLanguageStore((state) => state.locked);
+
+  /*
+   * NULL when the user has never chosen, which is not the same as choosing
+   * English. Without that distinction an unlocked organization's default would
+   * be indistinguishable from an explicit user choice, and the user's click
+   * would appear to do nothing.
+   */
+  const [chosen, setLanguageState] = useState<SupportedLanguage | null>(() =>
+    read<SupportedLanguage | null>(STORAGE_KEY, null, (raw) => (isSupportedLanguage(raw) ? raw : null)),
   );
+
+  /*
+   * The organization wins when it has spoken. Before sign-in there is no
+   * organization -- onboarding and login must still be readable -- so the
+   * browser choice covers those surfaces and is superseded afterwards.
+   */
+  const managedByOrganization = isSupportedLanguage(orgLanguage) && orgLocked;
+
+  /*
+   * Precedence: a locked organization always wins; otherwise an explicit user
+   * choice wins; otherwise the organization's default; otherwise English.
+   *
+   * The middle case is what makes "unlocked" mean anything — an Arabic-only
+   * bookkeeper and an English-only auditor working the same books.
+   */
+  const language: SupportedLanguage = managedByOrganization
+    ? (orgLanguage as SupportedLanguage)
+    : (chosen ?? (isSupportedLanguage(orgLanguage) ? orgLanguage : 'en'));
   const [arabicNumerals, setArabicNumeralsState] = useState<boolean>(() =>
     read(NUMERALS_KEY, false, (raw) => raw === 'true'),
   );
@@ -78,6 +111,9 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
   // Initialise i18next once, at the language already chosen, so the first paint
   // is not English text that then flips.
   useMemo(() => initI18n(language), []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Follow the organization when it arrives after sign-in.
+  useEffect(() => { void initI18n(language); }, [language]);
 
   /*
    * `dir` and `lang` go on <html>, not on a wrapper div. The bidi algorithm,
@@ -91,6 +127,12 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
   }, [language]);
 
   const setLanguage = useCallback((next: SupportedLanguage) => {
+    /*
+     * Refused, not ignored, when the organization has locked it. Silently
+     * accepting and then reverting on the next render would look like a bug in
+     * the switcher rather than a policy.
+     */
+    if (useOrganizationLanguageStore.getState().locked) return;
     setLanguageState(next);
     write(STORAGE_KEY, next);
     void initI18n(next);
@@ -109,6 +151,7 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
   const value = useMemo<LanguageContextValue>(
     () => ({
       language,
+      managedByOrganization,
       direction: directionFor(language),
       isRtl: directionFor(language) === 'rtl',
       // Arabic-Indic digits are meaningless in an English UI, so the preference
@@ -119,7 +162,7 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
       setArabicNumerals,
       setCalendar,
     }),
-    [language, arabicNumerals, calendar, setLanguage, setArabicNumerals, setCalendar],
+    [language, managedByOrganization, arabicNumerals, calendar, setLanguage, setArabicNumerals, setCalendar],
   );
 
   return <LanguageContext.Provider value={value}>{children}</LanguageContext.Provider>;

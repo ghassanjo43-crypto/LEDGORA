@@ -119,6 +119,9 @@ export const subscriptionApi = {
     taxNumber?: string;
     industry?: string;
     baseCurrency?: string;
+    /** Chosen at onboarding and locked afterwards. See migration 021. */
+    interfaceLanguage?: 'en' | 'ar';
+    documentLanguage?: 'en' | 'ar';
     fiscalYearStart?: string;
     booksStartDate?: string;
   }) {
