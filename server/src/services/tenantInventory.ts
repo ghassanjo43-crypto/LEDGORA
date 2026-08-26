@@ -221,6 +221,42 @@ export const TENANT_DEPENDENCIES: readonly TenantDependency[] = [
    * accounts they reference, children ahead of their parents.
    */
   {
+    table: 'platform_preview_sessions',
+    ownershipKey: 'organization_id',
+    kind: 'authoritative',
+    disposition: 'delete',
+    order: 5.3,
+    label: 'Subscriber preview sessions',
+    crossTenantReachable: false,
+    rationale:
+      'Records of a platform administrator looking at this tenant. The audit LOG of those events is '
+      + 'kept separately and is not removed with the tenant; these are the live credentials only.',
+  },
+  {
+    table: 'companies',
+    ownershipKey: 'organization_id',
+    kind: 'authoritative',
+    disposition: 'delete',
+    order: 5.4,
+    label: 'Company registry',
+    crossTenantReachable: false,
+    rationale:
+      'The server-side record of a tenant set of books, holding the authoritative bookkeeping language. '
+      + 'It has no meaning once the tenant is gone.',
+  },
+  {
+    table: 'organization_language_changes',
+    ownershipKey: 'organization_id',
+    kind: 'authoritative',
+    disposition: 'delete',
+    order: 5.5,
+    label: 'Organization language changes',
+    crossTenantReachable: false,
+    rationale:
+      'Why a tenant changed the language its documents are issued in. It outlives log retention because '
+      + 'an auditor may ask years later, but it has no meaning once the tenant itself is gone.',
+  },
+  {
     table: 'invoice_audit_events',
     ownershipKey: 'organization_id',
     kind: 'authoritative',
@@ -417,6 +453,9 @@ export const DELETION_SEQUENCE = TENANT_DEPENDENCIES.filter((d) => d.disposition
  */
 export const DIRECTLY_OWNED_TABLES = [
   /* Sales invoices, children first — see migration 019. */
+  'platform_preview_sessions',
+  'companies',
+  'organization_language_changes',
   'invoice_audit_events',
   'invoice_payments',
   'invoice_lines',

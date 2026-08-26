@@ -286,6 +286,27 @@ const RESET_PLAN: readonly PlanEntry[] = [
    * entries and accounts they reference — see migration 019.
    */
   {
+    table: 'platform_preview_sessions',
+    action: 'scoped_delete',
+    order: 25.3,
+    label: 'Subscriber preview sessions',
+    why: 'Live preview credentials for this tenant. The audit log of the events is kept separately.',
+  },
+  {
+    table: 'companies',
+    action: 'scoped_delete',
+    order: 25.4,
+    label: 'Company registry',
+    why: 'The server record of a tenant set of books. Meaningless once the tenant is gone.',
+  },
+  {
+    table: 'organization_language_changes',
+    action: 'scoped_delete',
+    order: 25.5,
+    label: 'Organization language changes',
+    why: 'Why a tenant changed its document language. Meaningless once the tenant is gone.',
+  },
+  {
     table: 'invoice_audit_events',
     action: 'scoped_delete',
     order: 30.1,

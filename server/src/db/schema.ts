@@ -138,6 +138,49 @@ export interface PlatformUserRolesTable {
   created_by: string | null;
 }
 
+/**
+ * A server-issued subscriber preview session.
+ *
+ * Preview is something the server GRANTS, not something a request asserts: the
+ * credential exists only because a start request was made, which is the same
+ * moment the audit row was written. Access and evidence of access are one event.
+ */
+export interface PlatformPreviewSessionsTable {
+  id: Generated<string>;
+  /** The real administrator. Preview never changes who the caller is. */
+  admin_user_id: string;
+  organization_id: string;
+  /** SHA-256 of the issued credential; the credential itself is never stored. */
+  token_hash: string;
+  started_at: Generated<Timestamp>;
+  /** What actually bounds access — an explicit exit is not guaranteed. */
+  expires_at: Timestamp;
+  ended_at: Timestamp | null;
+  created_at: Generated<Timestamp>;
+}
+
+/**
+ * A set of books, as the SERVER knows it.
+ *
+ * The books themselves still live in the browser; this is the registry that
+ * makes one fact about them authoritative — the bookkeeping language, which
+ * must bind every member and survive a determined user with devtools.
+ */
+export interface CompaniesTable {
+  id: Generated<string>;
+  organization_id: string;
+  /** The browser-side id for the same books. Text: not a uuid. */
+  client_reference: string;
+  legal_name: Generated<string>;
+  /** Null until chosen. A default would be indistinguishable from a decision. */
+  bookkeeping_language: string | null;
+  /** Set once. A database trigger refuses every later change to it. */
+  language_locked_at: Timestamp | null;
+  language_selected_by: string | null;
+  created_at: Generated<Timestamp>;
+  updated_at: Generated<Timestamp>;
+}
+
 /** Why a language changed, kept beyond log retention. */
 export interface OrganizationLanguageChangesTable {
   id: Generated<string>;
@@ -597,6 +640,8 @@ export interface Database {
   platform_user_roles: PlatformUserRolesTable;
   organizations: OrganizationsTable;
   organization_language_changes: OrganizationLanguageChangesTable;
+  companies: CompaniesTable;
+  platform_preview_sessions: PlatformPreviewSessionsTable;
   organization_memberships: OrganizationMembershipsTable;
   subscription_plans: SubscriptionPlansTable;
   subscriptions: SubscriptionsTable;

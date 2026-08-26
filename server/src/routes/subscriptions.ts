@@ -20,13 +20,6 @@ const organizationSchema = z.object({
   taxNumber: z.string().trim().max(80).optional(),
   industry: z.string().trim().max(80).optional(),
   baseCurrency: z.string().trim().length(3).optional(),
-  /*
-   * Constrained to what the application ships. An organization set to a
-   * language with no translations would render every screen as raw keys, which
-   * looks like catastrophic data loss to whoever sees it.
-   */
-  interfaceLanguage: z.enum(['en', 'ar']).optional(),
-  documentLanguage: z.enum(['en', 'ar']).optional(),
   fiscalYearStart: z.string().trim().max(5).optional(),
   booksStartDate: z.string().trim().max(10).optional(),
 });

@@ -17,7 +17,6 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, cleanup, fireEvent, within } from '@testing-library/react';
 import { InvoiceLineItems } from './InvoiceLineItems';
-import { LanguageProvider } from '@/contexts/LanguageContext';
 import type { InvoiceLine } from '@/types/invoice';
 import type { Account } from '@/types';
 
@@ -45,13 +44,6 @@ function setup(lines: InvoiceLine[], overrides: Record<string, unknown> = {}) {
   const onRemove = vi.fn();
   const onSelectItem = vi.fn();
   render(
-    /*
-     * The provider both supplies direction and initialises i18next. Without it
-     * `useTranslation` returns the KEY, so every label would render as
-     * "lineItems.quantity" and every `getByLabelText` here would fail — which
-     * is exactly what a missing provider looks like in production too.
-     */
-    <LanguageProvider>
     <InvoiceLineItems
       lines={lines}
       accounts={ACCOUNTS}
@@ -68,8 +60,7 @@ function setup(lines: InvoiceLine[], overrides: Record<string, unknown> = {}) {
       onSelectItem={onSelectItem}
       onRemove={onRemove}
       {...overrides}
-    />
-    </LanguageProvider>,
+    />,
   );
   return { onChange, onRemove, onSelectItem };
 }

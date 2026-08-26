@@ -19,22 +19,8 @@ export interface CreateOrganizationInput {
   taxNumber?: string;
   industry?: string;
   baseCurrency?: string;
-  /**
-   * Chosen at onboarding, then locked. See migration 021 for why document and
-   * interface language are separate facts.
-   */
-  interfaceLanguage?: SupportedLanguage;
-  documentLanguage?: SupportedLanguage;
   fiscalYearStart?: string;
   booksStartDate?: string;
-}
-
-/** The languages the application actually ships translations for. */
-export const SUPPORTED_LANGUAGES = ['en', 'ar'] as const;
-export type SupportedLanguage = (typeof SUPPORTED_LANGUAGES)[number];
-
-export function isSupportedLanguage(value: unknown): value is SupportedLanguage {
-  return typeof value === 'string' && (SUPPORTED_LANGUAGES as readonly string[]).includes(value);
 }
 
 /**
@@ -54,9 +40,6 @@ export interface OrganizationSummary {
   taxNumber: string | null;
   industry: string | null;
   baseCurrency: string;
-  interfaceLanguage: string;
-  documentLanguage: string;
-  interfaceLanguageLocked: boolean;
   fiscalYearStart: string;
   booksStartDate: string | null;
   status: string;
@@ -92,14 +75,6 @@ export async function createOrganization(
         tax_number: input.taxNumber?.trim() || null,
         industry: input.industry?.trim() || null,
         base_currency: input.baseCurrency ?? 'USD',
-        /*
-         * Defaulted rather than required: an organization created by an older
-         * client, or by an operator provisioning on someone's behalf, must not
-         * fail for want of a language. English is the safe default because it
-         * is the language every screen is guaranteed to have.
-         */
-        interface_language: input.interfaceLanguage ?? 'en',
-        document_language: input.documentLanguage ?? input.interfaceLanguage ?? 'en',
         fiscal_year_start: input.fiscalYearStart ?? '01-01',
         books_start_date: input.booksStartDate ?? null,
       })
@@ -183,9 +158,6 @@ export async function getCurrentOrganization(
     taxNumber: organization.tax_number,
     industry: organization.industry,
     baseCurrency: organization.base_currency,
-    interfaceLanguage: organization.interface_language,
-    documentLanguage: organization.document_language,
-    interfaceLanguageLocked: organization.interface_language_locked,
     fiscalYearStart: organization.fiscal_year_start,
     booksStartDate: organization.books_start_date,
     status: organization.status,
@@ -200,143 +172,4 @@ export async function requireOrganizationFor(db: Kysely<Database>, userId: strin
   const membership = await findMembershipForUser(db, userId);
   if (!membership) throw errors.validation('Create your company workspace before choosing a package.');
   return membership.organizationId;
-}
-
-/* ══ Language ═════════════════════════════════════════════════════════════ */
-
-export interface LanguageChangeInput {
-  field: 'interface_language' | 'document_language';
-  value: SupportedLanguage;
-  reason: string;
-}
-
-/**
- * Change an organization's language.
- *
- * ── Why this is not a settings toggle ────────────────────────────────────────
- * `document_language` decides what language a customer's invoice and a
- * submitted UBL document are in. Changing it does NOT retranslate documents
- * already issued — those keep the language they were cleared in, which is the
- * point. What it changes is everything issued afterwards, so the books end up
- * with a language boundary partway through a tax year. That is a legitimate
- * thing to do and a terrible thing to do by accident, which is why it takes an
- * owner or admin and a written reason.
- *
- * The reason is recorded in its own table rather than the audit log, because
- * "which language were documents issued in during 2026" is a question that
- * outlives log retention.
- */
-export async function changeOrganizationLanguage(
-  db: Kysely<Database>,
-  organizationId: string,
-  actorUserId: string,
-  input: LanguageChangeInput,
-): Promise<OrganizationSummary> {
-  if (!isSupportedLanguage(input.value)) {
-    throw errors.validation(`${input.value} is not a language this application ships.`);
-  }
-  const reason = input.reason?.trim();
-  if (!reason) {
-    throw errors.validation('A reason is required and is kept with the organization.', {
-      fieldErrors: { reason: 'Explain why the language is changing.' },
-    });
-  }
-
-  return db.transaction().execute(async (trx) => {
-    const membership = await trx
-      .selectFrom('organization_memberships')
-      .select(['role'])
-      .where('organization_id', '=', organizationId)
-      .where('user_id', '=', actorUserId)
-      .where('status', '=', 'active')
-      .executeTakeFirst();
-
-    /*
-     * Authority comes from the caller's own membership, never from the request.
-     * A member may not change what language their colleagues' documents are
-     * issued in.
-     */
-    if (!membership || (membership.role !== 'owner' && membership.role !== 'admin')) {
-      throw errors.forbidden('Only an owner or an administrator can change the organization language.');
-    }
-
-    const current = await trx
-      .selectFrom('organizations')
-      .selectAll()
-      .where('id', '=', organizationId)
-      .forUpdate()
-      .executeTakeFirst();
-    if (!current) throw errors.notFound('Organization');
-
-    const previous = input.field === 'interface_language'
-      ? current.interface_language
-      : current.document_language;
-
-    // A no-op change still costs an audit row and a reason; refuse it instead.
-    if (previous === input.value) {
-      throw errors.conflict(`The organization language is already ${input.value}.`);
-    }
-
-    await trx
-      .updateTable('organizations')
-      .set(input.field === 'interface_language'
-        ? { interface_language: input.value }
-        : { document_language: input.value })
-      .where('id', '=', organizationId)
-      .execute();
-
-    await trx.insertInto('organization_language_changes').values({
-      organization_id: organizationId,
-      field: input.field,
-      previous_value: previous,
-      new_value: input.value,
-      reason,
-      changed_by: actorUserId,
-    }).execute();
-
-    const updated = await trx
-      .selectFrom('organizations').selectAll()
-      .where('id', '=', organizationId).executeTakeFirstOrThrow();
-
-    return {
-      id: updated.id,
-      legalName: updated.legal_name,
-      tradingName: updated.trading_name,
-      country: updated.country,
-      registrationNumber: updated.registration_number,
-      taxNumber: updated.tax_number,
-      industry: updated.industry,
-      baseCurrency: updated.base_currency,
-      interfaceLanguage: updated.interface_language,
-      documentLanguage: updated.document_language,
-      interfaceLanguageLocked: updated.interface_language_locked,
-      fiscalYearStart: updated.fiscal_year_start,
-      booksStartDate: updated.books_start_date,
-      status: updated.status,
-      createdAt: new Date(updated.created_at as unknown as string).toISOString(),
-      ownerUserId: updated.subscriber_owner_user_id,
-      role: membership.role,
-    };
-  });
-}
-
-/** The recorded history of language changes, for an auditor. */
-export async function languageHistory(
-  db: Kysely<Database>,
-  organizationId: string,
-): Promise<Array<{ field: string; from: string; to: string; reason: string; at: string }>> {
-  const rows = await db
-    .selectFrom('organization_language_changes')
-    .selectAll()
-    .where('organization_id', '=', organizationId)
-    .orderBy('changed_at', 'desc')
-    .execute();
-
-  return rows.map((row) => ({
-    field: row.field,
-    from: row.previous_value,
-    to: row.new_value,
-    reason: row.reason,
-    at: new Date(row.changed_at as unknown as string).toISOString(),
-  }));
 }

@@ -44,7 +44,17 @@ export async function up(db: AnyKysely): Promise<void> {
    * Constrained to what the application actually ships. An organization set to
    * a language with no translations would show every screen as raw translation
    * keys, which looks like catastrophic data loss to the person seeing it.
+   *
+   * PostgreSQL has no `ADD CONSTRAINT IF NOT EXISTS`, and this migration is
+   * re-run against an already-migrated database by the tombstone-repair path.
+   * Dropping first makes it idempotent; `IF EXISTS` keeps the first run clean.
    */
+  await sql`
+    ALTER TABLE organizations
+      DROP CONSTRAINT IF EXISTS organizations_interface_language_supported,
+      DROP CONSTRAINT IF EXISTS organizations_document_language_supported
+  `.execute(db);
+
   await sql`
     ALTER TABLE organizations
       ADD CONSTRAINT organizations_interface_language_supported

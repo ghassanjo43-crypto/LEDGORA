@@ -47,7 +47,6 @@ export function OnboardingOrganizationPage() {
     industry: 'general',
     // No default: the functional currency is a decision, not a fallback.
     baseCurrency: '',
-    interfaceLanguage: 'en' as 'en' | 'ar',
     fiscalYearStart: '01-01',
     booksStartDate: `${new Date().getFullYear()}-01-01`,
   });
@@ -117,14 +116,6 @@ export function OnboardingOrganizationPage() {
         taxNumber: form.taxNumber.trim() || undefined,
         industry: form.industry,
         baseCurrency: form.baseCurrency,
-        /*
-         * Sent once, at creation. Changing it afterwards takes an owner or
-         * administrator and a written reason -- see `changeOrganizationLanguage`
-         * -- because it decides what language this company's invoices and its
-         * submissions to a tax authority are issued in.
-         */
-        interfaceLanguage: form.interfaceLanguage,
-        documentLanguage: form.interfaceLanguage,
         fiscalYearStart: form.fiscalYearStart,
         booksStartDate: form.booksStartDate || undefined,
       });
@@ -190,23 +181,6 @@ export function OnboardingOrganizationPage() {
           </Field>
           <Field label="Tax number" hint="VAT / TRN, if registered.">
             <Input value={form.taxNumber} onChange={set('taxNumber')} placeholder="TRN-000000000" />
-          </Field>
-        </div>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field
-            label="Company language"
-            required
-            hint="The language every member of this company sees, and the language its invoices are issued in. Changing it later takes an administrator and a recorded reason."
-          >
-            <Select
-              value={form.interfaceLanguage}
-              onChange={(e) => setForm((f) => ({ ...f, interfaceLanguage: e.target.value as 'en' | 'ar' }))}
-              options={[
-                { value: 'en', label: 'English' },
-                { value: 'ar', label: 'العربية (Arabic)' },
-              ]}
-              aria-label="Company language"
-            />
           </Field>
         </div>
         <div className="grid gap-4 sm:grid-cols-3">

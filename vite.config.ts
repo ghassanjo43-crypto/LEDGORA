@@ -12,12 +12,6 @@ export default defineConfig({
      * run it with `npm run server:test`.
      */
     include: ['src/**/*.{test,spec}.{ts,tsx}'],
-    /*
-     * Initialises i18next before any test renders. Without it a translated
-     * component renders translation KEYS, so every existing test asserting on
-     * real copy would fail as its component is converted.
-     */
-    setupFiles: ['src/test/setupI18n.ts'],
     exclude: ['**/node_modules/**', 'dist/**', 'server/**'],
     /**
      * The unit suite runs as an approved LOCAL DEVELOPMENT machine: DEV is true
