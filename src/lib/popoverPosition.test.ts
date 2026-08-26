@@ -80,3 +80,34 @@ describe('computePopoverPosition — viewport sizes', () => {
     expect(p.maxHeight).toBe(360);
   });
 });
+
+describe('computePopoverPosition — alignment', () => {
+  /*
+   * A row-Actions menu is much wider than the small "Actions" button it hangs
+   * off, and it sits at the right-hand end of the table. Left-aligning it would
+   * push the panel out toward the middle of the row; right alignment keeps its
+   * edge under the trigger's, which is what the old CSS `right-0` did.
+   */
+  it('lines the panel up with the trigger left edge by default', () => {
+    const p = computePopoverPosition(rect(120, 400, 84), DESKTOP_1920, { minWidth: 208 });
+    expect(p.left).toBe(400);
+  });
+
+  it('lines the panel up with the trigger right edge when asked', () => {
+    const trigger = rect(120, 400, 84);
+    const p = computePopoverPosition(trigger, DESKTOP_1920, { minWidth: 208, align: 'right' });
+    expect(p.left + p.width).toBe(trigger.right);
+  });
+
+  it('still clamps a right-aligned panel back inside the left edge', () => {
+    // A narrow trigger near x=0: right alignment alone would give a negative left.
+    const p = computePopoverPosition(rect(120, 20, 84), DESKTOP_1920, { minWidth: 208, align: 'right' });
+    expect(p.left).toBeGreaterThanOrEqual(12);
+  });
+
+  it('keeps a right-aligned panel inside the right edge on a phone', () => {
+    const p = computePopoverPosition(rect(120, 340, 44), MOBILE, { minWidth: 208, align: 'right' });
+    expect(p.left).toBeGreaterThanOrEqual(12);
+    expect(p.left + p.width).toBeLessThanOrEqual(MOBILE.width - 12);
+  });
+});

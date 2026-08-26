@@ -49,6 +49,16 @@ export interface PopoverPositionOptions {
    * is less than this and there is more room above.
    */
   preferredMinHeight?: number;
+  /**
+   * Which trigger edge the panel lines up with.
+   *
+   * A picker hangs off the left edge because it is the same width as the field
+   * it belongs to. A MENU is narrower than nothing in particular and sits at the
+   * right-hand end of a row, so aligning its right edge to the trigger's keeps it
+   * from drifting off toward the middle of the table. Defaults to `left`, which
+   * is what every existing caller relies on.
+   */
+  align?: 'left' | 'right';
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -80,8 +90,11 @@ export function computePopoverPosition(
   const maxWidth = Math.min(options.maxWidth ?? 480, viewport.width - padding * 2);
   const width = clamp(Math.max(trigger.width, minWidth), Math.min(minWidth, maxWidth), maxWidth);
 
-  // Horizontal: align to the trigger's left edge, kept inside the viewport.
-  const left = clamp(trigger.left, padding, Math.max(padding, viewport.width - width - padding));
+  // Horizontal: line up with the requested trigger edge, kept inside the viewport.
+  // The clamp is applied after alignment, so a right-aligned panel near the left
+  // edge is pushed back into view rather than hanging off it.
+  const anchored = options.align === 'right' ? trigger.right - width : trigger.left;
+  const left = clamp(anchored, padding, Math.max(padding, viewport.width - width - padding));
 
   if (placement === 'bottom') {
     return { placement, top: trigger.bottom + offset, left, width, maxHeight };

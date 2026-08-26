@@ -12,6 +12,16 @@ import { useInvoiceTemplateStore } from '@/store/invoiceTemplateStore';
 
 const page = (node: React.ReactElement) => render(<ToastProvider>{node}</ToastProvider>);
 
+/**
+ * The open row-Actions menu.
+ *
+ * The panel is portaled to `document.body` so it cannot be clipped by the
+ * register's `overflow-hidden` card (see `ui/dropdownMenuPortal.test.tsx`), which
+ * means it is deliberately NOT inside the `<tr>` any more. The trigger still is,
+ * so a row scope is right for opening the menu and wrong for reading it.
+ */
+const menu = () => screen.getByTestId('dropdown-menu');
+
 beforeEach(() => {
   useBillStore.setState({ bills: [] });
   useInvoiceTemplateStore.getState().resetToDefault();
@@ -45,16 +55,16 @@ describe('vertical bill entry', () => {
 
     const draftRow = screen.getByText(useBillStore.getState().getBill(draftId)!.billNumber).closest('tr')!;
     fireEvent.click(within(draftRow).getByText('Actions'));
-    expect(within(draftRow).getByText('Edit')).toBeTruthy();
-    fireEvent.click(within(draftRow).getByText('Edit'));
+    expect(within(menu()).getByText('Edit')).toBeTruthy();
+    fireEvent.click(within(menu()).getByText('Edit'));
     expect(screen.getByRole('dialog').textContent).toContain(useBillStore.getState().getBill(draftId)!.billNumber);
     cleanup();
 
     page(<BillsPage />);
     const submittedRow = screen.getByText(useBillStore.getState().getBill(submittedId)!.billNumber).closest('tr')!;
     fireEvent.click(within(submittedRow).getByText('Actions'));
-    expect(within(submittedRow).queryByText('Edit')).toBeNull();
-    expect(within(submittedRow).getByText('Recall submission')).toBeTruthy();
+    expect(within(menu()).queryByText('Edit')).toBeNull();
+    expect(within(menu()).getByText('Recall submission')).toBeTruthy();
   });
 
   it('renders submitted bills read-only even when the editor is called directly', () => {
@@ -72,8 +82,8 @@ describe('vertical bill entry', () => {
     page(<BillsPage />);
     const row = screen.getByText(bill.billNumber).closest('tr')!;
     fireEvent.click(within(row).getByText('Actions'));
-    expect(within(row).queryByText('Edit')).toBeNull();
-    fireEvent.click(within(row).getByText('View'));
+    expect(within(menu()).queryByText('Edit')).toBeNull();
+    fireEvent.click(within(menu()).getByText('View'));
     expect(screen.getByText(/Posted bills cannot be edited because they have affected the ledger/i)).toBeTruthy();
   });
 
