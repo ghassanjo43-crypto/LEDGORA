@@ -97,12 +97,6 @@ export function pickAmendableFields(
 
 /* ── Assessment ───────────────────────────────────────────────────────────── */
 
-export const EMPTY_IMPACT: AmendmentImpact = {
-  settlement: { grandTotal: 0, amountSettled: 0, balanceDue: 0, transferable: [], blocked: [] },
-  inventory: { documentIds: [], movementCount: 0, reversible: true },
-  tax: {},
-};
-
 export interface AssessmentInput {
   documentType: AmendableDocumentType;
   documentId: string;

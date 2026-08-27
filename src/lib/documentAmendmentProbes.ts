@@ -34,8 +34,6 @@ import type { CreditNote } from '@/types/creditNote';
 import { useTaxPeriodStore } from '@/store/taxPeriodStore';
 import { useInventoryStore, inventoryEnabled } from '@/store/inventoryStore';
 import { useJournalStore } from '@/store/journalStore';
-import { useReceiptStore } from '@/store/receiptStore';
-import { usePaymentStore } from '@/store/paymentStore';
 import { useCreditNoteStore } from '@/store/creditNoteStore';
 import { canReverseMovement } from '@/lib/inventoryReversal';
 import { balanceToleranceFor } from '@/lib/journalValidation';
@@ -612,30 +610,4 @@ export function supplierDebitNoteSubject(credit: BillSupplierCredit): ProbeSubje
     settlements: [],
     inventoryDocumentIds: inventoryDocumentsFor('supplier-return', credit.creditNumber),
   };
-}
-
-/** Which payment/receipt documents hold allocations against this document. */
-export function allocationOwners(documentType: AmendableDocumentType, documentId: string): {
-  receiptIds: string[];
-  paymentIds: string[];
-  creditNoteIds: string[];
-} {
-  const receiptIds: string[] = [];
-  const paymentIds: string[] = [];
-  const creditNoteIds: string[] = [];
-
-  if (documentType === 'invoice') {
-    for (const receipt of useReceiptStore.getState().receipts) {
-      if (receipt.allocations?.some((a) => a.invoiceId === documentId && !a.reversed)) receiptIds.push(receipt.id);
-    }
-    for (const note of useCreditNoteStore.getState().creditNotes) {
-      if (note.applications?.some((a) => a.invoiceId === documentId && !a.reversed)) creditNoteIds.push(note.id);
-    }
-  }
-  if (documentType === 'bill') {
-    for (const payment of usePaymentStore.getState().payments) {
-      if (payment.allocations?.some((a) => a.billId === documentId && !a.reversed)) paymentIds.push(payment.id);
-    }
-  }
-  return { receiptIds, paymentIds, creditNoteIds };
 }
