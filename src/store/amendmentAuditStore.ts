@@ -31,6 +31,14 @@ interface AmendmentAuditState {
   /** Every event for one document chain, oldest first. */
   forDocument: (documentId: string) => AmendmentAuditEvent[];
   findByCorrelation: (correlationId: string) => AmendmentAuditEvent | undefined;
+  /**
+   * The SUCCEEDED attempt under this correlation id, if there is one.
+   *
+   * What idempotency actually needs. `findByCorrelation` returns the first
+   * event, which after a refused-then-corrected retry is the refusal — and a
+   * replay of that would undo the amendment the operator did complete.
+   */
+  findCompleted: (correlationId: string) => AmendmentAuditEvent | undefined;
   verify: () => ChainVerification;
 
   replaceAll: (events: AmendmentAuditEvent[]) => void;
@@ -61,6 +69,9 @@ export const useAmendmentAuditStore = create<AmendmentAuditState>()(
 
       findByCorrelation: (correlationId) =>
         get().events.find((e) => e.correlationId === correlationId),
+
+      findCompleted: (correlationId) =>
+        get().events.find((e) => e.correlationId === correlationId && e.outcome === 'succeeded'),
 
       verify: () => verifyAmendmentChain(get().events),
 

@@ -579,6 +579,37 @@ describe('workflow guards', () => {
     expect(useInvoiceStore.getState().invoices).toHaveLength(invoiceCount);
   });
 
+  it('lets a refused attempt be retried under the same id once the problem is fixed', async () => {
+    const id = await postedInvoice({ quantity: 4, unitPrice: 25 });
+    const original = useInvoiceStore.getState().getInvoice(id)!;
+
+    /* An empty line set cannot be posted, so this attempt is refused. */
+    const refused = await amendPostedDocument(request({
+      documentType: 'invoice', documentId: id, correlationId: 'retry-key', patch: { lines: [] },
+    }));
+    expect(refused.ok).toBe(false);
+
+    /*
+     * The operator goes back, corrects the mistake and confirms again in the
+     * same drawer — which means the same correlation id. A failed attempt left
+     * nothing behind, so this must go through rather than replay the refusal.
+     */
+    const retried = await amendPostedDocument(request({
+      documentType: 'invoice', documentId: id, correlationId: 'retry-key',
+      patch: { lines: [{ ...original.lines[0]!, quantity: 6 }] },
+    }));
+    expect(retried.ok, retried.error).toBe(true);
+    expect(retried.idempotentReplay).toBeFalsy();
+    expect(useInvoiceStore.getState().getInvoice(retried.replacementId!)!.grandTotal).toBe(150);
+
+    /* And NOW the id is spent: a third call replays rather than amending again. */
+    const third = await amendPostedDocument(request({
+      documentType: 'invoice', documentId: id, correlationId: 'retry-key', patch: { notes: 'again' },
+    }));
+    expect(third.idempotentReplay).toBe(true);
+    expect(third.replacementId).toBe(retried.replacementId);
+  });
+
   it('rejects a stale amendment', async () => {
     const id = await postedInvoice();
     const first = await amendPostedDocument(request({ documentType: 'invoice', documentId: id, patch: { notes: 'v2' } }));

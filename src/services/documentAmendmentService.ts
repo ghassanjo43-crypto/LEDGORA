@@ -444,31 +444,32 @@ export async function amendPostedDocument(request: AmendmentRequest): Promise<Am
   const context = readAmendmentContext();
 
   /*
-   * Idempotency, checked FIRST.
+   * Idempotency, checked FIRST — and only against a SUCCESS.
    *
    * A double-clicked confirmation, a retried request, a component that mounts
-   * twice — each would otherwise post a second reversal and a second
-   * replacement, and the books would then carry two corrections for one
-   * mistake. The correlation id is minted once when the drawer opens.
+   * twice: each would otherwise post a second reversal and a second
+   * replacement, and the books would carry two corrections for one mistake. The
+   * correlation id is minted once when the drawer opens, so a repeat of a
+   * completed amendment returns what the first one did.
+   *
+   * A previous FAILURE is deliberately not replayed. Every failed attempt is
+   * rolled back completely, so it left nothing behind to be idempotent about —
+   * and the operator's next move after "the corrected total is smaller than
+   * what is already settled" is to go back, fix it and confirm again, in the
+   * same drawer, under the same id. Replaying the refusal would make that
+   * impossible and the drawer permanently dead.
    */
-  const replay = useAmendmentAuditStore.getState().findByCorrelation(request.correlationId);
+  const replay = useAmendmentAuditStore.getState().findCompleted(request.correlationId);
   if (replay) {
-    return replay.outcome === 'succeeded'
-      ? {
-        ok: true,
-        replacementId: replay.replacementDocumentId,
-        replacementNumber: replay.replacementDocumentNumber,
-        reversalJournalEntryId: replay.reversalJournalEntryId,
-        replacementJournalEntryId: replay.replacementJournalEntryId,
-        auditEventId: replay.id,
-        idempotentReplay: true,
-      }
-      : {
-        ok: false,
-        error: replay.failureReason ?? 'This amendment was already attempted and did not succeed.',
-        auditEventId: replay.id,
-        idempotentReplay: true,
-      };
+    return {
+      ok: true,
+      replacementId: replay.replacementDocumentId,
+      replacementNumber: replay.replacementDocumentNumber,
+      reversalJournalEntryId: replay.reversalJournalEntryId,
+      replacementJournalEntryId: replay.replacementJournalEntryId,
+      auditEventId: replay.id,
+      idempotentReplay: true,
+    };
   }
 
   const loaded = load(request.documentType, request.documentId);
