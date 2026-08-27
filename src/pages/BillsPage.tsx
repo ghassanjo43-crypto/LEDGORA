@@ -24,6 +24,7 @@ import { BillRenderer } from '@/components/bills/BillRenderer';
 import { BillSupplierCreditDialog } from '@/components/bills/BillSupplierCreditDialog';
 import { BillReverseDialog } from '@/components/bills/BillReverseDialog';
 import { AmendMenuItem } from '@/components/amendments/AmendMenuItem';
+import { AmendmentDrawerHost } from '@/components/amendments/AmendmentDrawerHost';
 import { SupplierDebitNotesPanel } from '@/components/amendments/SupplierDebitNotesPanel';
 import { AmendmentHistoryPanel } from '@/components/amendments/AmendmentHistoryPanel';
 import { PrintDocument } from '@/components/ui/PrintDocument';
@@ -162,6 +163,9 @@ export function BillsPage() {
           </table>
         </div></Card>
       )}
+
+      {/* Outside the table: a row's Actions menu unmounts on click. */}
+      <AmendmentDrawerHost />
 
       {editorId && <BillEditorDrawer open billId={editorId} onClose={() => setEditorId(null)} />}
 

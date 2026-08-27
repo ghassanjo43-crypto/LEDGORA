@@ -130,10 +130,52 @@ export function assessDocumentAmendment(input: AssessmentInput): AmendmentAssess
     blockers,
     confirmations,
     reason: blockers.length > 0
-      ? blockers.map((b) => b.message).join(' ')
+      ? refusalReason(blockers)
       : 'This posted document can be amended. The original, its journal entry and its history are preserved.',
     impact: input.impact,
   };
+}
+
+/**
+ * The sentence a refused action shows — never empty.
+ *
+ * A blocker is supposed to carry a message, and every one this codebase creates
+ * does. But "supposed to" is what a UI must not rely on: a refusal the user
+ * cannot read is worse than no refusal at all, because it looks like a broken
+ * control rather than a rule. So an empty or whitespace message is replaced by
+ * a specific fallback naming the blocker KIND, which is enough for the reader
+ * to know what to do next and enough for support to identify the path — and
+ * carries no document figures, party names or account data.
+ */
+function refusalReason(blockers: readonly AmendmentBlocker[]): string {
+  const sentences = blockers.map((b) => {
+    const message = (b.message ?? '').trim();
+    return message.length > 0 ? message : fallbackReason(b);
+  });
+  const joined = sentences.join(' ').trim();
+  return joined.length > 0
+    ? joined
+    : 'This document cannot be amended. Ledgora could not determine why, so the amendment is refused rather than attempted.';
+}
+
+/** A safe, specific sentence per blocker kind. Never includes record data. */
+function fallbackReason(blocker: AmendmentBlocker): string {
+  const known: Partial<Record<AmendmentBlocker['kind'], string>> = {
+    not_posted: 'This document has not been posted, so there is nothing to amend.',
+    not_current: 'This version is no longer the current one, so it cannot be amended.',
+    locked_period: 'The accounting period covering this document is locked.',
+    filed_tax_return: 'This document falls inside a filed or prepared tax return.',
+    external_einvoice: 'This document has an external fiscal identity and cannot be replaced internally.',
+    reconciled_settlement: 'A settlement recorded against this document prevents the amendment.',
+    non_transferable_allocation: 'An allocation on this document cannot be carried across.',
+    inventory_dependency: 'Stock this document moved cannot be reversed safely.',
+    server_backend: 'This company’s records are held on the server, where amendment is not available yet.',
+    permission: 'You do not have permission to amend this document.',
+    subscription: 'This subscription does not currently permit new posting.',
+    indeterminate: 'A required eligibility check could not be completed.',
+  };
+  return known[blocker.kind]
+    ?? `This document cannot be amended (${blocker.kind}). Quote this code to support.`;
 }
 
 /* ── Diffing ──────────────────────────────────────────────────────────────── */

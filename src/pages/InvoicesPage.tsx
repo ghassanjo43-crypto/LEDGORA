@@ -26,6 +26,7 @@ import { useToast } from '@/components/ui/Toast';
 import { InvoiceEditorDrawer } from '@/components/invoices/InvoiceEditorDrawer';
 import { InvoicePreviewModal } from '@/components/invoices/InvoicePreviewModal';
 import { AmendMenuItem } from '@/components/amendments/AmendMenuItem';
+import { AmendmentDrawerHost } from '@/components/amendments/AmendmentDrawerHost';
 
 const STATUS_TONE: Record<InvoiceStatus, BadgeTone> = {
   draft: 'slate', approved: 'indigo', issued: 'blue', sent: 'cyan', 'partially-paid': 'amber', paid: 'green', void: 'red', superseded: 'slate',
@@ -229,6 +230,9 @@ export function InvoicesPage() {
           </div>
         </Card>
       )}
+
+      {/* Outside the table: a row's Actions menu unmounts on click. */}
+      <AmendmentDrawerHost />
 
       {editorId && <InvoiceEditorDrawer open invoiceId={editorId} onClose={() => setEditorId(null)} />}
 

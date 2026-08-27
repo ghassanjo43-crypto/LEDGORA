@@ -6,15 +6,14 @@
  * corrects (`BillSupplierCredit`). There is therefore no list page to hang the
  * action off, so the bill's own view is where it belongs.
  */
-import { useState } from 'react';
 import { FileEdit } from 'lucide-react';
 import type { Bill } from '@/types/bill';
 import { documentVersion } from '@/types/documentAmendment';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { formatCurrency } from '@/lib/money';
+import { useAmendmentDrawerStore } from '@/store/amendmentDrawerStore';
 import { useAmendmentAction } from './useAmendmentAction';
-import { AmendDocumentDrawer } from './AmendDocumentDrawer';
 
 export function SupplierDebitNotesPanel({ bill }: { bill: Bill }) {
   if ((bill.supplierCredits ?? []).length === 0) return null;
@@ -34,7 +33,9 @@ export function SupplierDebitNotesPanel({ bill }: { bill: Bill }) {
 
 function DebitNoteRow({ bill, creditId }: { bill: Bill; creditId: string }) {
   const action = useAmendmentAction('supplier-debit-note', creditId);
-  const [open, setOpen] = useState(false);
+  /* Through the store, like every other amendment entry point — the drawer is
+     rendered once by the page's `AmendmentDrawerHost`, never by a row. */
+  const requestOpen = useAmendmentDrawerStore((s) => s.requestOpen);
   const credit = bill.supplierCredits.find((c) => c.id === creditId);
   if (!credit) return null;
 
@@ -52,22 +53,15 @@ function DebitNoteRow({ bill, creditId }: { bill: Bill; creditId: string }) {
           variant="outline"
           disabled={action.disabled}
           title={action.reason || undefined}
-          onClick={() => setOpen(true)}
+          onClick={() => requestOpen('supplier-debit-note', creditId)}
         >
           <FileEdit className="h-3.5 w-3.5" /> Amend
         </Button>
       ) : null}
-      {action.disabled && action.reason && (
-        <span className="w-full text-[11px] text-amber-600 dark:text-amber-300">{action.reason}</span>
-      )}
-      {open && action.assessment && (
-        <AmendDocumentDrawer
-          open
-          documentType="supplier-debit-note"
-          documentId={creditId}
-          assessment={action.assessment}
-          onClose={() => setOpen(false)}
-        />
+      {action.disabled && (
+        <span data-testid="amend-disabled-reason" className="w-full text-[11px] text-amber-600 dark:text-amber-300">
+          {action.reason}
+        </span>
       )}
     </li>
   );

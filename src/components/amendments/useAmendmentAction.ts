@@ -11,6 +11,16 @@
  * The menu is an affordance, never the gate. A user who reaches
  * `amendPostedDocument` another way is refused there, and `documentAmendment.test`
  * proves it.
+ *
+ * ── Every store the assessment reads is a dependency ─────────────────────────
+ * `assessAmendment` consults the documents, the JOURNAL (is the posting there
+ * and posted?), TAX PERIODS (filed or locked?), INVENTORY (can the stock be
+ * reversed?), the ENTITLEMENTS (does the subscription permit posting?), the
+ * amendment POLICY and the acting user. Subscribing to only some of those meant
+ * a verdict computed against half-hydrated state could never be recomputed when
+ * the rest arrived — the menu would keep showing a refusal that had stopped
+ * being true. Selecting each one is what makes the memo honest; a `getState()`
+ * read inside `useMemo` is invisible to React and goes stale silently.
  */
 import { useMemo } from 'react';
 import type { AmendableDocumentType, AmendmentAssessment } from '@/types/documentAmendment';
@@ -18,6 +28,12 @@ import { assessAmendment } from '@/services/documentAmendmentService';
 import { useInvoiceStore } from '@/store/invoiceStore';
 import { useBillStore } from '@/store/billStore';
 import { useCreditNoteStore } from '@/store/creditNoteStore';
+import { useJournalStore } from '@/store/journalStore';
+import { useTaxPeriodStore } from '@/store/taxPeriodStore';
+import { useInventoryStore } from '@/store/inventoryStore';
+import { useEntitlementStore } from '@/store/entitlementStore';
+import { useReceiptStore } from '@/store/receiptStore';
+import { usePaymentStore } from '@/store/paymentStore';
 import { useAmendmentPolicyStore } from '@/store/amendmentPolicyStore';
 import { useAuthStore } from '@/store/authStore';
 
@@ -38,21 +54,34 @@ const UNAVAILABLE: AmendmentAction = {
 };
 
 /**
- * Subscribe to the stores the assessment reads, so the menu re-evaluates when
- * the document is settled, superseded or the policy changes. Selecting the
- * arrays rather than calling `getState()` is what makes this reactive at all —
- * a `getState()` read inside `useMemo` would go stale the moment anything moved.
+ * The sentence shown when an action is refused but the assessment somehow
+ * produced nothing to say. `assessDocumentAmendment` already guarantees a
+ * non-empty reason; this is the second belt, because a blank refusal reads as a
+ * broken control and is the exact defect this hook was reported for.
  */
+const UNSTATED_REFUSAL =
+  'This document cannot be amended right now, and Ledgora could not determine why. '
+  + 'Nothing has been changed. Please report this so the cause can be found.';
+
 export function useAmendmentAction(
   documentType: AmendableDocumentType,
   documentId: string | undefined,
 ): AmendmentAction {
   const invoices = useInvoiceStore((s) => s.invoices);
+  const invoiceBackend = useInvoiceStore((s) => s.backend);
   const bills = useBillStore((s) => s.bills);
   const creditNotes = useCreditNoteStore((s) => s.creditNotes);
+  const entries = useJournalStore((s) => s.entries);
+  const taxPeriods = useTaxPeriodStore((s) => s.periods);
+  const movements = useInventoryStore((s) => s.movements);
+  const inventoryDocuments = useInventoryStore((s) => s.documents);
+  const subscription = useEntitlementStore((s) => s.subscription);
+  const receipts = useReceiptStore((s) => s.receipts);
+  const payments = usePaymentStore((s) => s.payments);
   const roleGrants = useAmendmentPolicyStore((s) => s.roleGrants);
   const userOverrides = useAmendmentPolicyStore((s) => s.userOverrides);
   const currentUserId = useAuthStore((s) => s.currentUserId);
+  const users = useAuthStore((s) => s.users);
 
   return useMemo(() => {
     if (!documentId) return UNAVAILABLE;
@@ -67,12 +96,19 @@ export function useAmendmentAction(
     const isDraft = assessment.blockers.some((b) => b.kind === 'not_posted');
     if (isDraft) return UNAVAILABLE;
 
+    const disabled = !assessment.eligible;
     return {
       visible: true,
-      disabled: !assessment.eligible,
-      reason: assessment.eligible ? '' : assessment.reason,
+      disabled,
+      reason: disabled ? (assessment.reason.trim() || UNSTATED_REFUSAL) : '',
       assessment,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [documentType, documentId, invoices, bills, creditNotes, roleGrants, userOverrides, currentUserId]);
+  }, [
+    documentType, documentId,
+    invoices, invoiceBackend, bills, creditNotes,
+    entries, taxPeriods, movements, inventoryDocuments,
+    subscription, receipts, payments,
+    roleGrants, userOverrides, currentUserId, users,
+  ]);
 }

@@ -10,6 +10,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
 import { AmendMenuItem } from './AmendMenuItem';
+import { AmendmentDrawerHost } from './AmendmentDrawerHost';
 import { AmendmentPolicyPanel } from './AmendmentPolicyPanel';
 import { AmendmentHistoryPanel } from './AmendmentHistoryPanel';
 import { ToastProvider } from '@/components/ui/Toast';
@@ -20,6 +21,7 @@ import { useEntitlementStore } from '@/store/entitlementStore';
 import { useTaxPeriodStore } from '@/store/taxPeriodStore';
 import { useAmendmentAuditStore } from '@/store/amendmentAuditStore';
 import { useAmendmentPolicyStore } from '@/store/amendmentPolicyStore';
+import { useAmendmentDrawerStore } from '@/store/amendmentDrawerStore';
 import { useAuthStore } from '@/store/authStore';
 import { useStore } from '@/store/useStore';
 import { useEntityStore } from '@/store/useEntityStore';
@@ -64,6 +66,7 @@ beforeEach(() => {
   useTaxPeriodStore.getState().resetToDefault();
   useAmendmentAuditStore.getState().resetToDefault();
   useAmendmentPolicyStore.getState().resetToDefault();
+  useAmendmentDrawerStore.getState().close();
   useStore.getState().updateSettings({ logoUrl: '' });
   useAuthStore.setState({ users: [], currentUserId: undefined });
 });
@@ -125,8 +128,18 @@ describe('the Amend posted document action', () => {
 /* ── The drawer ───────────────────────────────────────────────────────────── */
 
 describe('the amendment drawer', () => {
+  /*
+   * The menu item and the page-level drawer host together — which is how a page
+   * mounts them. The item cannot own the drawer: its dropdown unmounts on
+   * click. See `amendmentMenuInteraction.test`.
+   */
   async function open(id: string): Promise<void> {
-    wrap(<AmendMenuItem documentType="invoice" documentId={id} />);
+    wrap(
+      <>
+        <AmendMenuItem documentType="invoice" documentId={id} />
+        <AmendmentDrawerHost />
+      </>,
+    );
     fireEvent.click(screen.getByRole('menuitem', { name: /amend posted document/i }));
     await waitFor(() => expect(screen.getByText(/The original posting stays in the books/i)).toBeTruthy());
   }

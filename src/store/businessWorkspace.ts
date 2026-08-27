@@ -44,6 +44,8 @@ import { useStatementStore } from './statementStore';
 import { useUsageStore } from './usageStore';
 import { useFixedAssetStore } from './fixedAssetStore';
 import { useJournalVoucherStore } from './journalVoucherStore';
+import { useAmendmentPolicyStore } from './amendmentPolicyStore';
+import { useAmendmentAuditStore } from './amendmentAuditStore';
 import {
   clearWorkspaceData,
   getActiveWorkspace,
@@ -108,6 +110,21 @@ export const BUSINESS_WORKSPACE_STORES: WorkspaceStoreEntry[] = [
     clearForTenant: () => useJournalStore.setState({ entries: [] }),
   },
   { key: 'invoices', store: () => useInvoiceStore, reset: () => useInvoiceStore.getState().resetToDefault() },
+  /*
+   * The posted-document amendment stores.
+   *
+   * They belong here for the same reason every other document store does: they
+   * hold the SUBSCRIBER's records — who that organization authorised to amend
+   * its posted documents, and the trail of every amendment attempted against
+   * its books. Left out of this registry they persisted under the right
+   * workspace key but never rehydrated when one was opened, so switching
+   * organizations left the previous tenant's policy and trail sitting in memory
+   * under the next tenant's name. Both have an empty `reset()`, so no
+   * `clearForTenant` is needed — a new tenant starts with no grants and no
+   * history, which is exactly right.
+   */
+  { key: 'amendment-policy', store: () => useAmendmentPolicyStore, reset: () => useAmendmentPolicyStore.getState().resetToDefault() },
+  { key: 'amendment-audit', store: () => useAmendmentAuditStore, reset: () => useAmendmentAuditStore.getState().resetToDefault() },
   { key: 'credit-notes', store: () => useCreditNoteStore, reset: () => useCreditNoteStore.getState().resetToDefault() },
   { key: 'receipts', store: () => useReceiptStore, reset: () => useReceiptStore.getState().resetToDefault() },
   { key: 'bills', store: () => useBillStore, reset: () => useBillStore.getState().resetToDefault() },

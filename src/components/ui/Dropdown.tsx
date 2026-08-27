@@ -239,23 +239,32 @@ export interface MenuItemProps {
   danger?: boolean;
   disabled?: boolean;
   shortcut?: string;
+  /**
+   * Native tooltip. Its reason for existing is a DISABLED item: a control that
+   * refuses has to be able to say why on the control itself, and a pointer user
+   * expects a tooltip to answer that.
+   */
+  title?: string;
 }
 
-export function MenuItem({ icon: Icon, children, onClick, danger, disabled, shortcut }: MenuItemProps) {
+export function MenuItem({ icon: Icon, children, onClick, danger, disabled, shortcut, title }: MenuItemProps) {
   return (
     <button
       type="button"
       role="menuitem"
       disabled={disabled}
       onClick={onClick}
+      title={title}
       className={cn(
-        'focus-ring flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50',
+        // `items-start`, not `items-center`: an item may carry a second line
+        // (a disabled reason), and centring would float the icon against it.
+        'focus-ring flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50',
         danger
           ? 'text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-500/10'
           : 'text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800',
       )}
     >
-      {Icon && <Icon className="h-4 w-4 shrink-0 text-slate-400" />}
+      {Icon && <Icon className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />}
       <span className="flex-1">{children}</span>
       {shortcut && <span className="text-[11px] text-slate-400">{shortcut}</span>}
     </button>

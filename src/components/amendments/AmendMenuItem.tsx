@@ -1,58 +1,56 @@
 /**
- * The `Amend posted document` menu entry, and the drawer it opens.
+ * The `Amend posted document` menu entry.
  *
  * One component rather than a block copied into four screens, so the action's
  * wording, its disabled reasons and the drawer it opens cannot drift apart
  * between Invoices, Bills and Credit Notes.
  *
- * A disabled entry is DRAWN, with the reason, rather than hidden. "Why can I
- * not correct this?" is the question an operator actually has, and a menu that
- * simply omits the action answers it with silence — sending them to void the
- * document instead, which is usually the wrong correction.
+ * ── The reason lives INSIDE the item ─────────────────────────────────────────
+ * It used to be a sibling paragraph after the item. That is how a disabled
+ * action ended up with its explanation somewhere else — and in a menu that
+ * scrolls, sometimes nowhere the reader would look. The reason is part of the
+ * control now: same element, plus a `title` so a pointer gets it as a tooltip
+ * too. An explanation that can be separated from the thing it explains will be.
+ *
+ * ── The drawer is NOT rendered here ──────────────────────────────────────────
+ * It cannot be. This item sits inside a dropdown panel that closes — and
+ * unmounts — on any click within it, so a drawer owned here would be destroyed
+ * by the very click that opened it. The request goes to
+ * `store/amendmentDrawerStore` and the page's `AmendmentDrawerHost` renders it.
  */
-import { useState } from 'react';
 import { FileEdit } from 'lucide-react';
 import type { AmendableDocumentType } from '@/types/documentAmendment';
 import { MenuItem } from '@/components/ui/Dropdown';
+import { useAmendmentDrawerStore } from '@/store/amendmentDrawerStore';
 import { useAmendmentAction } from './useAmendmentAction';
-import { AmendDocumentDrawer } from './AmendDocumentDrawer';
 
 interface Props {
   documentType: AmendableDocumentType;
   documentId: string;
-  onAmended?: (replacementId: string) => void;
 }
 
-export function AmendMenuItem({ documentType, documentId, onAmended }: Props) {
+export function AmendMenuItem({ documentType, documentId }: Props) {
   const action = useAmendmentAction(documentType, documentId);
-  const [open, setOpen] = useState(false);
+  const requestOpen = useAmendmentDrawerStore((s) => s.requestOpen);
 
   if (!action.visible) return null;
 
   return (
-    <>
-      <MenuItem
-        icon={FileEdit}
-        onClick={() => { if (!action.disabled) setOpen(true); }}
-        disabled={action.disabled}
-      >
-        Amend posted document
-      </MenuItem>
-      {action.disabled && action.reason && (
-        <p className="px-2.5 pb-1.5 text-[11px] leading-snug text-amber-600 dark:text-amber-300">
+    <MenuItem
+      icon={FileEdit}
+      disabled={action.disabled}
+      title={action.disabled ? action.reason : undefined}
+      onClick={() => { if (!action.disabled) requestOpen(documentType, documentId); }}
+    >
+      <span className="block">Amend posted document</span>
+      {action.disabled && (
+        <span
+          data-testid="amend-disabled-reason"
+          className="mt-0.5 block whitespace-normal text-[11px] font-normal leading-snug text-amber-600 dark:text-amber-300"
+        >
           {action.reason}
-        </p>
+        </span>
       )}
-      {open && action.assessment && (
-        <AmendDocumentDrawer
-          open
-          documentType={documentType}
-          documentId={documentId}
-          assessment={action.assessment}
-          onClose={() => setOpen(false)}
-          onAmended={onAmended}
-        />
-      )}
-    </>
+    </MenuItem>
   );
 }

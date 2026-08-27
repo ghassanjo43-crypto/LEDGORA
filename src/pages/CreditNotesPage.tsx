@@ -18,6 +18,7 @@ import { PageActions } from '@/components/ui/PageActions';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { useToast } from '@/components/ui/Toast';
 import { AmendMenuItem } from '@/components/amendments/AmendMenuItem';
+import { AmendmentDrawerHost } from '@/components/amendments/AmendmentDrawerHost';
 import { AmendmentHistoryPanel } from '@/components/amendments/AmendmentHistoryPanel';
 import { PrintDocument } from '@/components/ui/PrintDocument';
 import { CreditNoteEditorDrawer } from '@/components/credit-notes/CreditNoteEditorDrawer';
@@ -147,6 +148,9 @@ export function CreditNotesPage() {
           </div>
         </Card>
       )}
+
+      {/* Outside the table: a row's Actions menu unmounts on click. */}
+      <AmendmentDrawerHost />
 
       {editorId && <CreditNoteEditorDrawer open creditNoteId={editorId} onClose={() => setEditorId(null)} onReplace={(newId) => setEditorId(newId)} />}
       {newOpen && <NewCreditNoteDialog onClose={() => setNewOpen(false)} onCreated={(id) => { setNewOpen(false); setEditorId(id); }} />}

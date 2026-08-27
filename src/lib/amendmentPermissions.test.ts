@@ -17,6 +17,7 @@ import {
 } from './amendmentAudit';
 import {
   amendableFields,
+  assessDocumentAmendment,
   diffDocuments,
   pickAmendableFields,
   validateAmendmentReason,
@@ -247,6 +248,63 @@ describe('the original-versus-revised comparison', () => {
     const changes = diffDocuments('invoice', { grandTotal: 1250.0 }, { grandTotal: 1250.01 });
     expect(changes).toHaveLength(1);
     expect(changes[0]!.before).not.toBe(changes[0]!.after);
+  });
+});
+
+/* ── A refusal always says something ──────────────────────────────────────── */
+
+describe('the refusal reason', () => {
+  const impact = {
+    settlement: { grandTotal: 0, amountSettled: 0, balanceDue: 0, transferable: [], blocked: [] },
+    inventory: { documentIds: [], movementCount: 0, reversible: true },
+    tax: {},
+  };
+  const assess = (findings: Parameters<typeof assessDocumentAmendment>[0]['findings']) =>
+    assessDocumentAmendment({
+      documentType: 'invoice', documentId: 'inv_1', documentNumber: 'INV-0001',
+      documentDate: '2026-03-05', version: 1, findings, impact,
+    });
+
+  it('is never blank when the action is refused, even if a blocker forgets its message', () => {
+    const assessment = assess([
+      { kind: 'permission', severity: 'blocks', sourceLabel: 'owner', message: '' },
+    ]);
+    expect(assessment.eligible).toBe(false);
+    expect(assessment.reason.trim().length).toBeGreaterThan(0);
+    /* Specific to the kind, not a shrug. */
+    expect(assessment.reason).toMatch(/permission/i);
+  });
+
+  it('falls back specifically for every blocker kind, and leaks no record data', () => {
+    const kinds = [
+      'not_posted', 'not_current', 'locked_period', 'filed_tax_return', 'external_einvoice',
+      'reconciled_settlement', 'non_transferable_allocation', 'inventory_dependency',
+      'server_backend', 'permission', 'subscription', 'indeterminate',
+    ] as const;
+    for (const kind of kinds) {
+      const assessment = assess([
+        { kind, severity: 'blocks', sourceLabel: 'INV-0001', message: '   ' },
+      ]);
+      const reason = assessment.reason;
+      expect(reason.trim().length, `${kind} must produce a reason`).toBeGreaterThan(0);
+      /* A safe diagnostic names the rule, never the document or the party. */
+      expect(reason, `${kind} must not leak the document number`).not.toContain('INV-0001');
+    }
+  });
+
+  it('keeps a real message when the blocker has one', () => {
+    const assessment = assess([
+      { kind: 'locked_period', severity: 'blocks', sourceLabel: 'Tax period', message: 'March 2026 is locked.' },
+    ]);
+    expect(assessment.reason).toBe('March 2026 is locked.');
+  });
+
+  it('says something usable even for a blocker kind nobody anticipated', () => {
+    const assessment = assess([
+      { kind: 'some_future_rule' as never, severity: 'blocks', sourceLabel: 'x', message: '' },
+    ]);
+    expect(assessment.reason).toMatch(/some_future_rule/);
+    expect(assessment.reason).toMatch(/support/i);
   });
 });
 
