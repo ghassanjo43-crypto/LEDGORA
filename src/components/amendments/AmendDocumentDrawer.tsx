@@ -35,6 +35,8 @@ import { useCreditNoteStore } from '@/store/creditNoteStore';
 import { useEntityStore } from '@/store/useEntityStore';
 import { useJournalStore } from '@/store/journalStore';
 import { calculateInvoiceLine } from '@/lib/invoiceCalculations';
+import { calculateBillTotals } from '@/lib/billCalculations';
+import { calculateCreditNoteTotals } from '@/lib/creditNoteCalculations';
 import { formatCurrency } from '@/lib/money';
 import { generateId } from '@/lib/utils';
 import { Drawer } from '@/components/ui/Drawer';
@@ -194,23 +196,60 @@ function toPatch(type: AmendableDocumentType, record: Record<string, unknown>, d
   return patch;
 }
 
-/** A preview of the revised document, for the comparison step. */
-function preview(record: Record<string, unknown>, patch: Record<string, unknown>): Record<string, unknown> {
+/**
+ * A preview of the revised document, for the comparison step.
+ *
+ * Computed with the SAME calculators each module posts with, per type, rather
+ * than with one of them for all four. The line arithmetic happens to be shared
+ * — `calculateBillLine` and `calculateCreditNoteLine` both delegate to
+ * `calculateInvoiceLine` — but the TOTALS are not: a bill also withholds tax,
+ * and a preview that quietly carried the original's withholding figure forward
+ * would show the operator a comparison that the posting then disagreed with.
+ *
+ * This is a preview only. The authoritative diff — the one recorded in the
+ * audit trail — is taken from the replacement the module actually posted.
+ */
+function preview(
+  type: AmendableDocumentType,
+  record: Record<string, unknown>,
+  patch: Record<string, unknown>,
+): Record<string, unknown> {
   const merged = { ...record, ...patch };
   const lines = Array.isArray(merged.lines) ? (merged.lines as Record<string, unknown>[]) : [];
-  const recalculated = lines.map((l) => {
-    const c = calculateInvoiceLine(l as never);
-    return { ...l, taxAmount: c.taxAmount, lineTotal: c.lineTotal, lineSubtotal: c.taxableAmount };
-  });
-  const subtotal = recalculated.reduce((sum, l) => sum + Number(l.lineSubtotal ?? 0), 0);
-  const taxTotal = recalculated.reduce((sum, l) => sum + Number(l.taxAmount ?? 0), 0);
-  const grandTotal = recalculated.reduce((sum, l) => sum + Number(l.lineTotal ?? 0), 0);
-  if (recalculated.length === 0) {
+
+  if (lines.length === 0) {
     const net = Number(merged.netAmount ?? 0);
     const tax = Number(merged.taxAmount ?? 0);
     return { ...merged, amount: net + tax };
   }
-  return { ...merged, lines: recalculated, subtotal, taxTotal, grandTotal };
+
+  const recalculated = lines.map((l) => {
+    const c = calculateInvoiceLine(l as never);
+    return { ...l, taxAmount: c.taxAmount, lineTotal: c.lineTotal, lineSubtotal: c.taxableAmount };
+  });
+
+  if (type === 'bill') {
+    const totals = calculateBillTotals(recalculated as never);
+    return {
+      ...merged,
+      lines: recalculated,
+      subtotal: totals.subtotal,
+      discountTotal: totals.discountTotal,
+      taxTotal: totals.taxTotal,
+      withholdingTaxTotal: totals.withholdingTaxTotal,
+      grandTotal: totals.grandTotal,
+    };
+  }
+
+  const totals = calculateCreditNoteTotals(recalculated as never);
+  return {
+    ...merged,
+    lines: recalculated,
+    subtotal: totals.subtotal,
+    discountTotal: totals.discountTotal,
+    taxTotal: totals.taxTotal,
+    grandTotal: totals.grandTotal,
+  };
 }
 
 /* ── The drawer ───────────────────────────────────────────────────────────── */
@@ -264,7 +303,7 @@ export function AmendDocumentDrawer({
   const label = DOCUMENT_TYPE_LABELS[documentType];
   const money = (n: number): string => formatCurrency(n, loaded.currency);
   const patch = toPatch(documentType, loaded.record, draft);
-  const revised = preview(loaded.record, patch);
+  const revised = preview(documentType, loaded.record, patch);
   const changes: DocumentFieldChange[] = diffDocuments(
     documentType,
     loaded.record,
