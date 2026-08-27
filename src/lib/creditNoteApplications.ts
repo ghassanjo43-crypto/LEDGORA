@@ -36,7 +36,7 @@ export function computeCustomerCreditSummary(customerId: string, creditNotes: Cr
   let totalIssued = 0;
   for (const cn of creditNotes) {
     if (cn.customerId !== customerId) continue;
-    if (cn.status === 'draft' || cn.status === 'void') continue;
+    if (cn.status === 'draft' || cn.status === 'void' || cn.status === 'superseded') continue;
     availableCredit += calculateRemainingCredit(cn);
     appliedCredit += Number(cn.amountApplied) || 0;
     refundedCredit += Number(cn.amountRefunded) || 0;

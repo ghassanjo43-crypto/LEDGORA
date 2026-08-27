@@ -4,6 +4,7 @@ import type {
   TemplateResolutionSource,
 } from '@/types/invoice';
 import type { CostCenterAssignment } from '@/types/costCenter';
+import type { DocumentAmendmentMeta } from '@/types/documentAmendment';
 
 /**
  * Credit Note domain types. A credit note is a separate, linked accounting
@@ -19,7 +20,9 @@ export type CreditNoteStatus =
   | 'applied'
   | 'partially-applied'
   | 'refunded'
-  | 'void';
+  | 'void'
+  /** Replaced by a later version through the amendment workflow. See `Invoice`. */
+  | 'superseded';
 
 export type CreditType =
   | 'full'
@@ -163,7 +166,7 @@ export interface CreditNoteRefund {
   createdAt: string;
 }
 
-export interface CreditNote {
+export interface CreditNote extends DocumentAmendmentMeta {
   id: string;
   entityId: string;
   customerId: string;

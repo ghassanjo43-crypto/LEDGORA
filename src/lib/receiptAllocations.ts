@@ -16,7 +16,7 @@ export interface EligibleInvoiceFilter {
 export function getEligibleInvoicesForReceipt(invoices: Invoice[], filter: EligibleInvoiceFilter): Invoice[] {
   return invoices
     .filter((i) => i.customerId === filter.customerId && i.entityId === filter.entityId)
-    .filter((i) => i.status !== 'draft' && i.status !== 'void')
+    .filter((i) => i.status !== 'draft' && i.status !== 'void' && i.status !== 'superseded')
     .filter((i) => i.currency === filter.currency)
     .filter((i) => i.balanceDue > 0.005)
     .sort((a, b) => (a.dueDate || a.issueDate).localeCompare(b.dueDate || b.issueDate) || a.issueDate.localeCompare(b.issueDate));

@@ -23,6 +23,13 @@ import {
   type AmendmentAssessment,
 } from '@/lib/journalAmendment';
 import { collectDependencies } from '@/lib/journalDependencies';
+import type { AmendableDocumentType } from '@/types/documentAmendment';
+import { resolveDocumentAmendmentPermission } from '@/lib/amendmentPermissions';
+import { permissionInput, readAmendmentContext } from '@/lib/amendmentContext';
+// Call-time-only in effect: the policy store persists through the same
+// workspace adapter and never reads the journal, so neither touches the other
+// during module evaluation.
+import { currentAmendmentPolicy } from './amendmentPolicyStore';
 import type { JournalAmendmentRecord } from '@/types/journal';
 import { getSubscriptionStatus } from './entitlementHooks';
 import { isPlatformAdminFullAccess, resolveAuditActor } from './platformFullAccess';
@@ -286,6 +293,94 @@ function entryFromForm(values: JournalFormValues, base: EntryBase): JournalEntry
   };
 }
 
+/**
+ * The reversal of a posted entry: the same lines with the sides swapped, dated
+ * with the ORIGINAL and posted immediately.
+ *
+ * Dated with the original deliberately. A reversal that withdraws an effect
+ * belongs in the period the effect was recognised in — put it in today's period
+ * instead and two months' figures both move, neither of them back to what they
+ * should be.
+ *
+ * Posted rather than drafted, equally deliberately. `reverseEntry` produces a
+ * DRAFT for the operator to review, which is right for a reversal somebody
+ * asked for on its own; it is wrong inside a correction that has already been
+ * confirmed, because the withdrawal and the corrected posting must reach the
+ * ledger together or the books show both figures at once.
+ *
+ * Shared by `reverseAndReplace` (journal-level corrections) and
+ * `reverseForSourceDocument` (document-level amendments) so there is exactly
+ * one definition of what reversing an entry means.
+ */
+function buildPostedReversal(
+  existing: JournalEntry,
+  entryNumber: string,
+  reason: string,
+  now: string,
+): JournalEntry {
+  const reversalId = generateId('je');
+  const lines: JournalLine[] = existing.lines.map((line, idx) => ({
+    ...line,
+    id: generateId('jl'),
+    journalEntryId: reversalId,
+    lineNumber: idx + 1,
+    debit: line.credit,
+    credit: line.debit,
+  }));
+  const totals = computeTotals(lines);
+  return {
+    ...existing,
+    id: reversalId,
+    entryNumber,
+    entryDate: existing.entryDate,
+    reference: `REV-${existing.entryNumber}`,
+    description: `Reversal of ${existing.entryNumber}${existing.description ? ` — ${existing.description}` : ''}`,
+    status: 'posted',
+    totalDebit: totals.totalDebit,
+    totalCredit: totals.totalCredit,
+    difference: totals.difference,
+    notes: `Reversal of ${existing.entryNumber}. ${reason}`,
+    reversalReference: existing.entryNumber,
+    lines,
+    createdAt: now,
+    createdBy: auditActor(),
+    updatedAt: now,
+    updatedBy: auditActor(),
+    postedAt: now,
+    postedBy: auditActor(),
+    voidedAt: '',
+    voidedBy: '',
+    originalEntryId: existing.id,
+    reversalEntryId: '',
+    replacementEntryId: '',
+    replacedEntryId: '',
+    version: 1,
+    amendments: [
+      {
+        id: generateId('jam'),
+        version: 1,
+        kind: 'reversed',
+        at: now,
+        actor: auditActor(),
+        reason,
+        changes: [],
+        relatedEntryId: existing.id,
+        relatedEntryNumber: existing.entryNumber,
+      },
+    ],
+  };
+}
+
+/** What a document module must state to withdraw its own posting. */
+export interface SourceDocumentReversalInput {
+  /** Which amendable classification is asking. Decides the permission checked. */
+  sourceDocumentType: AmendableDocumentType;
+  sourceDocumentId: string;
+  sourceDocumentNumber: string;
+  /** The amendment reason, recorded on the reversal and in its history. */
+  reason: string;
+}
+
 interface JournalState {
   entries: JournalEntry[];
 
@@ -321,6 +416,28 @@ interface JournalState {
     values: JournalFormValues,
     options: AmendOptions,
   ) => JournalActionResult & { reversalId?: string; replacementId?: string };
+  /**
+   * Withdraw the posting of a SOURCE DOCUMENT so the document module can post a
+   * corrected replacement — the ledger half of the posted-document amendment
+   * workflow.
+   *
+   * Separate from `reverseAndReplace` because the two are authorised by
+   * different rules and produce different things. `reverseAndReplace` is a
+   * journal-level correction and writes both sides itself; this writes ONLY the
+   * reversal, because the replacement posting belongs to the invoice, bill or
+   * credit note that owns the entry and is produced by that module's own
+   * posting path. Writing it here instead would be a second posting engine for
+   * documents that already have one.
+   *
+   * `journalDependencies` refuses a journal-level correction of an entry a
+   * document owns and says "correct the source document instead". This is where
+   * that redirect ends up, and it is why the `source_document` dependency is
+   * not consulted here: the source document IS the caller.
+   */
+  reverseForSourceDocument: (
+    entryId: string,
+    input: SourceDocumentReversalInput,
+  ) => JournalActionResult;
   deleteEntry: (id: string) => JournalActionResult;
   duplicateEntry: (id: string) => JournalActionResult;
   reverseEntry: (id: string) => JournalActionResult;
@@ -682,60 +799,8 @@ export const useJournalStore = create<JournalState>()(
         const trimmedReason = (options.reason ?? '').trim();
 
         /* ── 1. The reversal: the original's lines with the sides swapped ── */
-        const reversalId = generateId('je');
-        const reversalNumber = nextEntryNumber(entries);
-        const reversalLines: JournalLine[] = existing.lines.map((line, idx) => ({
-          ...line,
-          id: generateId('jl'),
-          journalEntryId: reversalId,
-          lineNumber: idx + 1,
-          debit: line.credit,
-          credit: line.debit,
-        }));
-        const reversalTotals = computeTotals(reversalLines);
-        const reversal: JournalEntry = {
-          ...existing,
-          id: reversalId,
-          entryNumber: reversalNumber,
-          // Dated with the original so the reversal lands in the same period
-          // the effect it withdraws belongs to.
-          entryDate: existing.entryDate,
-          reference: `REV-${existing.entryNumber}`,
-          description: `Reversal of ${existing.entryNumber}${existing.description ? ` — ${existing.description}` : ''}`,
-          status: 'posted',
-          totalDebit: reversalTotals.totalDebit,
-          totalCredit: reversalTotals.totalCredit,
-          difference: reversalTotals.difference,
-          notes: `Reversal of ${existing.entryNumber}. ${trimmedReason}`,
-          reversalReference: existing.entryNumber,
-          lines: reversalLines,
-          createdAt: now,
-          createdBy: auditActor(),
-          updatedAt: now,
-          updatedBy: auditActor(),
-          postedAt: now,
-          postedBy: auditActor(),
-          voidedAt: '',
-          voidedBy: '',
-          originalEntryId: existing.id,
-          reversalEntryId: '',
-          replacementEntryId: '',
-          replacedEntryId: '',
-          version: 1,
-          amendments: [
-            {
-              id: generateId('jam'),
-              version: 1,
-              kind: 'reversed',
-              at: now,
-              actor: auditActor(),
-              reason: trimmedReason,
-              changes: [],
-              relatedEntryId: existing.id,
-              relatedEntryNumber: existing.entryNumber,
-            },
-          ],
-        };
+        const reversal = buildPostedReversal(existing, nextEntryNumber(entries), trimmedReason, now);
+        const reversalId = reversal.id;
 
         /* ── 2. The replacement: the corrected figures ────────────────────── */
         const replacementId = generateId('je');
@@ -808,6 +873,84 @@ export const useJournalStore = create<JournalState>()(
           ],
         });
         return { ok: true, id: replacementId, reversalId, replacementId };
+      },
+
+      reverseForSourceDocument: (entryId, input) => {
+        /*
+         * Authorised by the DOCUMENT permission, not by `journal.reverse`.
+         *
+         * The act being performed is an amendment of an invoice, a bill or a
+         * credit note; the journal reversal is how that amendment reaches the
+         * ledger. Requiring `journal.reverse` here would mean a person the
+         * subscriber deliberately authorised to amend invoices could not
+         * actually do it unless they were also a manager — and requiring
+         * nothing would make this a hole straight through the amendment
+         * permission. Re-resolved HERE rather than trusted from the caller: a
+         * gate that believes whoever calls it is not a gate.
+         */
+        const permitted = resolveDocumentAmendmentPermission(
+          permissionInput(readAmendmentContext(), currentAmendmentPolicy()),
+          input.sourceDocumentType,
+        );
+        if (!permitted.allowed) return { ok: false, error: permitted.error };
+
+        const guard = assertSubscriptionAllowsPosting(getSubscriptionStatus());
+        if (!guard.ok) return { ok: false, error: guard.error };
+
+        const { entries } = get();
+        const existing = entries.find((e) => e.id === entryId);
+        if (!existing) return { ok: false, error: 'Journal entry not found.' };
+        if (existing.status !== 'posted') {
+          return { ok: false, error: 'Only a posted entry can be reversed.' };
+        }
+
+        const reason = validateReason(input.reason);
+        if (!reason.ok) return { ok: false, error: reason.error };
+
+        /*
+         * The period rules still apply, and are read from the same probes every
+         * other write consults. A document amendment is not a way past a locked
+         * period or a filed return; the `source_document` dependency is the one
+         * that does not apply, because it names this very caller.
+         */
+        const assessment = assessAmendment(existing, collectDependencies(existing.id, existing.entryDate));
+        const hardBlock = assessment.blockers.find(
+          (b) => b.kind === 'locked_period' || b.kind === 'filed_tax_return' || b.kind === 'legal_hold',
+        );
+        if (hardBlock) return { ok: false, error: hardBlock.message };
+
+        const now = nowIso();
+        const trimmedReason = input.reason.trim();
+        const reversal = buildPostedReversal(existing, nextEntryNumber(entries), trimmedReason, now);
+        reversal.notes =
+          `Reversal of ${existing.entryNumber} for the amendment of `
+          + `${input.sourceDocumentNumber}. ${trimmedReason}`;
+
+        /* The original's FIGURES are not touched — only its links and history. */
+        const originalWithLinks: JournalEntry = {
+          ...existing,
+          version: entryVersion(existing) + 1,
+          updatedAt: now,
+          updatedBy: auditActor(),
+          reversalEntryId: reversal.id,
+          amendments: [
+            ...ensureHistory(existing),
+            {
+              id: generateId('jam'),
+              version: entryVersion(existing) + 1,
+              kind: 'replaced',
+              at: now,
+              actor: auditActor(),
+              reason: `${input.sourceDocumentNumber} amended. ${trimmedReason}`,
+              changes: [],
+              relatedEntryId: reversal.id,
+              relatedEntryNumber: reversal.entryNumber,
+            },
+          ],
+        };
+
+        set({ entries: [...entries.map((e) => (e.id === entryId ? originalWithLinks : e)), reversal] });
+        return { ok: true, id: reversal.id };
       },
 
       deleteEntry: (id) => {

@@ -7,6 +7,7 @@ import { buildInvoiceSettlementSummary, creditNotesForInvoice, creditNoteApplied
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/Button';
 import { PrintDocument } from '@/components/ui/PrintDocument';
+import { AmendmentHistoryPanel } from '@/components/amendments/AmendmentHistoryPanel';
 import { InvoiceRenderer } from './InvoiceRenderer';
 
 type CopyMode = 'original' | 'current';
@@ -79,6 +80,14 @@ export function InvoicePreviewModal({ invoiceId, onClose, zClass = 'z-50' }: { i
             <Button size="sm" variant="outline" onClick={() => window.print()}><Printer className="h-4 w-4" /> Print / PDF</Button>
             <button onClick={onClose} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800" aria-label="Close"><X className="h-5 w-5" /></button>
           </div>
+        </div>
+        {/*
+          Version history and its postings, above the document itself. An
+          amended invoice is only explainable alongside the original it replaced
+          and the reversal that withdrew it, so the three are shown together.
+        */}
+        <div className="border-b border-slate-200 bg-white px-4 py-3 dark:border-slate-800 dark:bg-slate-900 print:hidden">
+          <AmendmentHistoryPanel documentType="invoice" documentId={invoice.id} currency={invoice.currency} />
         </div>
         <div className="flex-1 overflow-auto p-6">
           <div className="mx-auto shadow-xl"><InvoiceRenderer {...renderProps} /></div>

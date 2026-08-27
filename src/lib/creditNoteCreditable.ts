@@ -10,7 +10,7 @@ import { generateId } from '@/lib/utils';
  * were reversed, so neither reduces what remains creditable.
  */
 export function reducesCreditable(cn: Pick<CreditNote, 'status'>): boolean {
-  return cn.status !== 'draft' && cn.status !== 'void';
+  return cn.status !== 'draft' && cn.status !== 'void' && cn.status !== 'superseded';
 }
 
 function relevantNotes(creditNotes: CreditNote[], invoiceId: string, excludeId?: string): CreditNote[] {

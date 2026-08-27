@@ -179,6 +179,41 @@ describe('role permission resolution', () => {
     expect(admin.allowed('organization_settings', 'manage_organization_settings')).toBe(true);
   });
 
+  it('keeps amending a POSTED document out of every role below Organization Admin', () => {
+    /*
+     * Amending restates a figure that has already been given to a customer, a
+     * supplier or a filed return. It is not part of the bookkeeping group an
+     * Accountant holds, and it is not implied by `edit` — which governs drafts
+     * nobody has relied on. The subscriber grants it deliberately, per role or
+     * per person, through `user_permission_overrides`.
+     */
+    for (const subject of ['invoices', 'bills', 'credit_notes']) {
+      expect(isKnownPermission(subject, 'amend'), `${subject} must offer amend`).toBe(true);
+      for (const role of ['viewer', 'member', 'accountant', 'manager'] as const) {
+        expect(
+          resolve({ role }).allowed(subject, 'amend'),
+          `${role} must not hold ${subject}:amend by default`,
+        ).toBe(false);
+      }
+      for (const role of ['admin', 'owner'] as const) {
+        expect(resolve({ role }).allowed(subject, 'amend')).toBe(true);
+      }
+    }
+    /* And it is not offered where it would mean nothing. */
+    expect(isKnownPermission('trial_balance', 'amend')).toBe(false);
+    expect(isKnownPermission('general_journal', 'amend')).toBe(false);
+  });
+
+  it('lets an explicit override grant amendment to one person, as the subscriber intends', () => {
+    const granted = resolve({ role: 'accountant', overrides: grant('invoices', 'amend') });
+    expect(granted.allowed('invoices', 'amend')).toBe(true);
+    /* One permission, not the set. */
+    expect(granted.allowed('bills', 'amend')).toBe(false);
+
+    const denied = resolve({ role: 'owner', overrides: deny('invoices', 'amend') });
+    expect(denied.allowed('invoices', 'amend')).toBe(false);
+  });
+
   it('keeps the ladder monotone — every role is a superset of the one below', () => {
     // viewer ⊂ member ⊂ accountant ⊂ manager ⊂ admin ⊆ owner.
     // Monotonicity makes "promotion or demotion?" answerable and stops a role

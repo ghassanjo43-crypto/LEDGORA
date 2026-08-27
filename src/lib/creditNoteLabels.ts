@@ -32,4 +32,5 @@ export const CREDIT_NOTE_STATUS_TONE: Record<CreditNoteStatus, BadgeTone> = {
   'partially-applied': 'amber',
   refunded: 'cyan',
   void: 'red',
+  superseded: 'slate',
 };

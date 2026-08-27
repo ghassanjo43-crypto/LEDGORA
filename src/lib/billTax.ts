@@ -19,7 +19,7 @@ export function checkDuplicateSupplierInvoiceNumber(
   if (!number) return { status: 'ok' };
   for (const b of bills) {
     if (b.id === input.excludeBillId) continue;
-    if (b.status === 'draft' || b.status === 'void' || b.status === 'reversed') continue;
+    if (b.status === 'draft' || b.status === 'void' || b.status === 'reversed' || b.status === 'superseded') continue;
     if (b.supplierInvoiceNumber.trim().toLowerCase() !== number) continue;
     if (b.entityId === input.entityId && b.supplierId === input.supplierId) {
       return { status: 'duplicate', billId: b.id, billNumber: b.billNumber };

@@ -586,7 +586,7 @@ export const useInvoiceStore = create<InvoiceState>()(
         const { invoices } = get();
         const existing = invoices.find((i) => i.id === id);
         if (!existing) return { ok: false, error: 'Invoice not found.' };
-        if (existing.status === 'void' || existing.status === 'draft') return { ok: false, error: 'Credit can only be applied to an issued invoice.' };
+        if (existing.status === 'void' || existing.status === 'draft' || existing.status === 'superseded') return { ok: false, error: 'Credit can only be applied to an issued invoice.' };
         const amt = roundToCompanyPrecision(Number(amount) || 0);
         if (amt <= 0) return { ok: false, error: 'Credit amount must be positive.' };
         if (amt > existing.balanceDue + 0.005) return { ok: false, error: 'Credit exceeds the invoice balance due.' };
@@ -620,7 +620,7 @@ export const useInvoiceStore = create<InvoiceState>()(
         const { invoices } = get();
         const existing = invoices.find((i) => i.id === id);
         if (!existing) return { ok: false, error: 'Invoice not found.' };
-        if (existing.status === 'void' || existing.status === 'draft') return { ok: false, error: 'Receipts can only be allocated to an issued invoice.' };
+        if (existing.status === 'void' || existing.status === 'draft' || existing.status === 'superseded') return { ok: false, error: 'Receipts can only be allocated to an issued invoice.' };
         const amt = roundToCompanyPrecision(Number(input.amount) || 0);
         if (amt <= 0) return { ok: false, error: 'Allocation amount must be positive.' };
         if (amt > existing.balanceDue + 0.005) return { ok: false, error: 'Allocation exceeds the invoice balance due.' };

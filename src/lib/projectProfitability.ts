@@ -107,11 +107,11 @@ function glRevenueAndCost(entries: JournalEntry[], accountsById: Map<string, Acc
 function billedRevenue(projectId: string, invoices: Invoice[], creditNotes: CreditNote[]): number {
   let billed = 0;
   for (const inv of invoices) {
-    if (inv.status === 'draft' || inv.status === 'void') continue;
+    if (inv.status === 'draft' || inv.status === 'void' || inv.status === 'superseded') continue;
     for (const line of inv.lines) if (line.projectId === projectId) billed += calculateInvoiceLine(line).taxableAmount;
   }
   for (const cn of creditNotes) {
-    if (cn.status === 'draft' || cn.status === 'void') continue;
+    if (cn.status === 'draft' || cn.status === 'void' || cn.status === 'superseded') continue;
     for (const line of cn.lines) if (line.projectId === projectId) billed -= calculateCreditNoteLine(line).taxableAmount;
   }
   return roundMoney(billed);
@@ -120,13 +120,13 @@ function billedRevenue(projectId: string, invoices: Invoice[], creditNotes: Cred
 function outstandingBalances(projectId: string, invoices: Invoice[], bills: Bill[]): { receivable: number; payable: number } {
   let receivable = 0;
   for (const inv of invoices) {
-    if (inv.status === 'draft' || inv.status === 'void') continue;
+    if (inv.status === 'draft' || inv.status === 'void' || inv.status === 'superseded') continue;
     const share = invoiceProjectShare(inv, projectId);
     if (share > 0) receivable += (Number(inv.balanceDue) || 0) * share;
   }
   let payable = 0;
   for (const bill of bills) {
-    if (bill.status === 'draft' || bill.status === 'void' || bill.status === 'reversed') continue;
+    if (bill.status === 'draft' || bill.status === 'void' || bill.status === 'reversed' || bill.status === 'superseded') continue;
     const share = billProjectShare(bill, projectId);
     if (share > 0) payable += (Number(bill.balanceDue) || 0) * share;
   }

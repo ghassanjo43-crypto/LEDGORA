@@ -84,7 +84,14 @@ describe('vertical bill entry', () => {
     fireEvent.click(within(row).getByText('Actions'));
     expect(within(menu()).queryByText('Edit')).toBeNull();
     fireEvent.click(within(menu()).getByText('View'));
-    expect(screen.getByText(/Posted bills cannot be edited because they have affected the ledger/i)).toBeTruthy();
+    /*
+     * The guidance changed with the posted-document amendment workflow: a
+     * posted bill is still not editable in place, but the answer is no longer
+     * "reverse it and start again" — it is the controlled amendment, which
+     * keeps the original bill, its number and its journal entry.
+     */
+    expect(screen.getByText(/Posted bills cannot be edited directly/i)).toBeTruthy();
+    expect(screen.getByText(/Amend posted document/i)).toBeTruthy();
   });
 
   it('keeps manual lines, calculated totals, and receive-to-stock guidance visible', () => {

@@ -44,6 +44,7 @@ import { Alert } from '@/components/ui/Alert';
 import { MetricCard } from '@/components/ui/MetricCard';
 import { Users, UserPlus, ShieldCheck } from 'lucide-react';
 import { useDemoActionGuard } from '@/components/onboarding/FreeDemoNotices';
+import { AmendmentPolicyPanel } from '@/components/amendments/AmendmentPolicyPanel';
 
 const ROLE_OPTIONS = [
   { value: 'admin', label: 'Admin' },
@@ -486,6 +487,14 @@ function MemberRoster({
         </table>
       </Card>
       )}
+
+      {/*
+        Who may amend a POSTED document. Beside the member list rather than
+        buried in Settings, because it is a decision about people: the question
+        "who can restate an invoice we have already sent?" belongs next to the
+        list of who those people are.
+      */}
+      {mode === 'subscriber' && <AmendmentPolicyPanel />}
 
       <p className="text-xs text-slate-400">
         Roles: <b>Owner</b> has full control and billing. <b>Admin</b> manages members and settings. <b>Member</b> uses

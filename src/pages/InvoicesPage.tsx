@@ -25,14 +25,15 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { useToast } from '@/components/ui/Toast';
 import { InvoiceEditorDrawer } from '@/components/invoices/InvoiceEditorDrawer';
 import { InvoicePreviewModal } from '@/components/invoices/InvoicePreviewModal';
+import { AmendMenuItem } from '@/components/amendments/AmendMenuItem';
 
 const STATUS_TONE: Record<InvoiceStatus, BadgeTone> = {
-  draft: 'slate', approved: 'indigo', issued: 'blue', sent: 'cyan', 'partially-paid': 'amber', paid: 'green', void: 'red',
+  draft: 'slate', approved: 'indigo', issued: 'blue', sent: 'cyan', 'partially-paid': 'amber', paid: 'green', void: 'red', superseded: 'slate',
 };
 
 function today(): string { return new Date().toISOString().slice(0, 10); }
 function isOverdue(inv: Invoice): boolean {
-  return inv.dueDate < today() && inv.balanceDue > 0.005 && inv.status !== 'paid' && inv.status !== 'void' && inv.status !== 'draft';
+  return inv.dueDate < today() && inv.balanceDue > 0.005 && inv.status !== 'paid' && inv.status !== 'void' && inv.status !== 'draft' && inv.status !== 'superseded';
 }
 
 export function InvoicesPage() {
@@ -92,7 +93,7 @@ export function InvoicesPage() {
   }, [invoices, customerFilter, statusFilter, overdueOnly, unpaidOnly, search, entities]);
 
   const customerOptions = [{ value: '', label: 'All customers' }, ...entities.filter((e) => e.entityType === 'customer' || e.entityType === 'both').map((e) => ({ value: e.id, label: e.legalName }))];
-  const statusOptions = [{ value: 'ALL', label: 'All statuses' }, ...(['draft', 'issued', 'sent', 'partially-paid', 'paid', 'void'] as const).map((s) => ({ value: s, label: s }))];
+  const statusOptions = [{ value: 'ALL', label: 'All statuses' }, ...(['draft', 'issued', 'sent', 'partially-paid', 'paid', 'superseded', 'void'] as const).map((s) => ({ value: s, label: s }))];
 
   const onNew = async (): Promise<void> => {
     const res = await createDraft({ customerId: customerFilter || undefined, issueDate: today(), dueDate: today() });
@@ -215,7 +216,8 @@ export function InvoicesPage() {
                           {canCredit(inv) && <MenuItem onClick={() => onCreateCreditNote(inv.id)}><ReceiptText className="h-4 w-4" /> Create credit note</MenuItem>}
                           {inv.customerId && <MenuItem onClick={() => onViewStatement(inv.customerId)}><ScrollText className="h-4 w-4" /> View customer statement</MenuItem>}
                           <MenuItem onClick={() => act(() => store.duplicateInvoice(inv.id), 'Invoice duplicated.')}><Copy className="h-4 w-4" /> Duplicate</MenuItem>
-                          {inv.journalEntryId && inv.status !== 'void' && <MenuItem onClick={() => setVoidId(inv.id)}><Ban className="h-4 w-4" /> Void</MenuItem>}
+                          <AmendMenuItem documentType="invoice" documentId={inv.id} />
+                          {inv.journalEntryId && inv.status !== 'void' && inv.status !== 'superseded' && <MenuItem onClick={() => setVoidId(inv.id)}><Ban className="h-4 w-4" /> Void</MenuItem>}
                           {inv.status === 'draft' && <MenuItem onClick={() => act(() => store.deleteDraft(inv.id), 'Draft deleted.')}><Trash2 className="h-4 w-4" /> Delete draft</MenuItem>}
                         </Dropdown>
                       </td>

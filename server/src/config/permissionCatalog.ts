@@ -50,6 +50,17 @@ export const PERMISSION_ACTIONS = [
   'submit',
   'post',
   'unpost',
+  /**
+   * Amend a POSTED document, through the controlled reversal-and-reposting
+   * workflow — never by overwriting it.
+   *
+   * Deliberately its own action rather than a wider reading of `edit`. Editing
+   * is what happens to a draft nobody has relied on; amending restates a figure
+   * a customer, a supplier or a filed return may already have been given, and
+   * conflating the two would hand that authority to everyone who can type into
+   * a draft.
+   */
+  'amend',
   'export',
   'manage_users',
   'manage_subscriptions',
@@ -68,6 +79,7 @@ export const ACTION_LABELS: Record<PermissionAction, string> = {
   submit: 'Submit',
   post: 'Post',
   unpost: 'Unpost',
+  amend: 'Amend posted',
   export: 'Export',
   manage_users: 'Manage users',
   manage_subscriptions: 'Manage subscriptions',
@@ -85,6 +97,16 @@ const AUTHOR: PermissionAction[] = ['create', 'edit', 'submit'];
  * a document are bookkeeping authority, deliberately separate from authoring.
  */
 const BOOKKEEPING: PermissionAction[] = ['delete', 'void', 'post', 'unpost'];
+/**
+ * Restating a posted document. Deliberately NOT part of `BOOKKEEPING`.
+ *
+ * An Accountant posts, unposts and voids as daily work; none of those changes
+ * what a document that has already gone out SAYS. An amendment does — it
+ * reverses the posting and issues a corrected replacement — so it defaults to
+ * the two roles that hold everything, and the subscriber grants it to anyone
+ * else deliberately, per person or per role, through `user_permission_overrides`.
+ */
+const AMENDMENT: PermissionAction[] = ['amend'];
 
 /* ── Subjects ─────────────────────────────────────────────────────────────── */
 
@@ -244,7 +266,7 @@ export const PERMISSION_SUBJECTS: PermissionSubject[] = [
     group: 'Sales & purchases',
     scope: 'organization',
     requiredModule: 'invoicing',
-    actions: [...READ, ...AUTHOR, ...BOOKKEEPING, 'approve'],
+    actions: [...READ, ...AUTHOR, ...BOOKKEEPING, ...AMENDMENT, 'approve'],
     description: 'Sales invoices, from draft to posted.',
   },
   {
@@ -253,7 +275,7 @@ export const PERMISSION_SUBJECTS: PermissionSubject[] = [
     group: 'Sales & purchases',
     scope: 'organization',
     requiredModule: 'invoicing',
-    actions: [...READ, ...AUTHOR, ...BOOKKEEPING, 'approve'],
+    actions: [...READ, ...AUTHOR, ...BOOKKEEPING, ...AMENDMENT, 'approve'],
     description: 'Customer credit notes and their applications.',
   },
   {
@@ -262,7 +284,7 @@ export const PERMISSION_SUBJECTS: PermissionSubject[] = [
     group: 'Sales & purchases',
     scope: 'organization',
     requiredModule: 'invoicing',
-    actions: [...READ, ...AUTHOR, ...BOOKKEEPING, 'approve'],
+    actions: [...READ, ...AUTHOR, ...BOOKKEEPING, ...AMENDMENT, 'approve'],
     description: 'Supplier bills, from draft to posted.',
   },
   {

@@ -221,7 +221,7 @@ export const useReceiptStore = create<ReceiptState>()(
       createReceiptForInvoice: (invoiceId) => {
         const invoice = useInvoiceStore.getState().getInvoice(invoiceId);
         if (!invoice) return { ok: false, error: 'Invoice not found.' };
-        if (invoice.status === 'draft' || invoice.status === 'void') return { ok: false, error: 'Only an issued invoice can receive a receipt.' };
+        if (invoice.status === 'draft' || invoice.status === 'void' || invoice.status === 'superseded') return { ok: false, error: 'Only an issued invoice can receive a receipt.' };
         if (invoice.balanceDue <= 0.005) return { ok: false, error: 'This invoice is already fully settled.' };
 
         const created = get().createDraft({ receiptType: 'customer-payment', customerId: invoice.customerId, currency: invoice.currency, amount: invoice.balanceDue });

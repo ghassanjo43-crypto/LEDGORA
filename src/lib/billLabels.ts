@@ -19,6 +19,8 @@ export const BILL_STATUS_TONE: Record<BillStatus, BadgeTone> = {
   paid: 'green',
   void: 'red',
   reversed: 'red',
+  /* Superseded is history, not a failure: it reads as neutral, not as an alarm. */
+  superseded: 'slate',
 };
 
 export const BILL_PAYMENT_METHOD_LABELS: Record<BillPaymentMethod, string> = {

@@ -25,7 +25,8 @@ export function customerReceivableAccountId(customer: BusinessEntity | undefined
   return customer?.defaultReceivableAccount || accounts.find((a) => a.code === '1221')?.id || '';
 }
 
-const ISSUED_INVOICE = (i: Invoice): boolean => i.status !== 'draft' && i.status !== 'void';
+const ISSUED_INVOICE = (i: Invoice): boolean =>
+  i.status !== 'draft' && i.status !== 'void' && i.status !== 'superseded';
 const APPLIED_CREDIT = (c: CreditNote): boolean => c.status === 'issued' || c.status === 'applied' || c.status === 'partially-applied';
 const POSTED_RECEIPT = (r: Receipt): boolean => r.status === 'posted' || r.status === 'partially-allocated' || r.status === 'fully-allocated';
 const RECEIVABLE_RECEIPT = (r: Receipt): boolean => r.receiptType === 'customer-payment' || r.receiptType === 'unapplied-customer-receipt';

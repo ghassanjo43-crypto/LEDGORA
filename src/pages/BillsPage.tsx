@@ -23,6 +23,9 @@ import { BillEditorDrawer } from '@/components/bills/BillEditorDrawer';
 import { BillRenderer } from '@/components/bills/BillRenderer';
 import { BillSupplierCreditDialog } from '@/components/bills/BillSupplierCreditDialog';
 import { BillReverseDialog } from '@/components/bills/BillReverseDialog';
+import { AmendMenuItem } from '@/components/amendments/AmendMenuItem';
+import { SupplierDebitNotesPanel } from '@/components/amendments/SupplierDebitNotesPanel';
+import { AmendmentHistoryPanel } from '@/components/amendments/AmendmentHistoryPanel';
 import { PrintDocument } from '@/components/ui/PrintDocument';
 import { useAuthStore } from '@/store/authStore';
 import { roleCanEditBills, roleCanTransitionBills } from '@/lib/transactionDocumentPermissions';
@@ -30,7 +33,7 @@ import { isPlatformAdminFullAccess } from '@/store/platformFullAccess';
 
 function today(): string { return new Date().toISOString().slice(0, 10); }
 function isOverdue(b: { dueDate: string; balanceDue: number; status: BillStatus }): boolean {
-  return b.dueDate < today() && b.balanceDue > 0.005 && b.status !== 'paid' && b.status !== 'void' && b.status !== 'reversed' && b.status !== 'draft';
+  return b.dueDate < today() && b.balanceDue > 0.005 && b.status !== 'paid' && b.status !== 'void' && b.status !== 'reversed' && b.status !== 'draft' && b.status !== 'superseded';
 }
 
 export function BillsPage() {
@@ -78,7 +81,7 @@ export function BillsPage() {
   }, [bills, supplierFilter, statusFilter, typeFilter, overdueOnly, search, entities]);
 
   const supplierOptions = [{ value: '', label: 'All suppliers' }, ...entities.filter((e) => e.entityType === 'supplier' || e.entityType === 'both').map((e) => ({ value: e.id, label: e.legalName }))];
-  const statusOptions = [{ value: 'ALL', label: 'All statuses' }, ...(['draft', 'submitted', 'approved', 'posted', 'partially-paid', 'paid', 'reversed'] as const).map((s) => ({ value: s, label: s }))];
+  const statusOptions = [{ value: 'ALL', label: 'All statuses' }, ...(['draft', 'submitted', 'approved', 'posted', 'partially-paid', 'paid', 'superseded', 'reversed'] as const).map((s) => ({ value: s, label: s }))];
   const typeOptions = [{ value: 'ALL', label: 'All types' }, ...(Object.keys(BILL_TYPE_LABELS) as BillType[]).map((t) => ({ value: t, label: BILL_TYPE_LABELS[t] }))];
 
   const onNew = (): void => { const res = createDraft({ supplierId: supplierFilter || undefined }); if (res.ok && res.id) setEditorId(res.id); };
@@ -148,7 +151,8 @@ export function BillsPage() {
                       {['posted', 'partially-paid'].includes(b.status) && <MenuItem onClick={() => onRecordPayment(b.id)}><Banknote className="h-4 w-4" /> Record payment</MenuItem>}
                       {['posted', 'partially-paid'].includes(b.status) && <MenuItem onClick={() => setCreditId(b.id)}><ReceiptText className="h-4 w-4" /> Create supplier credit</MenuItem>}
                       <MenuItem onClick={() => act(() => store.duplicateBill(b.id), 'Bill duplicated.')}><Copy className="h-4 w-4" /> Duplicate</MenuItem>
-                      {b.journalEntryId && b.status !== 'reversed' && <MenuItem onClick={() => setReverseId(b.id)}><Ban className="h-4 w-4" /> Reverse</MenuItem>}
+                      <AmendMenuItem documentType="bill" documentId={b.id} />
+                      {b.journalEntryId && b.status !== 'reversed' && b.status !== 'superseded' && <MenuItem onClick={() => setReverseId(b.id)}><Ban className="h-4 w-4" /> Reverse</MenuItem>}
                       {b.status === 'draft' && <MenuItem onClick={() => act(() => store.deleteDraft(b.id), 'Draft deleted.')}><Trash2 className="h-4 w-4" /> Delete draft</MenuItem>}
                     </Dropdown>
                   </td>
@@ -164,8 +168,12 @@ export function BillsPage() {
       {previewId && previewBill && previewSnap && (
         <>
           <div className="fixed inset-0 z-50 flex flex-col bg-slate-900/50 backdrop-blur-sm">
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-white px-4 py-2 dark:border-slate-800 dark:bg-slate-900"><div className="text-sm font-medium">{previewSnap.templateName} · <Badge tone={BILL_STATUS_TONE[previewBill.status]}>{previewBill.status}</Badge></div><div className="flex flex-wrap items-center gap-2">{previewBill.status === 'draft' && canEdit && <Button size="sm" variant="outline" onClick={() => { setPreviewId(null); setEditorId(previewBill.id); }}><Pencil className="h-4 w-4" /> Edit</Button>}{previewBill.status === 'submitted' && canTransition && <Button size="sm" variant="outline" onClick={() => returnToDraft(previewBill.id, false)}>Recall submission</Button>}{previewBill.status === 'approved' && canTransition && <Button size="sm" variant="outline" onClick={() => returnToDraft(previewBill.id, true)}>Reopen as draft</Button>}{['posted', 'partially-paid'].includes(previewBill.status) && <Button size="sm" variant="outline" onClick={() => onRecordPayment(previewBill.id)}><Banknote className="h-4 w-4" /> Record payment</Button>}{['posted', 'partially-paid'].includes(previewBill.status) && <Button size="sm" variant="outline" onClick={() => setCreditId(previewBill.id)}><ReceiptText className="h-4 w-4" /> Supplier credit</Button>}{previewBill.journalEntryId && previewBill.status !== 'reversed' && <Button size="sm" variant="outline" onClick={() => setReverseId(previewBill.id)}><Ban className="h-4 w-4" /> Reverse</Button>}<Button size="sm" variant="outline" onClick={() => window.print()}><Printer className="h-4 w-4" /> Print / PDF</Button><button onClick={() => setPreviewId(null)} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800" aria-label="Close"><X className="h-5 w-5" /></button></div></div>
-            {['posted', 'partially-paid', 'paid', 'reversed', 'void'].includes(previewBill.status) && <div role="note" className="border-b border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">Posted bills cannot be edited because they have affected the ledger. Reverse or void this bill and create a corrected bill.</div>}
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-white px-4 py-2 dark:border-slate-800 dark:bg-slate-900"><div className="text-sm font-medium">{previewSnap.templateName} · <Badge tone={BILL_STATUS_TONE[previewBill.status]}>{previewBill.status}</Badge></div><div className="flex flex-wrap items-center gap-2">{previewBill.status === 'draft' && canEdit && <Button size="sm" variant="outline" onClick={() => { setPreviewId(null); setEditorId(previewBill.id); }}><Pencil className="h-4 w-4" /> Edit</Button>}{previewBill.status === 'submitted' && canTransition && <Button size="sm" variant="outline" onClick={() => returnToDraft(previewBill.id, false)}>Recall submission</Button>}{previewBill.status === 'approved' && canTransition && <Button size="sm" variant="outline" onClick={() => returnToDraft(previewBill.id, true)}>Reopen as draft</Button>}{['posted', 'partially-paid'].includes(previewBill.status) && <Button size="sm" variant="outline" onClick={() => onRecordPayment(previewBill.id)}><Banknote className="h-4 w-4" /> Record payment</Button>}{['posted', 'partially-paid'].includes(previewBill.status) && <Button size="sm" variant="outline" onClick={() => setCreditId(previewBill.id)}><ReceiptText className="h-4 w-4" /> Supplier credit</Button>}{previewBill.journalEntryId && previewBill.status !== 'reversed' && previewBill.status !== 'superseded' && <Button size="sm" variant="outline" onClick={() => setReverseId(previewBill.id)}><Ban className="h-4 w-4" /> Reverse</Button>}<Button size="sm" variant="outline" onClick={() => window.print()}><Printer className="h-4 w-4" /> Print / PDF</Button><button onClick={() => setPreviewId(null)} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800" aria-label="Close"><X className="h-5 w-5" /></button></div></div>
+            {['posted', 'partially-paid', 'paid', 'reversed', 'void'].includes(previewBill.status) && <div role="note" className="border-b border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">Posted bills cannot be edited directly because they have affected the ledger. Use <strong>Amend posted document</strong> to reverse this bill and post a corrected replacement — the original bill, its number and its journal entry are all kept.</div>}
+            <div className="space-y-3 border-b border-slate-200 bg-white px-4 py-3 dark:border-slate-800 dark:bg-slate-900 print:hidden">
+              <SupplierDebitNotesPanel bill={previewBill} />
+              <AmendmentHistoryPanel documentType="bill" documentId={previewBill.id} currency={previewBill.currency} />
+            </div>
             <div className="flex-1 overflow-auto p-6"><div className="mx-auto shadow-xl"><BillRenderer bill={previewBill} snapshot={previewSnap} supplierName={supplierName(previewBill.supplierId)} supplierAddress={[previewSupplier?.addressLine1, previewSupplier?.city, previewSupplier?.country].filter(Boolean).join(', ')} supplierTaxNumber={previewSupplier?.taxRegistrationNumber} /></div></div>
           </div>
           <PrintDocument><BillRenderer bill={previewBill} snapshot={previewSnap} supplierName={supplierName(previewBill.supplierId)} supplierAddress={[previewSupplier?.addressLine1, previewSupplier?.city, previewSupplier?.country].filter(Boolean).join(', ')} supplierTaxNumber={previewSupplier?.taxRegistrationNumber} /></PrintDocument>

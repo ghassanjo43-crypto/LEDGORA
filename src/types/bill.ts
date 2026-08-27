@@ -1,5 +1,6 @@
 import type { InvoiceNumberingConfig, InvoiceTemplateSnapshot, TemplateResolutionSource } from '@/types/invoice';
 import type { CostCenterAssignment } from '@/types/costCenter';
+import type { DocumentAmendmentMeta } from '@/types/documentAmendment';
 
 /**
  * Bills (supplier invoices / accounts payable). Mirrors the invoice module on the
@@ -15,7 +16,9 @@ export type BillStatus =
   | 'partially-paid'
   | 'paid'
   | 'void'
-  | 'reversed';
+  | 'reversed'
+  /** Replaced by a later version through the amendment workflow. See `Invoice`. */
+  | 'superseded';
 
 export type BillType = 'goods' | 'services' | 'expense' | 'asset-purchase' | 'inventory-purchase' | 'other';
 
@@ -96,7 +99,7 @@ export interface BillPayment {
 }
 
 /** A supplier credit applied to a bill (Dr trade payables / Cr expense + input tax). */
-export interface BillSupplierCredit {
+export interface BillSupplierCredit extends DocumentAmendmentMeta {
   id: string;
   billId: string;
   supplierId: string;
@@ -121,7 +124,7 @@ export interface BillAttachment {
   uploadedAt: string;
 }
 
-export interface Bill {
+export interface Bill extends DocumentAmendmentMeta {
   id: string;
   /** Monotonic optimistic-concurrency token. Legacy persisted bills default to 0. */
   revision?: number;

@@ -96,7 +96,7 @@ export function validateReceiptForPosting(receipt: Receipt, ctx: ReceiptPostingC
     if (!a.invoiceId) continue;
     const inv = ctx.invoicesById.get(a.invoiceId);
     if (!inv) { err('allocation-invoice', 'An allocated invoice no longer exists.', a.id); continue; }
-    if (inv.status === 'draft' || inv.status === 'void') err('allocation-invoice-status', `Cannot allocate to ${inv.invoiceNumber} — it is ${inv.status}.`, a.id);
+    if (inv.status === 'draft' || inv.status === 'void' || inv.status === 'superseded') err('allocation-invoice-status', `Cannot allocate to ${inv.invoiceNumber} — it is ${inv.status}.`, a.id);
     if (inv.customerId !== receipt.customerId) err('allocation-customer', `Invoice ${inv.invoiceNumber} belongs to a different customer.`, a.id);
     if (inv.entityId !== receipt.entityId) err('allocation-entity', `Invoice ${inv.invoiceNumber} belongs to a different entity.`, a.id);
     if (inv.currency !== receipt.currency) err('allocation-currency', `Invoice ${inv.invoiceNumber} is in a different currency (FX allocation is not supported).`, a.id);

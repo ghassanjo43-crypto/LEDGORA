@@ -114,7 +114,7 @@ export function validatePaymentForPosting(payment: Payment, ctx: PaymentPostingV
     const bill = ctx.billsById.get(a.billId);
     if (!bill) { err('allocation-bill', 'An allocated bill no longer exists.', a.id); continue; }
     if (!SUPPLIER_TYPES.includes(payment.paymentType)) err('allocation-type', 'Only supplier payments can allocate to bills.', a.id);
-    if (bill.status === 'draft' || bill.status === 'submitted' || bill.status === 'void' || bill.status === 'reversed') err('allocation-bill-status', `Cannot allocate to ${bill.billNumber} — it is ${bill.status}.`, a.id);
+    if (bill.status === 'draft' || bill.status === 'submitted' || bill.status === 'void' || bill.status === 'reversed' || bill.status === 'superseded') err('allocation-bill-status', `Cannot allocate to ${bill.billNumber} — it is ${bill.status}.`, a.id);
     if (bill.supplierId !== payment.supplierId) err('allocation-supplier', `Bill ${bill.billNumber} belongs to a different supplier.`, a.id);
     if (bill.entityId !== payment.entityId) err('allocation-entity', `Bill ${bill.billNumber} belongs to a different entity.`, a.id);
     if (bill.currency !== payment.currency) err('allocation-currency', `Bill ${bill.billNumber} is in a different currency (FX allocation is not supported).`, a.id);

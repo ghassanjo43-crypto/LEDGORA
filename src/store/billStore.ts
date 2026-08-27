@@ -29,6 +29,9 @@ import { useInventoryStore, inventoryEnabled } from '@/store/inventoryStore';
 import { generateId, nowIso } from '@/lib/utils';
 import type { OrganizationRole } from '@/types/roles';
 import { assertTransactionDocumentPermission } from '@/lib/transactionDocumentPermissions';
+import { resolveDocumentAmendmentPermission, type AmendmentPermissionResult } from '@/lib/amendmentPermissions';
+import { permissionInput, readAmendmentContext } from '@/lib/amendmentContext';
+import { currentAmendmentPolicy } from './amendmentPolicyStore';
 import { getCurrentUser } from '@/store/authStore';
 import { isPlatformAdminFullAccess } from '@/store/platformFullAccess';
 import { useStore } from './useStore';
@@ -44,6 +47,11 @@ import {
   transactionCurrencyCode,
 } from '@/lib/transactionCurrency';
 import { roundToCompanyPrecision } from '@/lib/monetaryPrecision';
+
+/** A permission verdict in the shape every store action returns. */
+function toActionResult(result: AmendmentPermissionResult): { ok: boolean; error?: string } {
+  return result.allowed ? { ok: true } : { ok: false, error: result.error };
+}
 
 const ACTOR = 'Finance Manager';
 
@@ -246,10 +254,28 @@ export const useBillStore = create<BillState>()(
         const { bills } = get();
         const existing = bills.find((b) => b.id === id);
         if (!existing) return { ok: false, error: 'Bill not found.' };
-        const permitted = assertTransactionDocumentPermission(currentRole(), 'bill.edit');
+        /*
+         * Ordinarily `bill.edit`. The exception is the draft REPLACEMENT an
+         * amendment is building: that draft is recognisable by the
+         * `amendsDocumentId` the amendment service stamps on it, and the
+         * authority for it is the amendment permission the subscriber granted,
+         * not the ordinary bill-editing one.
+         *
+         * Without this a subscriber could grant `bills:amend` to a person and
+         * the amendment would still fail halfway, because the replacement draft
+         * could not be filled in. Checking the amendment permission rather than
+         * simply waiving the rule keeps it a gate: an unauthorised caller who
+         * stamps `amendsDocumentId` on a draft gains nothing.
+         */
+        const permitted = existing.amendsDocumentId
+          ? toActionResult(resolveDocumentAmendmentPermission(
+            permissionInput(readAmendmentContext(), currentAmendmentPolicy()),
+            'bill',
+          ))
+          : assertTransactionDocumentPermission(currentRole(), 'bill.edit');
         if (!permitted.ok) return { ok: false, error: permitted.error };
         if (existing.entityId !== INVOICE_ENTITY_ID) return { ok: false, error: 'Bill not found in the current entity.' };
-        if (existing.status !== 'draft') return { ok: false, error: existing.status === 'posted' || existing.journalEntryId ? 'Posted bills cannot be edited because they have affected the ledger. Reverse or void this bill and create a corrected bill.' : 'Return this bill to draft before editing it.' };
+        if (existing.status !== 'draft') return { ok: false, error: existing.status === 'posted' || existing.journalEntryId ? 'A posted bill cannot be overwritten because it has affected the ledger. Use “Amend posted document” to reverse it and post a corrected replacement — the original bill, its number and its journal entry are all kept.' : 'Return this bill to draft before editing it.' };
         if (existing.journalEntryId || existing.goodsReceiptId || existing.payments.length > 0 || existing.amountPaid > 0 || existing.supplierCreditsApplied > 0) return { ok: false, error: 'This bill has accounting, inventory, credit or payment activity and cannot be edited directly.' };
         if (opts?.expectedRevision !== undefined && opts.expectedRevision !== billRevision(existing)) return { ok: false, error: 'This bill was changed in another session. Reload it before saving.' };
         const allowed = ['supplierId', 'supplierInvoiceNumber', 'billType', 'billDate', 'dueDate', 'purchaseOrderId', 'notes', 'lines'] as const;

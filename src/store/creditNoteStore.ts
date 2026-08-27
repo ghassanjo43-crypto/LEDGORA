@@ -279,7 +279,7 @@ export const useCreditNoteStore = create<CreditNoteState>()(
         // Creditable context (excluding this note so its own draft value is not double-counted).
         const requiresOriginalInvoice = cn.creditType !== 'general-credit';
         const summary = invoice ? calculateInvoiceCreditSummary(invoice, creditNotes, cn.id) : { availableToCredit: Infinity, originalTotal: 0, previouslyCredited: 0 };
-        const otherNotes = invoice ? creditNotes.filter((c) => c.originalInvoiceId === invoice.id && c.id !== cn.id && c.status !== 'draft' && c.status !== 'void') : [];
+        const otherNotes = invoice ? creditNotes.filter((c) => c.originalInvoiceId === invoice.id && c.id !== cn.id && c.status !== 'draft' && c.status !== 'void' && c.status !== 'superseded') : [];
         const remainingTax = invoice ? Math.max(0, roundToCompanyPrecision(invoice.taxTotal - otherNotes.reduce((s, c) => s + c.taxTotal, 0))) : Infinity;
         const remainingQuantityByInvoiceLine = new Map<string, number>();
         if (invoice) {
@@ -292,7 +292,7 @@ export const useCreditNoteStore = create<CreditNoteState>()(
           templateVersionPublished: version?.status === 'published' || !!inheritSnapshot,
           hasReceivableAccount: !!config.customerReceivablesAccountId,
           numberUnique: creditNotes.filter((c) => c.creditNoteNumber === cn.creditNoteNumber).length <= 1,
-          originalInvoiceCreditable: !!invoice && invoice.status !== 'draft' && invoice.status !== 'void',
+          originalInvoiceCreditable: !!invoice && invoice.status !== 'draft' && invoice.status !== 'void' && invoice.status !== 'superseded',
           requiresOriginalInvoice,
           availableToCredit: summary.availableToCredit,
           remainingTax,

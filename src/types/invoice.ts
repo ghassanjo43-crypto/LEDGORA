@@ -1,4 +1,5 @@
 import type { CostCenterAssignment } from '@/types/costCenter';
+import type { DocumentAmendmentMeta } from '@/types/documentAmendment';
 
 /* ─────────────────────────── Template configuration ─────────────────────── */
 
@@ -221,7 +222,15 @@ export type InvoiceStatus =
   | 'sent'
   | 'partially-paid'
   | 'paid'
-  | 'void';
+  | 'void'
+  /**
+   * Replaced by a later version through the posted-document amendment
+   * workflow. Distinct from `void`: a void invoice was withdrawn and nothing
+   * stands in its place, whereas a superseded one has a corrected replacement
+   * carrying the current figures. Both keep their number, their lines and their
+   * journal links; neither is ever counted as a live receivable.
+   */
+  | 'superseded';
 
 export type DiscountType = 'percentage' | 'amount';
 
@@ -270,7 +279,7 @@ export interface InvoicePayment {
   createdAt: string;
 }
 
-export interface Invoice {
+export interface Invoice extends DocumentAmendmentMeta {
   id: string;
   entityId: string;
   customerId: string;

@@ -17,6 +17,8 @@ import { Dropdown, MenuItem } from '@/components/ui/Dropdown';
 import { PageActions } from '@/components/ui/PageActions';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { useToast } from '@/components/ui/Toast';
+import { AmendMenuItem } from '@/components/amendments/AmendMenuItem';
+import { AmendmentHistoryPanel } from '@/components/amendments/AmendmentHistoryPanel';
 import { PrintDocument } from '@/components/ui/PrintDocument';
 import { CreditNoteEditorDrawer } from '@/components/credit-notes/CreditNoteEditorDrawer';
 import { CreditNoteRenderer } from '@/components/credit-notes/CreditNoteRenderer';
@@ -62,7 +64,7 @@ export function CreditNotesPage() {
   }, [creditNotes, customerFilter, statusFilter, search, entities]);
 
   const customerOptions = [{ value: '', label: 'All customers' }, ...entities.filter((e) => e.entityType === 'customer' || e.entityType === 'both').map((e) => ({ value: e.id, label: e.legalName }))];
-  const statusOptions = [{ value: 'ALL', label: 'All statuses' }, ...(['draft', 'approved', 'issued', 'applied', 'partially-applied', 'refunded', 'void'] as const).map((s) => ({ value: s, label: s }))];
+  const statusOptions = [{ value: 'ALL', label: 'All statuses' }, ...(['draft', 'approved', 'issued', 'applied', 'partially-applied', 'refunded', 'superseded', 'void'] as const).map((s) => ({ value: s, label: s }))];
 
   const act = (fn: () => { ok: boolean; error?: string; id?: string }, success: string): void => {
     const res = fn();
@@ -132,8 +134,9 @@ export function CreditNotesPage() {
                         {['issued', 'applied', 'partially-applied'].includes(c.status) && c.remainingCredit > 0.005 && <MenuItem onClick={() => setApplyId(c.id)}><Link2 className="h-4 w-4" /> Apply credit</MenuItem>}
                         {['issued', 'applied', 'partially-applied'].includes(c.status) && c.remainingCredit > 0.005 && <MenuItem onClick={() => setRefundId(c.id)}><Banknote className="h-4 w-4" /> Refund</MenuItem>}
                         <MenuItem onClick={() => act(() => store.duplicateCreditNote(c.id), 'Credit note duplicated.')}><Copy className="h-4 w-4" /> Duplicate</MenuItem>
-                        {c.journalEntryId && c.status !== 'void' && <MenuItem onClick={() => onCorrect(c.id)}><Replace className="h-4 w-4" /> Correct / replace</MenuItem>}
-                        {c.journalEntryId && c.status !== 'void' && <MenuItem onClick={() => setVoidId(c.id)}><Ban className="h-4 w-4" /> Void</MenuItem>}
+                        <AmendMenuItem documentType="credit-note" documentId={c.id} />
+                        {c.journalEntryId && c.status !== 'void' && c.status !== 'superseded' && <MenuItem onClick={() => onCorrect(c.id)}><Replace className="h-4 w-4" /> Correct / replace</MenuItem>}
+                        {c.journalEntryId && c.status !== 'void' && c.status !== 'superseded' && <MenuItem onClick={() => setVoidId(c.id)}><Ban className="h-4 w-4" /> Void</MenuItem>}
                         {c.status === 'draft' && <MenuItem onClick={() => act(() => store.deleteDraft(c.id), 'Draft deleted.')}><Trash2 className="h-4 w-4" /> Delete draft</MenuItem>}
                       </Dropdown>
                     </td>
@@ -158,6 +161,7 @@ export function CreditNotesPage() {
                 <button onClick={() => setPreviewId(null)} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800" aria-label="Close"><X className="h-5 w-5" /></button>
               </div>
             </div>
+            <div className="border-b border-slate-200 bg-white px-4 py-3 dark:border-slate-800 dark:bg-slate-900 print:hidden"><AmendmentHistoryPanel documentType="credit-note" documentId={previewCn.id} currency={previewCn.currency} /></div>
             <div className="flex-1 overflow-auto p-6"><div className="mx-auto shadow-xl"><CreditNoteRenderer creditNote={previewCn} snapshot={previewSnap} reference={previewReference} /></div></div>
           </div>
           {/* Print-only copy at <body> level → the PDF is just the A4 document. */}
