@@ -1082,12 +1082,22 @@ describe('amendment audit trail', () => {
     expect(useAmendmentAuditStore.getState().verify().ok).toBe(false);
   });
 
-  it('exposes no way for an ordinary caller to edit or delete an event', () => {
+  it('exposes no way at all to edit, delete or replace an event', () => {
     const store = useAmendmentAuditStore.getState() as unknown as Record<string, unknown>;
-    expect(store.update).toBeUndefined();
-    expect(store.remove).toBeUndefined();
-    expect(store.delete).toBeUndefined();
-    expect(typeof store.append).toBe('function');
+    /*
+     * Including `replaceAll`, which every other store carries for the
+     * company-switch path. Nothing in that path touches this store, and an
+     * unused way to overwrite the whole trail is exactly what an append-only
+     * trail must not have.
+     */
+    for (const forbidden of ['update', 'remove', 'delete', 'replaceAll', 'amend', 'set']) {
+      expect(store[forbidden], `${forbidden} must not exist on the audit trail`).toBeUndefined();
+    }
+    const mutators = Object.entries(store)
+      .filter(([, value]) => typeof value === 'function')
+      .map(([name]) => name)
+      .filter((name) => !['forDocument', 'findByCorrelation', 'findCompleted', 'verify'].includes(name));
+    expect(mutators.sort()).toEqual(['append', 'resetToDefault']);
   });
 });
 

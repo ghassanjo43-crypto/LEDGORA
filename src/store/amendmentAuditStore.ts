@@ -3,10 +3,12 @@
  * an amendment attempt is recorded whatever its outcome.
  *
  * ── Append-only by construction ──────────────────────────────────────────────
- * There is no `update` and no `delete` on this store, and `replaceAll` exists
- * only for the company-switch/import path that swaps a whole workspace's books
- * in and out (`companyStore.snapshotWorkingStores`). No screen can reach an
- * event and change it, and no ordinary role has a code path that removes one.
+ * `append` is the ONLY way in. There is no update, no delete and no bulk
+ * replace — not even the `replaceAll` every other store carries for the
+ * company-switch path, because nothing in that path touches this store and an
+ * unused way to overwrite the whole trail is exactly what an append-only trail
+ * must not have. `resetToDefault` clears it, and is reachable only from the
+ * same workspace teardown that clears every other store.
  *
  * Read `lib/amendmentAudit` for exactly what the checksum chain does and does
  * not guarantee while these records live in the browser. It is stated there
@@ -41,7 +43,6 @@ interface AmendmentAuditState {
   findCompleted: (correlationId: string) => AmendmentAuditEvent | undefined;
   verify: () => ChainVerification;
 
-  replaceAll: (events: AmendmentAuditEvent[]) => void;
   resetToDefault: () => void;
 }
 
@@ -75,7 +76,6 @@ export const useAmendmentAuditStore = create<AmendmentAuditState>()(
 
       verify: () => verifyAmendmentChain(get().events),
 
-      replaceAll: (events) => set({ events }),
       resetToDefault: () => set({ events: [] }),
     }),
     {

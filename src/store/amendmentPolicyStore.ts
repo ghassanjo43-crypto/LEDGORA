@@ -50,7 +50,6 @@ interface AmendmentPolicyState extends AmendmentPolicy {
   /** Drop every override for a person — used when a membership is removed. */
   clearUser: (userId: string) => PolicyActionResult;
 
-  replaceAll: (policy: AmendmentPolicy) => void;
   resetToDefault: () => void;
 }
 
@@ -110,18 +109,6 @@ export const useAmendmentPolicyStore = create<AmendmentPolicyState>()(
         set({ userOverrides: get().userOverrides.filter((o) => o.userId !== userId) });
         return { ok: true };
       },
-
-      /*
-       * Import/company-switch paths only. Filtered rather than trusted: a
-       * persisted or imported policy naming a permission this build does not
-       * have would otherwise sit in the store waiting for a resolver to honour
-       * it.
-       */
-      replaceAll: (policy) =>
-        set({
-          roleGrants: (policy.roleGrants ?? []).filter((g) => isKnownKey(g.key)),
-          userOverrides: (policy.userOverrides ?? []).filter((o) => isKnownKey(o.key)),
-        }),
 
       resetToDefault: () => set({ roleGrants: [], userOverrides: [] }),
     }),
