@@ -148,7 +148,19 @@ function load(type: AmendableDocumentType, id: string): Loaded | undefined {
     const note = useCreditNoteStore.getState().creditNotes.find((c) => c.id === id);
     return note ? { subject: creditNoteSubject(note), document: note, entityId: note.entityId } : undefined;
   }
-  for (const bill of useBillStore.getState().bills) {
+  /*
+   * A supplier debit note can appear on two bills at once, with the same id.
+   *
+   * When a bill is amended its debit notes move to the replacement — one note,
+   * still settling the same payable — and the superseded bill keeps its own
+   * copy as the historical record of what it looked like. So the lookup must
+   * prefer the bill that is IN FORCE: the copy on the superseded bill is
+   * history, and `createSupplierCredit` would refuse to raise a corrected note
+   * against a bill that is no longer live.
+   */
+  const bills = useBillStore.getState().bills;
+  const live = bills.filter((b) => !isRetiredBill(b));
+  for (const bill of [...live, ...bills.filter((b) => isRetiredBill(b))]) {
     const credit = (bill.supplierCredits ?? []).find((c) => c.id === id);
     if (credit) {
       return {
@@ -160,6 +172,11 @@ function load(type: AmendableDocumentType, id: string): Loaded | undefined {
     }
   }
   return undefined;
+}
+
+/** A bill whose own effect has been withdrawn, so its sub-records are history. */
+function isRetiredBill(bill: Bill): boolean {
+  return bill.status === 'superseded' || bill.status === 'void' || bill.status === 'reversed';
 }
 
 /** The company's own issuing entity. Anything else is not this company's book. */
@@ -329,11 +346,21 @@ export function amendmentChain(type: AmendableDocumentType, id: string): ChainMe
         member(c, c.creditNoteNumber, c.status, c.issueDate, c.grandTotal, c.journalEntryId)),
     );
   }
+  /*
+   * De-duplicated by id, preferring the copy on the bill in force: the same
+   * debit note exists on a superseded bill and on its replacement, and a
+   * version history that listed it twice would read as two notes.
+   */
+  const byId = new Map<string, BillSupplierCredit>();
+  for (const bill of useBillStore.getState().bills) {
+    for (const credit of bill.supplierCredits ?? []) {
+      if (!inChain(credit)) continue;
+      if (byId.has(credit.id) && isRetiredBill(bill)) continue;
+      byId.set(credit.id, credit);
+    }
+  }
   return orderChain(
-    useBillStore
-      .getState()
-      .bills.flatMap((b) => b.supplierCredits ?? [])
-      .filter(inChain)
+    [...byId.values()]
       .map((c) =>
         member(
           c,
@@ -793,6 +820,9 @@ async function amendInvoice(
   const settlement = transferInvoiceSettlement(original, replacement);
   if (!settlement.ok) return { ok: false, error: settlement.error! };
 
+  /* 7b. Point the invoice's credit notes at the version now in force. */
+  repointCreditNotes(original, replacement);
+
   /* 8. Link the replacement back to what it amends. */
   markInvoice(replacementId, (invoice) => ({
     ...invoice,
@@ -935,6 +965,44 @@ function transferInvoiceSettlement(
   }));
 
   return { ok: true, moved };
+}
+
+/**
+ * Move a credit note's LIVE link from the superseded invoice to its replacement.
+ *
+ * `originalInvoiceId` is not history — it is the pointer every creditable-balance
+ * calculation, validation and drill-down follows. Left on a superseded invoice
+ * it makes the credit note a dead end: `validateCreditNoteForIssue` refuses to
+ * re-issue a note whose invoice is no longer in force, so amending an invoice
+ * would quietly cost every credit note against it the ability to be amended at
+ * all. That is the failure, not a preserved fact.
+ *
+ * `invoiceReferenceSnapshot` is where the history lives, and it is NOT touched:
+ * the frozen figures — what the invoice totalled, what had been paid, what had
+ * already been credited at the moment this note was issued — stay exactly as
+ * they were. `types/creditNote` says in terms that they must.
+ */
+function repointCreditNotes(original: Invoice, replacement: Invoice): void {
+  useCreditNoteStore.setState((state) => ({
+    creditNotes: state.creditNotes.map((note) =>
+      note.originalInvoiceId === original.id
+        ? {
+          ...note,
+          originalInvoiceId: replacement.id,
+          originalInvoiceNumber: replacement.invoiceNumber,
+          auditTrail: [
+            ...note.auditTrail,
+            {
+              id: generateId('cnaud'),
+              at: nowIso(),
+              action: 'linked-invoice-amended',
+              detail: `${original.invoiceNumber} was amended; this note now references ${replacement.invoiceNumber}. The frozen invoice reference is unchanged.`,
+            },
+          ],
+          updatedAt: nowIso(),
+        }
+        : note),
+  }));
 }
 
 /* ── Purchase bill ────────────────────────────────────────────────────────── */

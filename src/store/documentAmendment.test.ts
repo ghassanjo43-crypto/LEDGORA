@@ -500,6 +500,58 @@ describe('permissions', () => {
     expect(entries().filter((e) => e.reversalReference)).toHaveLength(0);
   });
 
+  it('refuses an unauthorized user on EVERY document type, not just invoices', async () => {
+    const invoiceId = await postedInvoice();
+    const billId = postedBill();
+    const noteId = await issuedCreditNote(invoiceId, 1);
+    const credit = useBillStore.getState().createSupplierCredit(billId, {
+      netAmount: 20, creditAccountId: acc('6200'), reason: 'Returned', date: '2026-03-08',
+    });
+    expect(credit.ok, credit.error).toBe(true);
+    const debitNoteId = useBillStore.getState().getBill(billId)!.supplierCredits[0]!.id;
+
+    signInAs('member', 'user_member');
+    const targets = [
+      ['invoice', invoiceId],
+      ['bill', billId],
+      ['credit-note', noteId],
+      ['supplier-debit-note', debitNoteId],
+    ] as const;
+    for (const [documentType, documentId] of targets) {
+      const result = await amendPostedDocument(request({ documentType, documentId }));
+      expect(result.ok, `${documentType} must be refused for a member`).toBe(false);
+      expect(assessAmendment(documentType, documentId)!.eligible).toBe(false);
+    }
+    /* Nothing was reversed anywhere. */
+    expect(entries().filter((e) => e.reversalReference)).toHaveLength(0);
+  });
+
+  it('lets the owner amend EVERY document type', async () => {
+    signInAs('owner', 'user_owner');
+    const invoiceId = await postedInvoice();
+    const billId = postedBill();
+    const noteId = await issuedCreditNote(invoiceId, 1);
+    const credit = useBillStore.getState().createSupplierCredit(billId, {
+      netAmount: 20, creditAccountId: acc('6200'), reason: 'Returned', date: '2026-03-08',
+    });
+    expect(credit.ok, credit.error).toBe(true);
+    const debitNoteId = useBillStore.getState().getBill(billId)!.supplierCredits[0]!.id;
+
+    const targets = [
+      ['invoice', invoiceId, { notes: 'corrected' }],
+      ['bill', billId, { notes: 'corrected' }],
+      ['credit-note', noteId, { reasonDescription: 'corrected' }],
+      ['supplier-debit-note', debitNoteId, { netAmount: 25, creditAccountId: acc('6200') }],
+    ] as const;
+    for (const [documentType, documentId, patch] of targets) {
+      const result = await amendPostedDocument(request({ documentType, documentId, patch }));
+      expect(result.ok, `${documentType}: ${result.error}`).toBe(true);
+      expect(result.replacementId).toBeTruthy();
+      expect(result.reversalJournalEntryId).toBeTruthy();
+    }
+    for (const entry of posted()) expect(entry.totalDebit).toBeCloseTo(entry.totalCredit, 6);
+  });
+
   it('reports the permission refusal through the assessment, so the menu can explain it', async () => {
     const id = await postedInvoice();
     signInAs('member', 'user_member');
@@ -861,6 +913,106 @@ describe('settlement', () => {
     const live = useInvoiceStore.getState().invoices.filter((i) => i.status === 'issued');
     expect(live).toHaveLength(1);
     expect(live[0]!.grandTotal).toBe(150);
+  });
+});
+
+describe('a document whose linked document was amended', () => {
+  it('keeps a credit note usable after its invoice is amended, with the frozen reference intact', async () => {
+    const invoiceId = await postedInvoice({ quantity: 4, unitPrice: 25 });
+    const noteId = await issuedCreditNote(invoiceId, 1);
+    const frozen = useCreditNoteStore.getState().getCreditNoteById(noteId)!.invoiceReferenceSnapshot;
+    const originalNumber = useInvoiceStore.getState().getInvoice(invoiceId)!.invoiceNumber;
+
+    const amended = await amendPostedDocument(request({
+      documentType: 'invoice', documentId: invoiceId, patch: { notes: 'corrected' },
+    }));
+    expect(amended.ok, amended.error).toBe(true);
+    const replacement = useInvoiceStore.getState().getInvoice(amended.replacementId!)!;
+
+    const note = useCreditNoteStore.getState().getCreditNoteById(noteId)!;
+    /* The LIVE link follows the version in force… */
+    expect(note.originalInvoiceId).toBe(replacement.id);
+    expect(note.originalInvoiceNumber).toBe(replacement.invoiceNumber);
+    /* …and the FROZEN historical reference does not move. */
+    expect(note.invoiceReferenceSnapshot).toEqual(frozen);
+    expect(note.invoiceReferenceSnapshot?.invoiceNumber).toBe(originalNumber);
+
+    /* And the note can still be amended, rather than being orphaned. */
+    expect(assessAmendment('credit-note', noteId)!.eligible).toBe(true);
+    const noteAmended = await amendPostedDocument(request({
+      documentType: 'credit-note', documentId: noteId, patch: { reasonDescription: 'Corrected reason' },
+    }));
+    expect(noteAmended.ok, noteAmended.error).toBe(true);
+  });
+
+  it('keeps a supplier debit note usable after its bill is amended, and lists it once', async () => {
+    const billId = postedBill({ quantity: 10, unitPrice: 12 });
+    const created = useBillStore.getState().createSupplierCredit(billId, {
+      netAmount: 24, creditAccountId: acc('6200'), reason: 'Two units returned', date: '2026-03-08',
+    });
+    expect(created.ok, created.error).toBe(true);
+    const noteId = useBillStore.getState().getBill(billId)!.supplierCredits[0]!.id;
+
+    const amended = await amendPostedDocument(request({
+      documentType: 'bill', documentId: billId, patch: { notes: 'corrected' },
+    }));
+    expect(amended.ok, amended.error).toBe(true);
+
+    /* The note is on both bills — history and current — but is ONE note. */
+    const onOriginal = useBillStore.getState().getBill(billId)!.supplierCredits;
+    const onReplacement = useBillStore.getState().getBill(amended.replacementId!)!.supplierCredits;
+    expect(onOriginal).toHaveLength(1);
+    expect(onReplacement).toHaveLength(1);
+    expect(amendmentChain('supplier-debit-note', noteId)).toHaveLength(1);
+
+    /* And amending it acts on the bill in force, not on the superseded one. */
+    const noteAmended = await amendPostedDocument(request({
+      documentType: 'supplier-debit-note', documentId: noteId,
+      reason: 'Three units were returned, not two',
+      patch: { netAmount: 36, creditAccountId: acc('6200') },
+    }));
+    expect(noteAmended.ok, noteAmended.error).toBe(true);
+    const current = useBillStore.getState().getBill(amended.replacementId!)!;
+    expect(current.supplierCreditsApplied).toBe(36);
+    /* The superseded bill is untouched by any of it. */
+    expect(useBillStore.getState().getBill(billId)!.supplierCreditsApplied).toBe(24);
+  });
+});
+
+describe('tax', () => {
+  it('reconciles output tax to the corrected document alone', async () => {
+    const issueDate = '2026-03-05';
+    const { id } = await useInvoiceStore.getState().createDraft({ customerId: customerId(), issueDate, dueDate: issueDate });
+    const draft = useInvoiceStore.getState().getInvoice(id!)!;
+    await useInvoiceStore.getState().updateDraft(id!, {
+      lines: [{ ...draft.lines[0]!, accountId: acc('4110'), description: 'Taxed goods', quantity: 4, unitPrice: 25, taxRate: 16 }],
+      issueDate, dueDate: issueDate,
+    });
+    expect((await useInvoiceStore.getState().issueInvoice(id!)).ok).toBe(true);
+
+    const original = useInvoiceStore.getState().getInvoice(id!)!;
+    expect(original.taxTotal).toBeCloseTo(16, 6);
+
+    const result = await amendPostedDocument(request({
+      documentType: 'invoice', documentId: id!, patch: { lines: [{ ...original.lines[0]!, quantity: 6 }] },
+    }));
+    expect(result.ok, result.error).toBe(true);
+
+    const replacement = useInvoiceStore.getState().getInvoice(result.replacementId!)!;
+    expect(replacement.taxTotal).toBeCloseTo(24, 6);
+
+    /* Original 16 + reversal (16) + replacement 24 = 24 of output tax. */
+    const outputTax = posted()
+      .flatMap((e) => e.lines)
+      .filter((l) => l.accountId === acc('2270'))
+      .reduce((sum, l) => sum + l.credit - l.debit, 0);
+    expect(outputTax).toBeCloseTo(24, 6);
+
+    /* And the document-side tax total agrees with the ledger. */
+    const documentTax = useInvoiceStore.getState().invoices
+      .filter((i) => i.status !== 'superseded' && i.status !== 'void' && i.status !== 'draft')
+      .reduce((sum, i) => sum + i.taxTotal, 0);
+    expect(documentTax).toBeCloseTo(outputTax, 6);
   });
 });
 
