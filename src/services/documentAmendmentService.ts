@@ -583,7 +583,7 @@ export async function amendPostedDocument(request: AmendmentRequest): Promise<Am
   const snapshot = captureSnapshot();
 
   try {
-    const outcome = await execute(request, loaded, patch, context);
+    const outcome = await execute(request, loaded, patch);
     if (!outcome.ok) {
       snapshot.restore();
       return { ok: false, error: outcome.error, auditEventId: audit('failed', outcome.error).id };
@@ -643,7 +643,6 @@ function execute(
   request: AmendmentRequest,
   loaded: Loaded,
   patch: Record<string, unknown>,
-  context: AmendmentContext,
 ): Promise<Execution> {
   switch (request.documentType) {
     case 'invoice':
@@ -653,7 +652,7 @@ function execute(
     case 'credit-note':
       return amendCreditNote(request, loaded.document as CreditNote, patch);
     default:
-      return amendSupplierDebitNote(request, loaded.parentBill!, loaded.document as BillSupplierCredit, patch, context);
+      return amendSupplierDebitNote(request, loaded.parentBill!, loaded.document as BillSupplierCredit, patch);
   }
 }
 
@@ -1391,7 +1390,6 @@ async function amendSupplierDebitNote(
   bill: Bill,
   original: BillSupplierCredit,
   patch: Record<string, unknown>,
-  _context: AmendmentContext,
 ): Promise<Execution> {
   const now = nowIso();
 
