@@ -8,6 +8,28 @@
  * value on its own, and `actingAsPlatformOperator` being true is a REFUSAL in
  * `resolveAmendmentPermission`, not a grant.
  *
+ * ── What `actingAsPlatformOperator` actually means ───────────────────────────
+ * NOT "this person holds a platform role". It means "this person reached the
+ * organization now open through PLATFORM authority rather than through a
+ * membership in it".
+ *
+ * The distinction is the whole point. A Super Admin viewing a subscriber's
+ * workspace has no membership there, so platform status is the only thing
+ * putting them in front of those books — and platform status is not subscriber
+ * authorization, so they are refused. The same Super Admin working inside a
+ * development organization they OWN is a member of it, and their platform role
+ * is irrelevant: they act by their organization role like anybody else.
+ * Refusing them there would take their own books away from them on the strength
+ * of a role they hold somewhere else.
+ *
+ * ── Why membership, and never classification ─────────────────────────────────
+ * The same rule could be phrased "development organizations are open, production
+ * ones are not". It must not be, because that rule is bypassable: reclassify a
+ * production subscriber as development and the gate opens. Membership cannot be
+ * bypassed that way — relabelling an organization makes nobody a member of it —
+ * so nothing here reads a classification, and `amendmentPlatformOperator.test`
+ * holds that line.
+ *
  * ── Tenant scoping ───────────────────────────────────────────────────────────
  * `organizationId` is the ACTIVE WORKSPACE's id, read from the storage adapter
  * rather than from anything a caller passed in. That is what makes a
@@ -42,26 +64,56 @@ const LOCAL_ACTOR = 'Finance Manager';
 
 export function readAmendmentContext(): AmendmentContext {
   const user = getCurrentUser();
-  const operator = isPlatformAdminFullAccess();
   const workspace = getActiveWorkspace();
+  /** The operator entitlement override — viewing mode, verified role, coherent. */
+  const override = isPlatformAdminFullAccess();
+
+  /*
+   * The organization whose books are actually open.
+   *
+   * In operator viewing mode this is the VIEWED tenant, because that is the
+   * namespace `openBusinessWorkspace` points the stores at — the operator is
+   * looking at that tenant's records, so that is the tenant the membership
+   * question has to be asked about.
+   */
+  const organizationId = workspace?.organizationId ?? user?.organizationId ?? 'local';
+
+  // Absent status is the single-user local workspace and the self-registered
+  // owner, both of which are active. Only an explicit non-active state denies.
+  const membershipActive = !user?.status || user.status === 'active';
+
+  /*
+   * Is the acting user a member of THIS organization?
+   *
+   * This is what separates "a Super Admin in a subscriber's workspace" from "a
+   * Super Admin in their own development organization". Both hold the platform
+   * role; only the second holds a membership in the books that are open.
+   */
+  const memberOfThisOrganization =
+    !!user && !!user.organizationId && user.organizationId === organizationId && membershipActive;
+
+  const actingAsPlatformOperator = override && !memberOfThisOrganization;
+
   return {
-    organizationId: workspace?.organizationId ?? user?.organizationId ?? 'local',
+    organizationId,
     companyId: useCompanyStore.getState().activeCompanyId || 'primary',
     /*
-     * A platform operator acts with `admin` authority for every OTHER purpose
-     * in this application (see `invoiceStore.currentRole`), which is why the
-     * refusal is expressed by `actingAsPlatformOperator` rather than by
-     * pretending the operator holds a weaker role. The role reported here is
-     * the one the audit event records.
+     * A member acts by their OWN organization role, whatever else they are
+     * elsewhere. Only somebody present purely on platform authority is reported
+     * as `admin`, matching what every other document store does
+     * (`invoiceStore.currentRole`) — and that case is refused anyway, so the
+     * role it reports is what the audit event records rather than a grant.
      */
-    role: operator ? 'admin' : (user?.role ?? 'owner'),
+    role: memberOfThisOrganization
+      ? user.role
+      : actingAsPlatformOperator
+        ? 'admin'
+        : (user?.role ?? 'owner'),
     userId: user?.id,
     actorName: resolveAuditActor(user?.fullName || LOCAL_ACTOR),
-    // Absent status is the single-user local workspace and the self-registered
-    // owner, both of which are active. Only an explicit non-active state denies.
-    membershipActive: !user?.status || user.status === 'active',
+    membershipActive,
     subscriptionActive: subscriptionAllowsPosting(getSubscriptionStatus()),
-    actingAsPlatformOperator: operator,
+    actingAsPlatformOperator,
   };
 }
 
