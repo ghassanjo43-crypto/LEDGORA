@@ -22,6 +22,7 @@ import { memberRoutes } from './routes/members.js';
 import { legalRoutes } from './routes/legal.js';
 import { companyRoutes } from './routes/companies.js';
 import { companySettingsRoutes } from './routes/companySettings.js';
+import { reportRoutes } from './routes/reports.js';
 import { adminBillingRoutes } from './routes/adminBilling.js';
 import { adminApplicantRoutes } from './routes/adminApplicants.js';
 import { adminMemberRoutes } from './routes/adminMembers.js';
@@ -255,6 +256,7 @@ export async function buildApp({
   await app.register(legalRoutes);
   await app.register(companyRoutes);
   await app.register(companySettingsRoutes);
+  await app.register(reportRoutes);
   await app.register(adminBillingRoutes);
   await app.register(adminApplicantRoutes);
   await app.register(adminMemberRoutes);
