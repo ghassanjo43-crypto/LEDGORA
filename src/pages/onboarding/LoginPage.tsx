@@ -24,6 +24,7 @@ import { Button } from '@/components/ui/Button';
 import { Alert } from '@/components/ui/Alert';
 import { authService } from '@/services';
 import { platformAdminToolsAllowed } from '@/lib/platformAccess';
+import { LegalNotice } from '@/components/legal/LegalNotice';
 
 /**
  * The ONE thing the recovery form ever reports on a completed request.
@@ -249,6 +250,13 @@ export function LoginPage() {
           {busy && <Loader2 className="h-4 w-4 animate-spin" aria-hidden />}
           {busy ? 'Signing in…' : 'Sign in'}
         </Button>
+
+        {/*
+          * Acknowledgement, not consent. Signing in authenticates; it records no
+          * acceptance. Renders nothing until the documents are published, so the
+          * link can never lead to "not yet published".
+          */}
+        <LegalNotice />
       </form>
     </CenteredCard>
   );

@@ -60,6 +60,20 @@ export const ROUTES = {
    * without asking an administrator.
    */
   accountSecurity: '/account/security',
+  /**
+   * The public legal documents. Reachable with no session at all, because a
+   * visitor must be able to read the terms BEFORE deciding to sign up — and
+   * because the sign-in page links to them.
+   */
+  terms: '/terms',
+  termsUae: '/terms/uae',
+  termsJordan: '/terms/jordan',
+  termsSaudi: '/terms/saudi-arabia',
+  /**
+   * The mandatory acceptance screen, shown after authentication when the
+   * current Terms or the applicable Country Addendum are outstanding.
+   */
+  termsAcceptance: '/legal/accept',
 } as const;
 
 /** Coarse surface a path belongs to (drives access decisions). */
@@ -77,7 +91,13 @@ export type Surface =
    * password change. Reachable by any authenticated user, deliberately without
    * reference to organization, subscription or entitlement state.
    */
-  | 'account';
+  | 'account'
+  /**
+   * The legal documents and the acceptance screen. Its own surface because it
+   * is reachable in states no other surface is: signed out, signed in but
+   * unaccepted, and signed in normally.
+   */
+  | 'legal';
 
 /** Paths visitors may open with no authenticated session. */
 export const PUBLIC_PATHS: string[] = [
@@ -88,6 +108,28 @@ export const PUBLIC_PATHS: string[] = [
   ROUTES.verifyEmail,
   // Reachable with no session, and deliberately so — see the route comment.
   ROUTES.acceptInvitation,
+  /*
+   * Each legal path is listed individually because `PUBLIC_PATHS.includes` is an
+   * exact match, and deliberately so: a prefix rule would make `/terms/anything`
+   * public, and an accepted version must be pinned to a stable path rather than
+   * to a query parameter that can be edited after the fact.
+   */
+  ROUTES.terms,
+  ROUTES.termsUae,
+  ROUTES.termsJordan,
+  ROUTES.termsSaudi,
+];
+
+/**
+ * Legal paths, as a set — the ones a signed-in user may reach even while their
+ * acceptance is outstanding. Opening the Terms FROM the acceptance screen must
+ * not bounce them back to it, which is the redirect loop this prevents.
+ */
+export const LEGAL_PATHS: string[] = [
+  ROUTES.terms,
+  ROUTES.termsUae,
+  ROUTES.termsJordan,
+  ROUTES.termsSaudi,
 ];
 
 /**
@@ -105,9 +147,66 @@ const INACTIVE_ALLOWED_SURFACES: Surface[] = [
   'subscription-status',
   'profile',
   'support',
+  // Reading the terms never depends on having paid for anything.
+  'legal',
 ];
 
+/**
+ * Surfaces a signed-in user may reach while their Terms acceptance is
+ * OUTSTANDING.
+ *
+ * The list is deliberately generous, and each entry is here for a reason. A
+ * customer who has not yet accepted must still be able to read what they are
+ * being asked to accept, secure their account, see and cancel what they are
+ * paying for, get help, and take their data with them. Withholding any of those
+ * until they consent would make the consent worth less, not more — and holding
+ * a paying customer's billing controls hostage to a contract they are still
+ * reading is not a thing this product should do.
+ *
+ * `'app'` is absent: the operational accounting modules are what acceptance
+ * gates. Data export is NOT a path in this application — it is a view
+ * (`'import-export'`) inside the single `/app` shell — so it cannot be granted
+ * by a path rule. `preAcceptanceAllowsView` below is where that is expressed,
+ * and the acceptance gate honours it.
+ */
+const PRE_ACCEPTANCE_ALLOWED_SURFACES: Surface[] = [
+  'public',
+  'legal',
+  'account',
+  'billing',
+  'subscription-status',
+  'profile',
+  'support',
+];
+
+/**
+ * The one view inside the gated `/app` shell that stays reachable before
+ * acceptance: taking your own records out.
+ *
+ * A customer's ability to leave with their data must not be conditional on
+ * their agreeing to the terms of staying. Keeping export open is also the
+ * honest reading of "do not restrict export of existing accounting records".
+ */
+export const PRE_ACCEPTANCE_ALLOWED_VIEWS: string[] = ['import-export'];
+
+/** May this in-app VIEW be opened while acceptance is outstanding? */
+export function preAcceptanceAllowsView(view: string): boolean {
+  return PRE_ACCEPTANCE_ALLOWED_VIEWS.includes(view);
+}
+
+/**
+ * May this path be opened while acceptance is outstanding?
+ *
+ * Path-level only. The `/app` shell is refused here and the single permitted
+ * view inside it is granted by `preAcceptanceAllowsView`, because export is a
+ * view rather than a route in this application.
+ */
+export function preAcceptanceAllowsPath(path: string): boolean {
+  return PRE_ACCEPTANCE_ALLOWED_SURFACES.includes(surfaceOf(path));
+}
+
 export function surfaceOf(path: string): Surface {
+  if (path.startsWith('/legal') || path.startsWith('/terms')) return 'legal';
   if (path.startsWith('/app')) return 'app';
   if (path.startsWith('/admin')) return 'admin';
   if (path.startsWith('/account')) return 'account';

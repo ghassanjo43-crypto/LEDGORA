@@ -245,6 +245,32 @@ export const TENANT_DEPENDENCIES: readonly TenantDependency[] = [
       + 'It has no meaning once the tenant is gone.',
   },
   {
+    table: 'legal_acceptances',
+    ownershipKey: 'organization_id',
+    kind: 'immutable_audit',
+    disposition: 'delete',
+    order: 47,
+    label: 'Legal acceptances',
+    crossTenantReachable: false,
+    rationale:
+      'Evidence of what a customer agreed to, and append-only: the table refuses UPDATE '
+      + 'unconditionally and DELETE except while an authorised purge is in progress. It is removed '
+      + 'here rather than retained because a record of consent cannot meaningfully outlive every '
+      + 'party to it, and a customer who has asked to be erased must actually be erasable.',
+  },
+  {
+    table: 'organization_legal_country_changes',
+    ownershipKey: 'organization_id',
+    kind: 'authoritative',
+    disposition: 'delete',
+    order: 47.1,
+    label: 'Legal country changes',
+    crossTenantReachable: false,
+    rationale:
+      'The trail of which country law governed this tenant, and under which addendum. It describes '
+      + 'the tenant and nothing else, so it goes with the tenant.',
+  },
+  {
     table: 'organization_language_changes',
     ownershipKey: 'organization_id',
     kind: 'authoritative',
@@ -468,6 +494,8 @@ export const DIRECTLY_OWNED_TABLES = [
   'journal_entries',
   'accounts',
   'accounting_periods',
+  'legal_acceptances',
+  'organization_legal_country_changes',
   'subscription_invoices',
   'subscriber_data_exports',
   'user_permission_overrides',

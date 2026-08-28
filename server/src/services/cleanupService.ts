@@ -662,6 +662,13 @@ async function deleteOneOrganization(
 ): Promise<OrganizationOutcome> {
   return db.transaction().execute(async (trx) => {
     /*
+     * Erasing an identity cascades into the append-only `legal_acceptances`
+     * table. Authorise that removal for this transaction only. DELETE alone —
+     * UPDATE stays refused unconditionally, so no record of consent can be
+     * quietly rewritten on the way past.
+     */
+    await sql`SET LOCAL ledgora.allow_legal_purge = 'on'`.execute(trx);
+    /*
      * FOR UPDATE. Everything after this point sees a tenant no other
      * transaction can modify, which is what makes the recheck below meaningful
      * rather than a second guess at a moving target.

@@ -22,6 +22,7 @@ import {
   resolvePostLoginRoute,
   surfaceOf,
   PUBLIC_PATHS,
+  LEGAL_PATHS,
   ROUTES,
 } from '@/lib/accessControl';
 import { readAccessContext } from '@/lib/accessContext';
@@ -44,6 +45,7 @@ import { SubscriptionOnboardingPage } from '@/pages/onboarding/SubscriptionOnboa
 import { PricingPage } from '@/pages/onboarding/PricingPage';
 import { RegisterPage } from '@/pages/onboarding/RegisterPage';
 import { LoginPage } from '@/pages/onboarding/LoginPage';
+import { TermsPage } from '@/pages/legal/TermsPage';
 import { VerifyEmailPage } from '@/pages/onboarding/VerifyEmailPage';
 import { AcceptInvitationPage } from '@/pages/AcceptInvitationPage';
 import { OnboardingOrganizationPage } from '@/pages/onboarding/OnboardingOrganizationPage';
@@ -285,6 +287,13 @@ function Surface({ path, platformRole }: { path: string; platformRole: string })
     return ctx.mustChangePassword ? <ChangePasswordPage /> : <AccountSecurityPage />;
   }
   if (!ctx.user && !ctx.demoActive && !PUBLIC_PATHS.includes(path)) return <Blank />;
+
+  /*
+   * The legal documents, before the switch: four paths, one page, and they must
+   * be reachable signed out, signed in, and mid-acceptance alike. Opening them
+   * from the acceptance screen must not bounce back to it.
+   */
+  if (LEGAL_PATHS.includes(path)) return <TermsPage />;
 
   switch (path) {
     case ROUTES.welcome:

@@ -192,7 +192,24 @@ function resolveOne(subject: PermissionSubject, action: string, input: Resolutio
 
   /* ── 2. Subscription entitlement — above every user-scoped rule ─────────── */
 
-  if (!input.entitlementActive) return refuse('subscription_inactive', configuredAllow);
+  /*
+   * …with one exception, and only one.
+   *
+   * The Terms are not a paid feature. A customer whose subscription has lapsed
+   * must still be able to READ them and to ACCEPT them: acceptance is a
+   * precondition of using the product, so gating it behind an active
+   * subscription creates a deadlock — they cannot accept because they have not
+   * paid, and the acceptance they owe is waiting when they do. It would also
+   * contradict the rule that billing, cancellation and export stay reachable
+   * while acceptance is outstanding, since all three assume a person who can
+   * still act on their own account.
+   *
+   * Everything else stays behind the gate. This is a named exemption for one
+   * subject, not a hole: `legal_terms` grants no accounting capability.
+   */
+  if (!input.entitlementActive && subject.id !== 'legal_terms') {
+    return refuse('subscription_inactive', configuredAllow);
+  }
   if (subject.requiredModule !== null && !input.modules.has(subject.requiredModule)) {
     return refuse('not_entitled', configuredAllow);
   }

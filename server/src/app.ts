@@ -19,6 +19,7 @@ import { authRoutes } from './routes/auth.js';
 import { adminRoutes } from './routes/admin.js';
 import { subscriptionRoutes } from './routes/subscriptions.js';
 import { memberRoutes } from './routes/members.js';
+import { legalRoutes } from './routes/legal.js';
 import { adminBillingRoutes } from './routes/adminBilling.js';
 import { adminApplicantRoutes } from './routes/adminApplicants.js';
 import { adminMemberRoutes } from './routes/adminMembers.js';
@@ -156,7 +157,7 @@ export async function buildApp({
       return callback(new Error('Origin not allowed'), false);
     },
     credentials: true,
-    methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+    methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['content-type', 'x-csrf-token'],
     // Let cross-origin JS read the CSRF token from the response header (the body
     // field is the primary channel; this is the belt-and-braces companion).
@@ -241,6 +242,7 @@ export async function buildApp({
   await app.register(adminRoutes);
   await app.register(subscriptionRoutes);
   await app.register(memberRoutes);
+  await app.register(legalRoutes);
   await app.register(adminBillingRoutes);
   await app.register(adminApplicantRoutes);
   await app.register(adminMemberRoutes);

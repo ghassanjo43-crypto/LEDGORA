@@ -193,12 +193,71 @@ export interface OrganizationLanguageChangesTable {
   changed_at: Generated<Timestamp>;
 }
 
+/**
+ * Evidence of who accepted which legal document, at which version, having been
+ * shown exactly which text. Append-only, enforced by a trigger (migration 024).
+ */
+export interface LegalAcceptancesTable {
+  id: Generated<string>;
+  user_id: string;
+  organization_id: string;
+  /** The legal country as it was AT ACCEPTANCE — copied, never joined. */
+  legal_country: 'AE' | 'JO' | 'SA';
+  /**
+   * Which legal act this row records.
+   *
+   * `organization` binds the company and requires authority; `individual` is
+   * one person acknowledging for themselves and binds nobody else. Two acts,
+   * never collapsed into one.
+   */
+  scope: 'organization' | 'individual';
+  document_id: 'master-terms' | 'addendum-ae' | 'addendum-jo' | 'addendum-sa';
+  version: string;
+  /** SHA-256 of the canonical text shown. Verifiable by a third party. */
+  content_hash: string;
+  binding_authority_confirmed: Generated<boolean>;
+  accepted_as_role: string | null;
+  /** Server time. Never client-supplied. */
+  accepted_at: Generated<Date>;
+  user_agent: string | null;
+  created_at: Generated<Date>;
+}
+
+/**
+ * Every change to an organization's registered legal country.
+ *
+ * Its own table rather than a generic audit row because the change has a
+ * specific consequence a reader must be able to see: it supersedes the previous
+ * Country Addendum acceptance. Append-only (migration 024).
+ */
+export interface OrganizationLegalCountryChangesTable {
+  id: Generated<string>;
+  organization_id: string;
+  /** Null on first selection — there was no previous value. */
+  previous_country: 'AE' | 'JO' | 'SA' | null;
+  new_country: 'AE' | 'JO' | 'SA';
+  changed_by_user_id: string | null;
+  changed_by_role: string | null;
+  /** How the actor held the authority, for the record. */
+  authority: string;
+  reason: string | null;
+  changed_at: Generated<Date>;
+}
+
 export interface OrganizationsTable {
   id: Generated<string>;
   subscriber_owner_user_id: string;
   legal_name: string;
   trading_name: string | null;
   country: string;
+  /**
+   * The country the organization is legally REGISTERED in, restricted to the
+   * three Ledgora is offered in. Distinct from `country` above, which is
+   * unconstrained descriptive text and must never decide which Country
+   * Addendum governs a contract. Null until the owner has been asked — it
+   * cannot be inferred. See migration 024.
+   */
+  legal_country: 'AE' | 'JO' | 'SA' | null;
   registration_number: string | null;
   tax_number: string | null;
   industry: string | null;
@@ -639,6 +698,8 @@ export interface Database {
   users: UsersTable;
   platform_user_roles: PlatformUserRolesTable;
   organizations: OrganizationsTable;
+  legal_acceptances: LegalAcceptancesTable;
+  organization_legal_country_changes: OrganizationLegalCountryChangesTable;
   organization_language_changes: OrganizationLanguageChangesTable;
   companies: CompaniesTable;
   platform_preview_sessions: PlatformPreviewSessionsTable;

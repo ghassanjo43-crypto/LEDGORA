@@ -440,6 +440,22 @@ const RESET_PLAN: readonly PlanEntry[] = [
     why: 'Tenant-scoped and customer-authored rows only. Platform/security history of preserved admins survives.',
   },
   {
+    table: 'legal_acceptances',
+    action: 'scoped_delete',
+    order: 132,
+    label: 'Legal acceptances',
+    why:
+      'Evidence of what a customer agreed to. Deleted only because the identity it belongs to is '
+      + 'being erased with it — the table refuses UPDATE always, and DELETE except during a purge.',
+  },
+  {
+    table: 'organization_legal_country_changes',
+    action: 'scoped_delete',
+    order: 133,
+    label: 'Legal country changes',
+    why: 'The audit of which law governed a tenant. Goes with the tenant.',
+  },
+  {
     table: 'organizations',
     action: 'scoped_delete',
     order: 140,
@@ -767,6 +783,15 @@ export async function executeReset(
      */
     await sql`UPDATE subscriber_workspace_ownership_claims
       SET retired_at = now() WHERE retired_at IS NULL`.execute(trx);
+
+    /*
+     * Authorise the removal of legal-acceptance evidence for the identities
+     * this reset is erasing. Session-scoped: it lasts only for this
+     * transaction, and it permits DELETE alone — the table still refuses UPDATE
+     * unconditionally, so nothing here can quietly rewrite what somebody agreed
+     * to.
+     */
+    await sql`SET LOCAL ledgora.allow_legal_purge = 'on'`.execute(trx);
 
     for (const entry of RESET_SEQUENCE) {
       if (entry.action === 'truncate') {

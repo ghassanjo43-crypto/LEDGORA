@@ -61,6 +61,30 @@ export const PERMISSION_ACTIONS = [
    * a draft.
    */
   'amend',
+  /**
+   * Acknowledge a legal document FOR YOURSELF.
+   *
+   * Every authenticated member of an organization holds this, Viewer included,
+   * and it survives a lapsed subscription. It binds nobody but the person doing
+   * it, and it must never ask them to claim authority they do not have.
+   */
+  'acknowledge',
+  /**
+   * Bind the ORGANIZATION to a legal document.
+   *
+   * A SEPARATE action from `acknowledge`, and named so the difference cannot be
+   * missed at a call site. Accepting terms on a company's behalf is an act of
+   * corporate authority, not a bookkeeping one: not something an Accountant
+   * does as part of posting, and not something an Organization Admin acquires
+   * by being able to manage colleagues. Only the subscriber who owns the
+   * workspace holds it by default; anyone else needs an explicit grant.
+   *
+   * One undifferentiated "accept" covering both was the earlier mistake. It
+   * made an invited bookkeeper's personal acknowledgement and the company
+   * signing a contract the same permission, which is exactly the conflation the
+   * two-level model exists to prevent.
+   */
+  'accept_for_organization',
   'export',
   'manage_users',
   'manage_subscriptions',
@@ -80,6 +104,8 @@ export const ACTION_LABELS: Record<PermissionAction, string> = {
   post: 'Post',
   unpost: 'Unpost',
   amend: 'Amend posted',
+  acknowledge: 'Acknowledge (self)',
+  accept_for_organization: 'Accept for the organization',
   export: 'Export',
   manage_users: 'Manage users',
   manage_subscriptions: 'Manage subscriptions',
@@ -411,6 +437,21 @@ export const PERMISSION_SUBJECTS: PermissionSubject[] = [
     description: 'Fiscal year, base currency, branding and defaults.',
   },
   {
+    id: 'legal_terms',
+    label: 'Terms and Conditions',
+    group: 'Administration',
+    scope: 'administration',
+    requiredModule: null,
+    /*
+     * `accept` binds the organization. `manage_organization_settings` is the
+     * authority to set or change the registered LEGAL COUNTRY, which decides
+     * which Country Addendum governs the contract — the same class of act, so
+     * the same restriction.
+     */
+    actions: ['view', 'acknowledge', 'accept_for_organization', 'manage_organization_settings'],
+    description: 'Reading and acknowledging the Terms, accepting them for the organization, and the registered legal country.',
+  },
+  {
     id: 'audit_logs',
     label: 'Audit Logs',
     group: 'Administration',
@@ -497,10 +538,69 @@ export const ROLE_DESCRIPTIONS: Record<CatalogRole, string> = {
 
 /* ── Role templates ───────────────────────────────────────────────────────── */
 
+/**
+ * Actions that NO role template grants, on any subject, however senior.
+ *
+ * The `admin` and `owner` templates are otherwise "everything the subject
+ * supports", which is right for ordinary authority and wrong for this one:
+ * binding the company to a contract, and choosing the law that governs it, are
+ * not powers that should arrive with a job title. `owner` gets them back
+ * explicitly below — the subscriber who owns the workspace is the one person
+ * who has that authority by construction — and anybody else needs a deliberate,
+ * per-person grant recorded in `user_permission_overrides`.
+ */
+const NEVER_IN_A_TEMPLATE = new Set<string>([
+  permissionKeyLiteral('legal_terms', 'accept_for_organization'),
+  permissionKeyLiteral('legal_terms', 'manage_organization_settings'),
+]);
+
+/** Local, so the constant above can be declared before `permissionKey`. */
+function permissionKeyLiteral(subject: string, action: string): string {
+  return `${subject}:${action}`;
+}
+
+/** What the OWNER holds that no template grants — see above. */
+const OWNER_ONLY = [...NEVER_IN_A_TEMPLATE];
+
 /** Subjects a role gets nothing on at all. */
 const ADMINISTRATION_SUBJECTS = new Set(
   PERMISSION_SUBJECTS.filter((s) => s.scope === 'administration').map((s) => s.id),
 );
+
+/**
+ * Administration subjects every role may nonetheless READ.
+ *
+ * `audit_logs` because that is what makes the Read-only/Auditor role usable by
+ * an auditor. `legal_terms` because every user has to acknowledge the Terms
+ * individually before they get operational access, and a person cannot
+ * acknowledge a document they are not permitted to read. Withholding the text
+ * while requiring agreement to it is not a control, it is a trap.
+ *
+ * Neither grants any WRITE action: reading the audit trail is not editing it,
+ * and reading the Terms is not accepting them for the company.
+ */
+const ADMINISTRATION_READABLE_BY_ALL = new Set(['audit_logs', 'legal_terms']);
+
+/**
+ * Actions every role holds on a subject, whatever the rest of its template says.
+ *
+ * `legal_terms:acknowledge` is here because acknowledging the Terms for
+ * yourself is not an authority at all — it is a thing every user must do before
+ * they can work, Viewer included. Deriving it from a role ladder would mean the
+ * most junior person could be unable to perform the one act the product
+ * requires of everybody.
+ *
+ * It confers nothing beyond itself: it does not bind the organization, and
+ * `accept_for_organization` remains in NEVER_IN_A_TEMPLATE.
+ */
+const UNIVERSAL_ACTIONS: Record<string, PermissionAction[]> = {
+  legal_terms: ['acknowledge'],
+};
+
+/** What a role gets on `subject` regardless of its own rule. */
+function universalActionsFor(subject: PermissionSubject): PermissionAction[] {
+  return UNIVERSAL_ACTIONS[subject.id] ?? [];
+}
 
 /**
  * Build a template by picking, for every subject, the actions a role may use.
@@ -512,10 +612,14 @@ const ADMINISTRATION_SUBJECTS = new Set(
 function buildTemplate(allow: (subject: PermissionSubject) => PermissionAction[]): ReadonlySet<string> {
   const keys = new Set<string>();
   for (const subject of PERMISSION_SUBJECTS) {
-    for (const action of allow(subject)) {
+    for (const action of [...allow(subject), ...universalActionsFor(subject)]) {
       // Intersect with what the subject actually supports, so a rule can name an
       // action freely without inventing it where it has no meaning.
-      if (subject.actions.includes(action)) keys.add(permissionKey(subject.id, action));
+      if (!subject.actions.includes(action)) continue;
+      const key = permissionKey(subject.id, action);
+      // Corporate authority is never granted by a role rule. See the constant.
+      if (NEVER_IN_A_TEMPLATE.has(key)) continue;
+      keys.add(key);
     }
   }
   return keys;
@@ -536,12 +640,12 @@ const ROLE_TEMPLATES: Record<CatalogRole, ReadonlySet<string>> = {
      this role usable by an auditor. Governance surfaces stay closed: an auditor
      reads the books, they do not administer the people. */
   viewer: buildTemplate((subject) =>
-    ADMINISTRATION_SUBJECTS.has(subject.id) && subject.id !== 'audit_logs' ? [] : [...READ],
+    ADMINISTRATION_SUBJECTS.has(subject.id) && !ADMINISTRATION_READABLE_BY_ALL.has(subject.id) ? [] : [...READ],
   ),
 
   /* Authors records. Cannot make any of them permanent. */
   member: buildTemplate((subject) =>
-    ADMINISTRATION_SUBJECTS.has(subject.id) && subject.id !== 'audit_logs'
+    ADMINISTRATION_SUBJECTS.has(subject.id) && !ADMINISTRATION_READABLE_BY_ALL.has(subject.id)
       ? []
       : [...READ, ...AUTHOR],
   ),
@@ -550,14 +654,14 @@ const ROLE_TEMPLATES: Record<CatalogRole, ReadonlySet<string>> = {
      approve — approval is a second pair of eyes, and giving it to the same role
      that posts would make the control decorative. */
   accountant: buildTemplate((subject) =>
-    ADMINISTRATION_SUBJECTS.has(subject.id) && subject.id !== 'audit_logs'
+    ADMINISTRATION_SUBJECTS.has(subject.id) && !ADMINISTRATION_READABLE_BY_ALL.has(subject.id)
       ? []
       : [...READ, ...AUTHOR, ...BOOKKEEPING],
   ),
 
   /* The approver. Everything an Accountant may do, plus `approve`. */
   manager: buildTemplate((subject) =>
-    ADMINISTRATION_SUBJECTS.has(subject.id) && subject.id !== 'audit_logs'
+    ADMINISTRATION_SUBJECTS.has(subject.id) && !ADMINISTRATION_READABLE_BY_ALL.has(subject.id)
       ? []
       : [...READ, ...AUTHOR, ...BOOKKEEPING, 'approve'],
   ),
@@ -566,7 +670,12 @@ const ROLE_TEMPLATES: Record<CatalogRole, ReadonlySet<string>> = {
      this tenant: `manage_users` here is scoped by the organization the
      membership belongs to and confers nothing anywhere else. */
   admin: buildTemplate((subject) => subject.actions),
-  owner: buildTemplate((subject) => subject.actions),
+  /*
+   * The subscriber who owns the workspace: everything an admin has, plus the
+   * two acts of corporate authority no template grants. `owner ⊇ admin` still
+   * holds, so the ladder stays monotone.
+   */
+  owner: new Set<string>([...buildTemplate((subject) => subject.actions), ...OWNER_ONLY]),
 };
 
 /** The permissions a role grants by default, before any override. */

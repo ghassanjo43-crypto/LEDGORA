@@ -75,6 +75,17 @@ export type AuditAction =
    * classifications" stay countable apart in the trail.
    */
   | 'organization.classification_reviewed'
+  /**
+   * Legal acceptance and the registered legal country.
+   *
+   * Three distinct actions, not one with a mode: "the company agreed", "this
+   * person acknowledged" and "the governing law changed" are different facts,
+   * and a trail that lumped them together could not answer which of them
+   * happened without reading metadata.
+   */
+  | 'legal.organization_accepted'
+  | 'legal.individual_acknowledged'
+  | 'legal.country_changed'
   | 'subscriber.created'
   | 'subscription.package_assigned'
   | 'entitlement.recalculated'

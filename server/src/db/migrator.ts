@@ -34,6 +34,7 @@ import * as invoiceSettlement from './migrations/020_invoice_settlement.js';
 import * as organizationLanguage from './migrations/021_organization_language.js';
 import * as companyRegistry from './migrations/022_company_registry.js';
 import * as previewSessions from './migrations/023_preview_sessions.js';
+import * as legalAcceptance from './migrations/024_legal_acceptance.js';
 
 const MIGRATIONS: Record<string, Migration> = {
   '001_initial_schema': initialSchema,
@@ -59,6 +60,7 @@ const MIGRATIONS: Record<string, Migration> = {
   '021_organization_language': organizationLanguage,
   '022_company_registry': companyRegistry,
   '023_preview_sessions': previewSessions,
+  '024_legal_acceptance': legalAcceptance,
 };
 
 class StaticMigrationProvider implements MigrationProvider {

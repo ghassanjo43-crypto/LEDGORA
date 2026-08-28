@@ -1115,6 +1115,13 @@ async function deleteAccountTransaction(
   reason: string,
 ): Promise<DeleteAccountResult> {
   return db.transaction().execute(async (trx) => {
+    /*
+     * Erasing an identity cascades into the append-only `legal_acceptances`
+     * table. Authorise that removal for this transaction only. DELETE alone —
+     * UPDATE stays refused unconditionally, so no record of consent can be
+     * quietly rewritten on the way past.
+     */
+    await sql`SET LOCAL ledgora.allow_legal_purge = 'on'`.execute(trx);
     const user = await trx
       .selectFrom('users')
       .selectAll()
@@ -1607,6 +1614,16 @@ async function purgeSubscriberTransaction(
   reason: string,
 ): Promise<PurgeResult> {
   return db.transaction().execute(async (trx) => {
+    /*
+     * Deleting the organization cascades into `legal_acceptances`, which is
+     * append-only. Authorise that one removal for this transaction: a customer
+     * who has asked to be erased must actually be erasable, and evidence of a
+     * contract cannot outlive every party to it. The flag permits DELETE only —
+     * UPDATE stays refused unconditionally, so nothing here can rewrite what
+     * somebody agreed to on the way past.
+     */
+    await sql`SET LOCAL ledgora.allow_legal_purge = 'on'`.execute(trx);
+
     const organization = await trx
       .selectFrom('organizations')
       .selectAll()

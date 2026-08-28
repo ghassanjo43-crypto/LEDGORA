@@ -214,6 +214,67 @@ describe('role permission resolution', () => {
     expect(denied.allowed('invoices', 'amend')).toBe(false);
   });
 
+  it('gives corporate authority to the OWNER alone, and to no other role', () => {
+    /*
+     * Binding the organization to a contract, and choosing the law that governs
+     * it, are acts of corporate authority. They must not arrive with a job
+     * title — not an Accountant's, and not an Organization Admin's. Only the
+     * subscriber who owns the workspace holds them by default.
+     */
+    for (const action of ['accept_for_organization', 'manage_organization_settings']) {
+      expect(isKnownPermission('legal_terms', action)).toBe(true);
+      expect(resolve({ role: 'owner' }).allowed('legal_terms', action)).toBe(true);
+      for (const role of ['admin', 'manager', 'accountant', 'member', 'viewer'] as const) {
+        expect(
+          resolve({ role }).allowed('legal_terms', action),
+          `${role} must not hold legal_terms:${action} by default`,
+        ).toBe(false);
+      }
+    }
+    /*
+     * Reading the terms and acknowledging them FOR YOURSELF are not corporate
+     * authority. Every role holds both, Viewer included — acknowledging is the
+     * one act the product requires of everybody before they can work, and
+     * deriving it from a role ladder would leave the most junior person unable
+     * to perform it.
+     */
+    for (const role of ['owner', 'admin', 'manager', 'accountant', 'member', 'viewer'] as const) {
+      expect(resolve({ role }).allowed('legal_terms', 'view')).toBe(true);
+      expect(resolve({ role }).allowed('legal_terms', 'acknowledge')).toBe(true);
+    }
+  });
+
+  it('lets an explicit override delegate the authority to bind, one person at a time', () => {
+    const delegated = resolve({ role: 'accountant', overrides: grant('legal_terms', 'accept_for_organization') });
+    expect(delegated.allowed('legal_terms', 'accept_for_organization')).toBe(true);
+    /* One authority, not the set: delegating acceptance is not delegating the
+       country, which decides which law applies. */
+    expect(delegated.allowed('legal_terms', 'manage_organization_settings')).toBe(false);
+  });
+
+  it('lets the owner’s authority be explicitly removed', () => {
+    const denied = resolve({ role: 'owner', overrides: deny('legal_terms', 'accept_for_organization') });
+    expect(denied.allowed('legal_terms', 'accept_for_organization')).toBe(false);
+  });
+
+  it('keeps the Terms reachable when the subscription is not active', () => {
+    /*
+     * The one named exemption from the entitlement gate. Acceptance is a
+     * precondition of using the product, so gating it behind an active
+     * subscription would deadlock: the customer cannot accept because they have
+     * not paid, and the acceptance they owe is waiting when they do.
+     */
+    const lapsed = resolve({ role: 'owner', entitlementActive: false });
+    expect(lapsed.allowed('legal_terms', 'view')).toBe(true);
+    expect(lapsed.allowed('legal_terms', 'acknowledge')).toBe(true);
+    expect(lapsed.allowed('legal_terms', 'accept_for_organization')).toBe(true);
+
+    /* And it really is one exemption, not a hole. */
+    expect(lapsed.allowed('invoices', 'create')).toBe(false);
+    expect(lapsed.allowed('general_journal', 'post')).toBe(false);
+    expect(lapsed.get('invoices', 'create').source).toBe('subscription_inactive');
+  });
+
   it('keeps the ladder monotone — every role is a superset of the one below', () => {
     // viewer ⊂ member ⊂ accountant ⊂ manager ⊂ admin ⊆ owner.
     // Monotonicity makes "promotion or demotion?" answerable and stops a role
@@ -316,9 +377,21 @@ describe('subscription restriction precedence', () => {
     expect(upgraded.get('manufacturing', 'post').source).toBe('user_grant');
   });
 
-  it('refuses everything when the subscription is not live', () => {
+  it('refuses everything except the Terms when the subscription is not live', () => {
     const r = resolve({ role: 'owner', entitlementActive: false });
-    expect(r.permissions.every((p) => !p.allowed)).toBe(true);
+    /*
+     * `legal_terms` is the ONE named exemption. Acceptance is a precondition of
+     * using the product, so gating it behind an active subscription would
+     * deadlock a lapsed customer: they cannot accept because they have not
+     * paid, and the acceptance they owe is waiting when they do. The assertion
+     * is written as "everything but this subject" rather than relaxed to
+     * "mostly", so a second exemption added later fails here.
+     */
+    const refused = r.permissions.filter((p) => !p.allowed);
+    const allowed = r.permissions.filter((p) => p.allowed);
+    expect(refused.length).toBeGreaterThan(0);
+    expect(new Set(allowed.map((p) => p.subject))).toEqual(new Set(['legal_terms']));
+
     expect(r.get('invoices', 'view').source).toBe('subscription_inactive');
     // Still reported as configured, so a reactivation is visibly a restoration.
     expect(r.get('invoices', 'view').blockedByEntitlement).toBe(true);
