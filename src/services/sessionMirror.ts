@@ -23,6 +23,7 @@ import type { BackendUser } from './api/authApi';
 import { subscriptionApi } from './api/authApi';
 import { clearCsrfToken, setCompanyReference } from './api/client';
 import { resetCompanyRegistration } from './api/companyRegistration';
+import { resetCompanySettings } from './companySettingsSync';
 import { useAuthStore } from '@/store/authStore';
 import { useOrganizationStore } from '@/store/organizationStore';
 import { useBillingStore } from '@/store/billingStore';
@@ -85,6 +86,8 @@ export function clearLocalSession(): void {
    * signing in inherit a "registered" answer for books that are not theirs.
    */
   resetCompanyRegistration();
+  /* The settings version belonged to that company and that session. */
+  resetCompanySettings();
   // The organization confirmation belonged to the session that just ended. Left
   // behind, the next visitor would inherit a "confirmed" verdict for an
   // organization that is not theirs.

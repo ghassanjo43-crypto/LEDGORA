@@ -38,6 +38,7 @@ import type { Database } from '../db/schema.js';
 import { errors } from '../lib/errors.js';
 import { writeAuditLog } from '../lib/audit.js';
 import { getEntitlements } from './entitlementService.js';
+import { createDefaultSettings } from './companySettingsService.js';
 
 type Executor = Kysely<Database> | Transaction<Database>;
 
@@ -373,7 +374,16 @@ export async function registerCompany(
       .returningAll()
       .executeTakeFirst()) as unknown as CompanyRow | undefined;
 
-    if (inserted) return { company: toView(inserted), created: true, adopted: false };
+    if (inserted) {
+      /*
+       * A further set of books needs its own settings, for the same reason the
+       * first one does: a company without a fiscal year or a reporting
+       * framework is a company no report can be prepared for. Same transaction,
+       * so the pair is never half-created.
+       */
+      await createDefaultSettings(trx, input.organizationId, inserted.id);
+      return { company: toView(inserted), created: true, adopted: false };
+    }
 
     const raced = (await trx
       .selectFrom('companies')

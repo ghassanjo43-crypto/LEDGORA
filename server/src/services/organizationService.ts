@@ -1,3 +1,4 @@
+import { createDefaultSettings } from './companySettingsService.js';
 /**
  * Organizations and membership.
  *
@@ -107,7 +108,7 @@ export async function createOrganization(
      * meaning ("whatever the client calls these books") honest rather than
      * leaving it empty.
      */
-    await trx
+    const company = await trx
       .insertInto('companies')
       .values({
         /*
@@ -137,7 +138,16 @@ export async function createOrganization(
         client_reference: `provisional:${organization.id}`,
         legal_name: input.legalName.trim(),
       })
-      .execute();
+      .returning('id')
+      .executeTakeFirstOrThrow();
+
+    /*
+     * ...and the settings that say what these books mean, inheriting the
+     * organization's onboarding defaults. Same transaction, so a set of books
+     * never exists without a fiscal year or a reporting framework — a report
+     * has no sensible behaviour when they are absent.
+     */
+    await createDefaultSettings(trx, organization.id, company.id);
 
     // Attach the tenant to the applicant record. `ensureApplication` first, so a
     // pre-backfill account still gets one rather than silently losing the link.

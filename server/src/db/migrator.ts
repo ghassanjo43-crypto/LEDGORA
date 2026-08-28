@@ -37,6 +37,7 @@ import * as previewSessions from './migrations/023_preview_sessions.js';
 import * as legalAcceptance from './migrations/024_legal_acceptance.js';
 import * as companyScopedAccounting from './migrations/025_company_scoped_accounting.js';
 import * as companyAdoptionState from './migrations/026_company_adoption_state.js';
+import * as companySettings from './migrations/027_company_settings.js';
 
 const MIGRATIONS: Record<string, Migration> = {
   '001_initial_schema': initialSchema,
@@ -65,6 +66,7 @@ const MIGRATIONS: Record<string, Migration> = {
   '024_legal_acceptance': legalAcceptance,
   '025_company_scoped_accounting': companyScopedAccounting,
   '026_company_adoption_state': companyAdoptionState,
+  '027_company_settings': companySettings,
 };
 
 class StaticMigrationProvider implements MigrationProvider {

@@ -164,6 +164,15 @@ export async function ensureCompanyRegistered(): Promise<void> {
     try {
       await companiesApi.register({ clientReference: reference, legalName });
       current = { status: 'registered', reference, message: null };
+      /*
+       * The books are now adopted, so their settings can be read. Hydrated here
+       * because this is the first moment both a company and a session exist —
+       * and failure is not fatal: the cache keeps its previous answer and the
+       * settings screen reports the problem itself.
+       */
+      void import('../companySettingsSync')
+        .then((m) => m.hydrateCompanySettings())
+        .catch(() => undefined);
     } catch (error) {
       const api = error instanceof ApiError ? error : null;
       /*

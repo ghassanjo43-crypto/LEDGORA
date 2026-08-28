@@ -191,6 +191,45 @@ export interface CompaniesTable {
 }
 
 /** Why a language changed, kept beyond log retention. */
+/**
+ * Accounting settings for ONE set of books.
+ *
+ * Per company, never per organization: fiscal year, reporting framework and tax
+ * registration decide what the numbers mean, and two companies under one
+ * subscriber legitimately differ on all three. `organizations` keeps its copies
+ * as onboarding defaults only.
+ */
+export interface CompanySettingsTable {
+  organization_id: string;
+  company_id: string;
+  /** ISO month-day, e.g. '01-01'. */
+  fiscal_year_start: Generated<string>;
+  books_start_date: string | null;
+  /** Accrual only — a CHECK permits no other value until cash basis exists. */
+  accounting_basis: Generated<'accrual'>;
+  reporting_framework: Generated<'IFRS' | 'IFRS_FOR_SMES' | 'US_GAAP' | 'OTHER'>;
+  tax_registered: Generated<boolean>;
+  tax_registration_number: Generated<string>;
+  /** A percentage held exactly, as a decimal string. Never a float. */
+  default_tax_rate: ColumnType<string, string | number | undefined, string | number>;
+  organization_type: Generated<string>;
+  industry_type: Generated<string>;
+  logo_url: Generated<string>;
+  email: Generated<string>;
+  phone: Generated<string>;
+  website: Generated<string>;
+  country: Generated<string>;
+  state_province: Generated<string>;
+  city: Generated<string>;
+  address_line1: Generated<string>;
+  address_line2: Generated<string>;
+  postal_code: Generated<string>;
+  /** Optimistic concurrency token. */
+  version: Generated<number>;
+  created_at: Generated<Timestamp>;
+  updated_at: Generated<Timestamp>;
+}
+
 export interface OrganizationLanguageChangesTable {
   id: Generated<string>;
   organization_id: string;
@@ -711,6 +750,7 @@ export interface Database {
   organization_legal_country_changes: OrganizationLegalCountryChangesTable;
   organization_language_changes: OrganizationLanguageChangesTable;
   companies: CompaniesTable;
+  company_settings: CompanySettingsTable;
   platform_preview_sessions: PlatformPreviewSessionsTable;
   organization_memberships: OrganizationMembershipsTable;
   subscription_plans: SubscriptionPlansTable;

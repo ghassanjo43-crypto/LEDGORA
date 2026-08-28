@@ -32,13 +32,17 @@ afterEach(async () => { await ctx.close(); });
  * Step back off the company migrations, leaving the pre-company accounting
  * schema.
  *
- * Two steps, because 026 (adoption state) sits on top of 025 (company scoping)
- * and `migrateDown` removes one at a time. Asserting the NAMES rather than a
+ * One step per migration stacked above 025, newest first, because
+ * `migrateDown` removes one at a time. Asserting the NAMES rather than a
  * count so that adding a later migration makes this fail loudly instead of
  * silently rolling back something else.
  */
 async function rollBackCompanyScoping(): Promise<void> {
-  for (const expected of ['026_company_adoption_state', '025_company_scoped_accounting']) {
+  for (const expected of [
+    '027_company_settings',
+    '026_company_adoption_state',
+    '025_company_scoped_accounting',
+  ]) {
     const result = await createMigrator(ctx.db).migrateDown();
     if (result.error) throw result.error;
     expect(result.results?.[0]?.migrationName).toBe(expected);

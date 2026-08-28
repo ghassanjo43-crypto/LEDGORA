@@ -1,3 +1,4 @@
+import { createDefaultSettings } from './companySettingsService.js';
 /**
  * Subscribers — the operator's view of a customer ACCOUNT (an organization).
  *
@@ -295,7 +296,7 @@ export async function createSubscriber(
      * self-service registration; both paths into existence must produce a
      * tenant that works.
      */
-    await trx
+    const company = await trx
       .insertInto('companies')
       .values({
         organization_id: organization.id,
@@ -317,7 +318,15 @@ export async function createSubscriber(
         client_reference: `provisional:${organization.id}`,
         legal_name: input.organizationLegalName.trim(),
       })
-      .execute();
+      .returning('id')
+      .executeTakeFirstOrThrow();
+
+    /*
+     * ...and the settings that say what these books mean. Same transaction, so
+     * a set of books never exists without a fiscal year or a reporting
+     * framework — a report has no sensible behaviour when they are absent.
+     */
+    await createDefaultSettings(trx, organization.id, company.id);
 
     /* 3 ── the owner membership: this is what makes them the owner */
     const membership = await trx

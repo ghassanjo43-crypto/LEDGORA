@@ -5,6 +5,7 @@ import { LOGO_ACCEPT_ATTR, compressImageDataUrl, readFileAsDataUrl, validateLogo
 import { LogoImage } from '@/components/invoices/LogoImage';
 import { useStore } from '@/store/useStore';
 import { useCompanyStore } from '@/store/companyStore';
+import { saveCompanySettings } from '@/services/companySettingsSync';
 import {
   INDUSTRY_OPTIONS,
   ORGANIZATION_TYPE_OPTIONS,
@@ -78,8 +79,47 @@ export function SettingsPanel() {
 
   const dirty = JSON.stringify(draft) !== JSON.stringify(settings);
 
-  const save = (): void => {
-    updateSettings(draft);
+  const [saving, setSaving] = useState(false);
+
+  /**
+   * Write through the server, which is authoritative for every
+   * accounting-meaning setting.
+   *
+   * The local cache is refreshed from what the server RETURNS, inside
+   * `saveCompanySettings` — never from the draft. A concurrent edit answers 409
+   * and is reported rather than applied, so two people cannot silently overwrite
+   * each other's fiscal year.
+   */
+  const save = async (): Promise<void> => {
+    setSaving(true);
+    const result = await saveCompanySettings({
+      organizationType: draft.organizationType,
+      industryType: draft.industryType,
+      logoUrl: draft.logoUrl ?? '',
+      taxRegistered: draft.taxRegistered,
+      taxRegistrationNumber: draft.taxRegistrationNumber,
+      defaultTaxRate: String(draft.defaultTaxRate),
+      email: draft.email,
+      phone: draft.phone,
+      website: draft.website,
+      country: draft.country,
+      stateProvince: draft.stateProvince,
+      city: draft.city,
+      addressLine1: draft.addressLine1,
+      addressLine2: draft.addressLine2,
+      postalCode: draft.postalCode,
+      fiscalYearStart: draft.fiscalYearStart,
+      booksStartDate: draft.booksStartDate || null,
+      reportingFramework: draft.reportingFramework,
+    });
+    setSaving(false);
+
+    if (!result.ok) {
+      notify(result.error, 'error');
+      return;
+    }
+    /* Presentation mode is a view preference: local, and saved with the rest. */
+    updateSettings({ presentationMode: draft.presentationMode });
     useCompanyStore.getState().syncActiveSettings(draft);
     notify('Company settings saved.', 'success');
   };
@@ -255,11 +295,13 @@ export function SettingsPanel() {
       {tab !== 'system' && tab !== 'security' && (
         <div className="flex items-center justify-end gap-2">
           {dirty && <span className="text-xs text-amber-600 dark:text-amber-400">Unsaved changes</span>}
-          <Button variant="outline" onClick={() => setDraft(settings)} disabled={!dirty}>
+          <Button variant="outline" onClick={() => setDraft(settings)} disabled={!dirty || saving}>
             Cancel
           </Button>
-          <Button onClick={save} disabled={!dirty}>
-            Save changes
+          {/* Disabled while the write is in flight: the server owns these
+              settings now, so a second click would race its own request. */}
+          <Button onClick={() => void save()} disabled={!dirty || saving}>
+            {saving ? 'Saving…' : 'Save changes'}
           </Button>
         </div>
       )}

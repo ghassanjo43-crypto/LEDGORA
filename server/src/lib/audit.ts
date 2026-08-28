@@ -98,6 +98,12 @@ export type AuditAction =
    */
   | 'company.adopted'
   | 'company.language_locked'
+  /*
+   * Accounting settings changed for one set of books. Recorded with the field
+   * NAMES only — a tax number or a logo data URL does not belong in a trail
+   * that is read casually, and which settings moved is what the trail answers.
+   */
+  | 'company_settings.updated'
   | 'legal.organization_accepted'
   | 'legal.individual_acknowledged'
   | 'legal.country_changed'
