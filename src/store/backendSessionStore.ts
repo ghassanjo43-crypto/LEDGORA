@@ -79,6 +79,23 @@ export const useBackendSessionStore = create<BackendSessionState>()((set) => ({
           await mirrorSubscriptionFromBackend();
         }
         set({ status: 'ready', user: result.user, platformRoles: result.user.platformRoles ?? [], error: null });
+
+        /*
+         * Adopt the open company now that there is a confirmed session and a
+         * hydrated organization to name it by — the two things registration
+         * needs. Deliberately AFTER `set(...)`: `ensureCompanyRegistered` reads
+         * this store to decide whether the caller is a subscriber, so it has to
+         * see `ready`.
+         *
+         * Not awaited, and its failure is not this function's failure. Session
+         * verification must not hinge on company registration; a subscriber
+         * whose adoption is still in flight simply waits at the gate in front of
+         * the first accounting request, which is where the delay belongs and
+         * where it can be explained.
+         */
+        void import('@/services/api/companyRegistration')
+          .then((m) => m.ensureCompanyRegistered())
+          .catch(() => undefined);
         return;
       }
 

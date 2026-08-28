@@ -13,6 +13,12 @@
  * So the claims are narrow and specific: the header goes out on reads as well
  * as writes, it carries the BROWSER's reference rather than the server's uuid,
  * it follows the open company, and it is dropped at sign-out.
+ *
+ * These use a NON-GATED path deliberately. Accounting and invoice requests wait
+ * for company adoption (`companyRegistration`), so driving them here would make
+ * every assertion depend on a registration handshake that is not what this file
+ * is about. The header on a genuine accounting request is asserted where the
+ * handshake is modelled — see `companyRegistration.test.ts`.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
@@ -54,13 +60,13 @@ afterEach(() => {
 
 describe('the company selector header', () => {
   it('is omitted entirely when no company is open', async () => {
-    await apiRequest('/api/accounting/accounts');
+    await apiRequest('/api/organizations/current');
     expect(sentHeaders()[COMPANY_REFERENCE_HEADER]).toBeUndefined();
   });
 
   it('is sent on reads, not only on writes', async () => {
     setCompanyReference('co_lx8f2a');
-    await apiRequest('/api/accounting/accounts');
+    await apiRequest('/api/organizations/current');
     /*
      * A report scoped to the wrong company is as wrong as a journal posted into
      * it. Sending the selector only on unsafe methods would leave every GET
@@ -71,7 +77,7 @@ describe('the company selector header', () => {
 
   it('is sent on writes alongside the CSRF token', async () => {
     setCompanyReference('co_lx8f2a');
-    await apiRequest('/api/accounting/journals', { method: 'POST', body: { a: 1 } });
+    await apiRequest('/api/organizations/current', { method: 'POST', body: { a: 1 } });
     const headers = sentHeaders();
     expect(headers[COMPANY_REFERENCE_HEADER]).toBe('co_lx8f2a');
     expect(headers['X-CSRF-Token']).toBe('csrf-token');
@@ -79,25 +85,25 @@ describe('the company selector header', () => {
 
   it('follows the company that is open', async () => {
     setCompanyReference('co_first');
-    await apiRequest('/api/accounting/accounts');
+    await apiRequest('/api/organizations/current');
     expect(sentHeaders()[COMPANY_REFERENCE_HEADER]).toBe('co_first');
 
     setCompanyReference('co_second');
-    await apiRequest('/api/accounting/accounts');
+    await apiRequest('/api/organizations/current');
     expect(sentHeaders()[COMPANY_REFERENCE_HEADER]).toBe('co_second');
   });
 
   it('is dropped when the company is closed', async () => {
     setCompanyReference('co_first');
     setCompanyReference(null);
-    await apiRequest('/api/accounting/accounts');
+    await apiRequest('/api/organizations/current');
     expect(sentHeaders()[COMPANY_REFERENCE_HEADER]).toBeUndefined();
   });
 
   it('treats whitespace as no company rather than as a reference', async () => {
     setCompanyReference('   ');
     expect(getCompanyReference()).toBe('');
-    await apiRequest('/api/accounting/accounts');
+    await apiRequest('/api/organizations/current');
     expect(sentHeaders()[COMPANY_REFERENCE_HEADER]).toBeUndefined();
   });
 

@@ -18,7 +18,7 @@
  * with a different legal name is a disagreement about what these books are, not
  * a rename, and comes back as a 409 — see the server service for why.
  */
-import { api } from './client';
+import { api, apiRequest } from './client';
 
 export type BookkeepingLanguage = 'en' | 'ar';
 
@@ -58,9 +58,13 @@ export const companiesApi = {
     created: boolean;
     adopted: boolean;
   }> =>
-    api.post<{ company: ServerCompany; created: boolean; adopted: boolean }>(
+    apiRequest<{ company: ServerCompany; created: boolean; adopted: boolean }>(
       '/api/organizations/current/companies',
-      input,
+      /*
+       * Exempt from the adoption gate: this call IS the adoption. Waiting for
+       * itself would deadlock the first request every subscriber makes.
+       */
+      { method: 'POST', body: input, skipCompanyRegistration: true },
     ),
 
   /**

@@ -22,6 +22,7 @@
 import type { BackendUser } from './api/authApi';
 import { subscriptionApi } from './api/authApi';
 import { clearCsrfToken, setCompanyReference } from './api/client';
+import { resetCompanyRegistration } from './api/companyRegistration';
 import { useAuthStore } from '@/store/authStore';
 import { useOrganizationStore } from '@/store/organizationStore';
 import { useBillingStore } from '@/store/billingStore';
@@ -77,6 +78,13 @@ export function clearLocalSession(): void {
   // organization THEY belong to, but it would silently scope their first
   // requests to nothing and look like missing data.
   setCompanyReference(null);
+  /*
+   * And the adoption verdict that went with it. Kept next to the selector
+   * because they describe the same thing — which company this browser is
+   * working in — and a verdict outliving its session would let the next person
+   * signing in inherit a "registered" answer for books that are not theirs.
+   */
+  resetCompanyRegistration();
   // The organization confirmation belonged to the session that just ended. Left
   // behind, the next visitor would inherit a "confirmed" verdict for an
   // organization that is not theirs.

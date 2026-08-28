@@ -140,28 +140,3 @@ export async function login(ctx: TestContext, email: string, password = TEST_PAS
   return readCookies(response.headers as Record<string, unknown>);
 }
 
-/**
- * A set of books for an organization seeded directly in a test.
- *
- * Tests that build a tenant with a raw `INSERT INTO organizations` bypass
- * `createOrganization`, and so bypass the first company it creates. Accounting
- * rows are company-scoped (migration 025), so such a tenant has nowhere to post
- * until this runs.
- *
- * Returns the server company id, which is what an `AccountingActor` carries —
- * `clientReference` is the browser-facing selector and is deliberately a
- * different value.
- */
-export async function seedCompany(
-  ctx: TestContext,
-  organizationId: string,
-  legalName = 'Test Books',
-  clientReference = `co_${organizationId.slice(0, 8)}`,
-): Promise<string> {
-  const row = await ctx.db
-    .insertInto('companies')
-    .values({ organization_id: organizationId, client_reference: clientReference, legal_name: legalName })
-    .returning('id')
-    .executeTakeFirstOrThrow();
-  return row.id;
-}

@@ -37,6 +37,22 @@ export const CSRF_HEADER = 'X-CSRF-Token';
 export const COMPANY_REFERENCE_HEADER = 'X-Ledgora-Company-Reference';
 
 /**
+ * The requests that must not travel before the open company is adopted.
+ *
+ * Declared HERE, with no imports behind it, so the check is a synchronous
+ * string comparison. It lived in `companyRegistration` first, which meant every
+ * request — sign-in, session, the admin console — paid for a dynamic import
+ * just to discover it was not gated. That extra microtask was enough to push
+ * unrelated renders past their assertions, which is a fair warning about
+ * putting work on a path that does not need it.
+ */
+const GATED_PREFIXES = ['/api/accounting', '/api/invoices'] as const;
+
+export function requiresCompanyRegistration(path: string): boolean {
+  return GATED_PREFIXES.some((prefix) => path.startsWith(prefix));
+}
+
+/**
  * The CSRF token, held only for the lifetime of the page. A reload drops it;
  * `GET /api/auth/session` re-supplies it, so it is recovered before any unsafe
  * request the app makes after start-up.
@@ -145,6 +161,11 @@ export interface ApiRequestOptions {
   /** Multipart payloads bypass JSON encoding. */
   formData?: FormData;
   signal?: AbortSignal;
+  /**
+   * Skip the company-adoption gate. Set by the registration call itself, which
+   * would otherwise wait for the step it exists to perform.
+   */
+  skipCompanyRegistration?: boolean;
 }
 
 /**
@@ -179,6 +200,24 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions = {
   } else if (options.body !== undefined) {
     headers['content-type'] = 'application/json';
     payload = JSON.stringify(options.body);
+  }
+
+  /*
+   * The books may not be read until the open company is adopted by the server.
+   *
+   * In front of the request rather than at each call site: an unadopted header
+   * answers 404, which is indistinguishable from "you have no data" — the most
+   * misleading thing this feature could tell a bookkeeper.
+   *
+   * Imported dynamically because the dependency is genuinely circular —
+   * registration issues its own request through this very function — and a
+   * static import would leave one of the two half-initialised depending on
+   * which module the bundler reached first. Skipped for the registration call
+   * itself, which is the step being waited for.
+   */
+  if (!options.skipCompanyRegistration && requiresCompanyRegistration(path)) {
+    const { awaitCompanyRegistration } = await import('./companyRegistration');
+    await awaitCompanyRegistration();
   }
 
   let response: Response;
