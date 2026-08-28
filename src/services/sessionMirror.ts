@@ -21,7 +21,7 @@
  */
 import type { BackendUser } from './api/authApi';
 import { subscriptionApi } from './api/authApi';
-import { clearCsrfToken } from './api/client';
+import { clearCsrfToken, setCompanyReference } from './api/client';
 import { useAuthStore } from '@/store/authStore';
 import { useOrganizationStore } from '@/store/organizationStore';
 import { useBillingStore } from '@/store/billingStore';
@@ -71,6 +71,12 @@ export function clearLocalSession(): void {
   clearWorkspaceForSignOut();
   useAuthStore.getState().logout();
   clearCsrfToken();
+  // So does the open company. A selector left behind would point the next
+  // person signing in on this browser at the previous user's set of books —
+  // harmless against the server, which resolves it only inside whatever
+  // organization THEY belong to, but it would silently scope their first
+  // requests to nothing and look like missing data.
+  setCompanyReference(null);
   // The organization confirmation belonged to the session that just ended. Left
   // behind, the next visitor would inherit a "confirmed" verdict for an
   // organization that is not theirs.

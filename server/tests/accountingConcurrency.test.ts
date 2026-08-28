@@ -66,7 +66,18 @@ describe.skipIf(!DATABASE_URL)('journal numbering under real concurrency', () =>
       return orgRows[0]!.id;
     });
 
-    actor = { organizationId, userId: userRows[0]!.id, name: 'Concurrency Tester' };
+    const { rows: companyRows } = await sql<{ id: string }>`
+      INSERT INTO companies (organization_id, client_reference, legal_name)
+      VALUES (${organizationId}, ${`co_${organizationId}`}, 'Concurrency Books')
+      RETURNING id
+    `.execute(db);
+
+    actor = {
+      organizationId,
+      companyId: companyRows[0]!.id,
+      userId: userRows[0]!.id,
+      name: 'Concurrency Tester',
+    };
     cash = (await accounts.createAccount(db, actor, {
       accountCode: '1000', accountName: 'Cash', accountType: 'asset',
     })).id;

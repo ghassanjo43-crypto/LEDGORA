@@ -21,34 +21,62 @@ import { createTestContext, seedUser, type TestContext } from './helpers/testApp
 let ctx: TestContext;
 let orgA: string;
 let orgB: string;
+/** The default set of books for each organization, keyed by organization id. */
+const defaultCompany = new Map<string, string>();
 
-/** A bare organization row — enough to hang accounting off. */
-async function organization(name: string): Promise<string> {
-  const owner = await seedUser(ctx, { email: `${name.toLowerCase().replace(/\W+/gu, '-')}@foundation.test` });
-  return ctx.db.transaction().execute(async (trx) => {
-    const org = await trx.insertInto('organizations').values({ subscriber_owner_user_id: owner.id, legal_name: name, country: 'JO', base_currency: 'JOD', fiscal_year_start: '01-01', data_classification: 'test' }).returning('id').executeTakeFirstOrThrow();
-    await trx.insertInto('organization_memberships').values({ organization_id: org.id, user_id: owner.id, role: 'owner' }).execute();
-    return org.id;
-  });
-}
+/** The company every helper writes into unless a test names another. */
+const booksOf = (org: string): string => defaultCompany.get(org)!;
 
-async function account(org: string, code: string, type = 'asset', normal = 'debit'): Promise<string> {
+/** A company under `org`. Several may exist, which is the point of most of this file. */
+async function company(org: string, reference: string, name = 'Books'): Promise<string> {
   const { rows } = await sql<{ id: string }>`
-    INSERT INTO accounts (organization_id, account_code, account_name, account_type, normal_balance)
-    VALUES (${org}, ${code}, ${`Account ${code}`}, ${type}, ${normal})
+    INSERT INTO companies (organization_id, client_reference, legal_name)
+    VALUES (${org}, ${reference}, ${name})
     RETURNING id
   `.execute(ctx.db);
   return rows[0]!.id;
 }
 
-async function entry(org: string, number: string, status = 'draft'): Promise<string> {
+/** A bare organization row, with one set of books — enough to hang accounting off. */
+async function organization(name: string): Promise<string> {
+  const owner = await seedUser(ctx, { email: `${name.toLowerCase().replace(/\W+/gu, '-')}@foundation.test` });
+  const org = await ctx.db.transaction().execute(async (trx) => {
+    const row = await trx.insertInto('organizations').values({ subscriber_owner_user_id: owner.id, legal_name: name, country: 'JO', base_currency: 'JOD', fiscal_year_start: '01-01', data_classification: 'test' }).returning('id').executeTakeFirstOrThrow();
+    await trx.insertInto('organization_memberships').values({ organization_id: row.id, user_id: owner.id, role: 'owner' }).execute();
+    return row.id;
+  });
+  defaultCompany.set(org, await company(org, `co_${org}`, `${name} Books`));
+  return org;
+}
+
+async function account(
+  org: string,
+  code: string,
+  type = 'asset',
+  normal = 'debit',
+  books = booksOf(org),
+): Promise<string> {
+  const { rows } = await sql<{ id: string }>`
+    INSERT INTO accounts (organization_id, company_id, account_code, account_name, account_type, normal_balance)
+    VALUES (${org}, ${books}, ${code}, ${`Account ${code}`}, ${type}, ${normal})
+    RETURNING id
+  `.execute(ctx.db);
+  return rows[0]!.id;
+}
+
+async function entry(
+  org: string,
+  number: string,
+  status = 'draft',
+  books = booksOf(org),
+): Promise<string> {
   const { rows } = await sql<{ id: string }>`
     INSERT INTO journal_entries (
-      organization_id, journal_number, transaction_date, posting_date, status,
+      organization_id, company_id, journal_number, transaction_date, posting_date, status,
       transaction_currency, functional_currency, exchange_rate,
       posted_at
     ) VALUES (
-      ${org}, ${number}, '2026-08-01', '2026-08-01', ${status},
+      ${org}, ${books}, ${number}, '2026-08-01', '2026-08-01', ${status},
       'JOD', 'JOD', 1,
       ${status === 'posted' ? '2026-08-01T00:00:00Z' : null}
     ) RETURNING id
@@ -64,14 +92,15 @@ async function line(
   lineNumber: number,
   debit: number,
   credit: number,
+  books = booksOf(org),
 ): Promise<string | null> {
   try {
     await sql`
       INSERT INTO journal_lines (
-        organization_id, journal_entry_id, line_number, account_id,
+        organization_id, company_id, journal_entry_id, line_number, account_id,
         debit_transaction, credit_transaction, debit_functional, credit_functional
       ) VALUES (
-        ${org}, ${entryId}, ${lineNumber}, ${accountId},
+        ${org}, ${books}, ${entryId}, ${lineNumber}, ${accountId},
         ${debit}, ${credit}, ${debit}, ${credit}
       )
     `.execute(ctx.db);
@@ -83,6 +112,7 @@ async function line(
 
 beforeEach(async () => {
   ctx = await createTestContext();
+  defaultCompany.clear();
   orgA = await organization('Org A');
   orgB = await organization('Org B');
 });
@@ -161,9 +191,9 @@ describe('double-entry rules', () => {
     try {
       await sql`
         INSERT INTO journal_lines (
-          organization_id, journal_entry_id, line_number, account_id,
+          organization_id, company_id, journal_entry_id, line_number, account_id,
           debit_transaction, credit_transaction, debit_functional, credit_functional
-        ) VALUES (${orgA}, ${je}, 1, ${acc}, 100, 0, 0, 100)
+        ) VALUES (${orgA}, ${booksOf(orgA)}, ${je}, 1, ${acc}, 100, 0, 0, 100)
       `.execute(ctx.db);
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
@@ -191,9 +221,9 @@ describe('double-entry rules', () => {
     let error: string | null = null;
     try {
       await sql`
-        INSERT INTO journal_entries (organization_id, journal_number, transaction_date, posting_date,
+        INSERT INTO journal_entries (organization_id, company_id, journal_number, transaction_date, posting_date,
                                      status, transaction_currency, functional_currency)
-        VALUES (${orgA}, 'JE-BAD', '2026-08-01', '2026-08-01', 'posted', 'JOD', 'JOD')
+        VALUES (${orgA}, ${booksOf(orgA)}, 'JE-BAD', '2026-08-01', '2026-08-01', 'posted', 'JOD', 'JOD')
       `.execute(ctx.db);
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
@@ -205,9 +235,9 @@ describe('double-entry rules', () => {
     let error: string | null = null;
     try {
       await sql`
-        INSERT INTO journal_entries (organization_id, journal_number, transaction_date, posting_date,
+        INSERT INTO journal_entries (organization_id, company_id, journal_number, transaction_date, posting_date,
                                      status, transaction_currency, functional_currency)
-        VALUES (${orgA}, 'JE-BAD2', '2026-08-01', '2026-08-01', 'half-posted', 'JOD', 'JOD')
+        VALUES (${orgA}, ${booksOf(orgA)}, 'JE-BAD2', '2026-08-01', '2026-08-01', 'half-posted', 'JOD', 'JOD')
       `.execute(ctx.db);
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
@@ -253,14 +283,14 @@ describe('tenant isolation', () => {
     let error: string | null = null;
     try {
       await sql`
-        INSERT INTO accounts (organization_id, account_code, account_name, account_type,
+        INSERT INTO accounts (organization_id, company_id, account_code, account_name, account_type,
                               normal_balance, parent_account_id)
-        VALUES (${orgA}, '1100', 'Child', 'asset', 'debit', ${parentOfB})
+        VALUES (${orgA}, ${booksOf(orgA)}, '1100', 'Child', 'asset', 'debit', ${parentOfB})
       `.execute(ctx.db);
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     }
-    expect(error).toMatch(/parent_same_org|violates foreign key/i);
+    expect(error).toMatch(/parent_same_company|violates foreign key/i);
   });
 
   it('refuses a correction link across tenants', async () => {
@@ -268,14 +298,14 @@ describe('tenant isolation', () => {
     let error: string | null = null;
     try {
       await sql`
-        INSERT INTO journal_entries (organization_id, journal_number, transaction_date, posting_date,
+        INSERT INTO journal_entries (organization_id, company_id, journal_number, transaction_date, posting_date,
                                      transaction_currency, functional_currency, original_entry_id)
-        VALUES (${orgA}, 'JE-0010', '2026-08-01', '2026-08-01', 'JOD', 'JOD', ${entryOfB})
+        VALUES (${orgA}, ${booksOf(orgA)}, 'JE-0010', '2026-08-01', '2026-08-01', 'JOD', 'JOD', ${entryOfB})
       `.execute(ctx.db);
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     }
-    expect(error).toMatch(/same_org|violates foreign key/i);
+    expect(error).toMatch(/same_company|violates foreign key/i);
   });
 
   it('scopes account codes per organization', async () => {
@@ -316,10 +346,13 @@ describe('account lifecycle', () => {
 /* ══ Accounting periods ════════════════════════════════════════════════════ */
 
 describe('accounting periods', () => {
-  const period = (org: string, year: number, number_: number, start: string, end: string, status = 'open') =>
+  const period = (
+    org: string, year: number, number_: number, start: string, end: string,
+    status = 'open', books = booksOf(org),
+  ) =>
     sql`
-      INSERT INTO accounting_periods (organization_id, fiscal_year, period_number, start_date, end_date, status)
-      VALUES (${org}, ${year}, ${number_}, ${start}, ${end}, ${status})
+      INSERT INTO accounting_periods (organization_id, company_id, fiscal_year, period_number, start_date, end_date, status)
+      VALUES (${org}, ${books}, ${year}, ${number_}, ${start}, ${end}, ${status})
     `.execute(ctx.db);
 
   it('accepts consecutive periods and rejects a duplicate', async () => {
@@ -348,8 +381,8 @@ describe('version history and audit', () => {
   it('keeps a version snapshot bound to its entry and organization', async () => {
     const je = await entry(orgA, 'JE-0001');
     await sql`
-      INSERT INTO journal_entry_versions (organization_id, journal_entry_id, version, change_kind, reason, snapshot)
-      VALUES (${orgA}, ${je}, 1, 'created', '', ${JSON.stringify({ status: 'draft' })}::jsonb)
+      INSERT INTO journal_entry_versions (organization_id, company_id, journal_entry_id, version, change_kind, reason, snapshot)
+      VALUES (${orgA}, ${booksOf(orgA)}, ${je}, 1, 'created', '', ${JSON.stringify({ status: 'draft' })}::jsonb)
     `.execute(ctx.db);
 
     const { rows } = await sql<{ version: number; change_kind: string }>`
@@ -361,8 +394,8 @@ describe('version history and audit', () => {
   it('refuses two snapshots of the same version', async () => {
     const je = await entry(orgA, 'JE-0001');
     const insert = () => sql`
-      INSERT INTO journal_entry_versions (organization_id, journal_entry_id, version, change_kind, snapshot)
-      VALUES (${orgA}, ${je}, 1, 'created', '{}'::jsonb)
+      INSERT INTO journal_entry_versions (organization_id, company_id, journal_entry_id, version, change_kind, snapshot)
+      VALUES (${orgA}, ${booksOf(orgA)}, ${je}, 1, 'created', '{}'::jsonb)
     `.execute(ctx.db);
     await insert();
     await expect(insert()).rejects.toThrow(/unique|duplicate key/i);
@@ -372,17 +405,17 @@ describe('version history and audit', () => {
     const entryOfB = await entry(orgB, 'JE-0001');
     await expect(
       sql`
-        INSERT INTO journal_entry_versions (organization_id, journal_entry_id, version, change_kind, snapshot)
-        VALUES (${orgA}, ${entryOfB}, 1, 'created', '{}'::jsonb)
+        INSERT INTO journal_entry_versions (organization_id, company_id, journal_entry_id, version, change_kind, snapshot)
+        VALUES (${orgA}, ${booksOf(orgA)}, ${entryOfB}, 1, 'created', '{}'::jsonb)
       `.execute(ctx.db),
-    ).rejects.toThrow(/same_org|violates foreign key/i);
+    ).rejects.toThrow(/same_company|violates foreign key/i);
   });
 
   it('keeps an audit event after the record it describes is gone', async () => {
     const je = await entry(orgA, 'JE-0001');
     await sql`
-      INSERT INTO accounting_audit_events (organization_id, action, record_type, record_id, actor_name)
-      VALUES (${orgA}, 'JOURNAL_CREATED', 'journal_entry', ${je}, 'Tester')
+      INSERT INTO accounting_audit_events (organization_id, company_id, action, record_type, record_id, actor_name)
+      VALUES (${orgA}, ${booksOf(orgA)}, 'JOURNAL_CREATED', 'journal_entry', ${je}, 'Tester')
     `.execute(ctx.db);
 
     // The draft is deleted; the record of who created it must survive, which is

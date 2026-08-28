@@ -53,10 +53,28 @@ async function user(email: string): Promise<string> {
   return rows[0]!.id;
 }
 
+/**
+ * The set of books for a directly-seeded organization.
+ *
+ * These tests insert their tenant with raw SQL rather than through
+ * `createOrganization`, so they bypass the first company it creates. Accounting
+ * rows are company-scoped, so without this there is nowhere to post.
+ */
+async function books(organizationId: string): Promise<string> {
+  const { rows } = await sql<{ id: string }>`
+    INSERT INTO companies (organization_id, client_reference, legal_name)
+    VALUES (${organizationId}, ${`co_${organizationId}`}, 'Test Books')
+    RETURNING id
+  `.execute(ctx.db);
+  return rows[0]!.id;
+}
+
 /** A company keeping its books in `currency`, with two postable accounts. */
 async function company(name: string, currency: string) {
+  const organizationId = await organization(name, currency);
   const actor: AccountingActor = {
-    organizationId: await organization(name, currency),
+    organizationId,
+    companyId: await books(organizationId),
     userId: await user(`${name.toLowerCase().replace(/\W/g, '')}@test.local`),
     name: `${name} Bookkeeper`,
   };
@@ -313,10 +331,10 @@ describe('records that already exceed the precision', () => {
   async function legacyOverPreciseEntry(actor: AccountingActor, cash: string, sales: string) {
     const { rows } = await sql<{ id: string }>`
       INSERT INTO journal_entries (
-        organization_id, journal_number, transaction_date, posting_date, status,
+        organization_id, company_id, journal_number, transaction_date, posting_date, status,
         transaction_currency, functional_currency, exchange_rate, posted_at, version
       ) VALUES (
-        ${actor.organizationId}, 'JE-900001', '2025-01-15', '2025-01-15', 'posted',
+        ${actor.organizationId}, ${actor.companyId}, 'JE-900001', '2025-01-15', '2025-01-15', 'posted',
         'JOD', 'JOD', 1, '2025-01-15T00:00:00Z', 1
       ) RETURNING id
     `.execute(ctx.db);
@@ -327,10 +345,10 @@ describe('records that already exceed the precision', () => {
     ]) {
       await sql`
         INSERT INTO journal_lines (
-          organization_id, journal_entry_id, line_number, account_id,
+          organization_id, company_id, journal_entry_id, line_number, account_id,
           debit_transaction, credit_transaction, debit_functional, credit_functional
         ) VALUES (
-          ${actor.organizationId}, ${id}, ${line.n}, ${line.account},
+          ${actor.organizationId}, ${actor.companyId}, ${id}, ${line.n}, ${line.account},
           ${line.debit}, ${line.credit}, ${line.debit}, ${line.credit}
         )
       `.execute(ctx.db);

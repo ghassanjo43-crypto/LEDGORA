@@ -213,21 +213,41 @@ function toJournal(row: any, lines: any[]): JournalRecord {
   };
 }
 
-async function loadJournal(db: Executor, organizationId: string, journalId: string): Promise<JournalRecord> {
+/**
+ * Takes the ACTOR rather than an organization id, deliberately.
+ *
+ * Twelve call sites reach this function, and every one of them previously
+ * passed `actor.organizationId` — which is exactly how the company scope came
+ * to be missing from all twelve at once. Taking the whole actor makes the
+ * company impossible to leave behind.
+ */
+async function loadJournal(
+  db: Executor,
+  actor: AccountingActor,
+  journalId: string,
+): Promise<JournalRecord> {
   const row = await db
     .selectFrom('journal_entries')
     .selectAll()
-    .where('organization_id', '=', organizationId)
+    .where('organization_id', '=', actor.organizationId)
+    .where('company_id', '=', actor.companyId)
     .where('id', '=', journalId)
     .executeTakeFirst();
-  // Cross-tenant reads are indistinguishable from a missing record, so the id
-  // itself never confirms that another organization's journal exists.
+  /*
+   * A journal belonging to another tenant, and one belonging to a SIBLING
+   * COMPANY of the same subscriber, are both indistinguishable from a record
+   * that does not exist. The second case is the one that matters here: the
+   * caller is a legitimate member of the organization that owns the row, so
+   * anything other than "not found" would confirm the entry to somebody who has
+   * no business in those books.
+   */
   if (!row) throw errors.notFound('Journal entry');
 
   const lines = await db
     .selectFrom('journal_lines')
     .selectAll()
-    .where('organization_id', '=', organizationId)
+    .where('organization_id', '=', actor.organizationId)
+    .where('company_id', '=', actor.companyId)
     .where('journal_entry_id', '=', journalId)
     .execute();
   return toJournal(row, lines);
@@ -238,7 +258,7 @@ export async function getJournal(
   actor: AccountingActor,
   journalId: string,
 ): Promise<JournalRecord> {
-  return loadJournal(db, actor.organizationId, journalId);
+  return loadJournal(db, actor, journalId);
 }
 
 export interface ListOptions {
@@ -256,7 +276,8 @@ export async function listJournals(
   let query = db
     .selectFrom('journal_entries')
     .selectAll()
-    .where('organization_id', '=', actor.organizationId);
+    .where('organization_id', '=', actor.organizationId)
+    .where('company_id', '=', actor.companyId);
   if (options.status) query = query.where('status', '=', options.status);
   if (options.from) query = query.where('posting_date', '>=', options.from);
   if (options.to) query = query.where('posting_date', '<=', options.to);
@@ -272,6 +293,7 @@ export async function listJournals(
     .selectFrom('journal_lines')
     .selectAll()
     .where('organization_id', '=', actor.organizationId)
+    .where('company_id', '=', actor.companyId)
     .where(
       'journal_entry_id',
       'in',
@@ -311,12 +333,13 @@ export async function listJournalHistory(
   journalId: string,
 ): Promise<JournalVersionRecord[]> {
   // Confirms the entry is this organization's before returning anything.
-  await loadJournal(db, actor.organizationId, journalId);
+  await loadJournal(db, actor, journalId);
 
   const rows = await db
     .selectFrom('journal_entry_versions')
     .selectAll()
     .where('organization_id', '=', actor.organizationId)
+    .where('company_id', '=', actor.companyId)
     .where('journal_entry_id', '=', journalId)
     .orderBy('version')
     .execute();
@@ -362,15 +385,24 @@ export async function listJournalHistory(
  * guarantee structural rather than a promise that this function was always
  * called correctly.
  */
-async function allocateJournalNumber(trx: Trx, organizationId: string): Promise<string> {
-  // hashtext() gives a stable int from the tenant id; the literal namespaces
-  // the key so it cannot collide with an unrelated advisory lock elsewhere.
-  await sql`select pg_advisory_xact_lock(hashtext(${'journal_number:' + organizationId}))`.execute(trx);
+async function allocateJournalNumber(
+  trx: Trx,
+  organizationId: string,
+  companyId: string,
+): Promise<string> {
+  /*
+   * The lock and the search are both per COMPANY. Each set of books runs its
+   * own JE sequence from one, so a subscriber's second company does not begin
+   * numbering wherever the first happened to stop — and the two never contend
+   * for the same lock.
+   */
+  await sql`select pg_advisory_xact_lock(hashtext(${`journal_number:${organizationId}:${companyId}`}))`.execute(trx);
 
   const row = await trx
     .selectFrom('journal_entries')
     .select(sql<string | null>`max(journal_number)`.as('highest'))
     .where('organization_id', '=', organizationId)
+    .where('company_id', '=', companyId)
     .where('journal_number', 'like', 'JE-%')
     .executeTakeFirst();
 
@@ -403,6 +435,7 @@ function isMeaningful(line: JournalLineInput): boolean {
 async function validateForPosting(
   trx: Trx,
   organizationId: string,
+  companyId: string,
   journal: JournalRecord,
   options: { enforceCurrentAccountEligibility?: boolean } = {},
 ): Promise<void> {
@@ -416,6 +449,7 @@ async function validateForPosting(
   const accounts = await loadAccountsForPosting(
     trx,
     organizationId,
+    companyId,
     lines.map((l) => l.accountId).filter(Boolean),
   );
 
@@ -631,6 +665,7 @@ function keepRecordedCurrency(
 async function insertLines(
   trx: Trx,
   organizationId: string,
+  companyId: string,
   journalId: string,
   lines: JournalLineInput[],
   rate: Money.Amount,
@@ -685,10 +720,17 @@ async function insertLines(
    */
   const named = meaningful.map((line) => line.accountId).filter(Boolean);
   if (named.length > 0) {
-    const known = await loadAccountsForPosting(trx, organizationId, named);
+    const known = await loadAccountsForPosting(trx, organizationId, companyId, named);
     const missing = named.find((id) => !known.has(id));
     if (missing) {
-      throw errors.validation('An account on this entry does not exist in this organization.');
+      /*
+       * Reached for an account of ANOTHER company as well as one that does not
+       * exist — `loadAccountsForPosting` is scoped to this company, so the two
+       * are indistinguishable here. The database would refuse the insert
+       * regardless; this produces a readable message instead of a constraint
+       * violation.
+       */
+      throw errors.validation('An account on this entry does not exist in this company.');
     }
   }
 
@@ -700,6 +742,7 @@ async function insertLines(
         const credit = amount(line.credit, `line ${index + 1} credit`);
         return {
           organization_id: organizationId,
+          company_id: companyId,
           journal_entry_id: journalId,
           line_number: index + 1,
           account_id: line.accountId,
@@ -754,6 +797,7 @@ async function writeVersion(
     .insertInto('journal_entry_versions')
     .values({
       organization_id: actor.organizationId,
+      company_id: actor.companyId,
       journal_entry_id: journal.id,
       version: journal.version,
       change_kind: changeKind,
@@ -783,6 +827,7 @@ async function lockAndVerify(
     .selectFrom('journal_entries')
     .select(['id', 'version'])
     .where('organization_id', '=', actor.organizationId)
+    .where('company_id', '=', actor.companyId)
     .where('id', '=', journalId)
     .forUpdate()
     .executeTakeFirst();
@@ -793,7 +838,7 @@ async function lockAndVerify(
   if (typeof expectedVersion !== 'number' || expectedVersion !== locked.version) {
     throw errors.conflict(CONCURRENCY_MESSAGE);
   }
-  return loadJournal(trx, actor.organizationId, journalId);
+  return loadJournal(trx, actor, journalId);
 }
 
 export async function createDraft(
@@ -809,11 +854,12 @@ export async function createDraft(
     const functionalCurrency = await functionalCurrencyOf(trx, actor.organizationId);
     const { transactionCurrency, rate } = resolveOrdinaryCurrency(input, functionalCurrency);
 
-    const journalNumber = await allocateJournalNumber(trx, actor.organizationId);
+    const journalNumber = await allocateJournalNumber(trx, actor.organizationId, actor.companyId);
     const created = await trx
       .insertInto('journal_entries')
       .values({
         organization_id: actor.organizationId,
+        company_id: actor.companyId,
         journal_number: journalNumber,
         journal_type: input.journalType ?? 'general',
         transaction_date: input.transactionDate,
@@ -833,9 +879,9 @@ export async function createDraft(
       .returning('id')
       .executeTakeFirstOrThrow();
 
-    await insertLines(trx, actor.organizationId, created.id, input.lines ?? [], rate, transactionCurrency);
+    await insertLines(trx, actor.organizationId, actor.companyId, created.id, input.lines ?? [], rate, transactionCurrency);
 
-    const journal = await loadJournal(trx, actor.organizationId, created.id);
+    const journal = await loadJournal(trx, actor, created.id);
     await writeVersion(trx, actor, journal, 'created', '');
     await hooks.afterVersion?.(trx, journal);
     await writeAccountingAudit(trx, actor, {
@@ -868,7 +914,7 @@ export async function updateDraft(
 
     // Moving a draft's date re-evaluates its period: a draft may not be saved
     // into a period that is already locked.
-    await assertPeriodAccepts(trx, actor.organizationId, postingDate, 'amend');
+    await assertPeriodAccepts(trx, actor.organizationId, actor.companyId, postingDate, 'amend');
 
     await trx
       .updateTable('journal_entries')
@@ -885,17 +931,19 @@ export async function updateDraft(
         updated_at: new Date(),
       })
       .where('organization_id', '=', actor.organizationId)
+      .where('company_id', '=', actor.companyId)
       .where('id', '=', journalId)
       .execute();
 
     await trx
       .deleteFrom('journal_lines')
       .where('organization_id', '=', actor.organizationId)
+      .where('company_id', '=', actor.companyId)
       .where('journal_entry_id', '=', journalId)
       .execute();
-    await insertLines(trx, actor.organizationId, journalId, input.lines ?? [], rate, transactionCurrency);
+    await insertLines(trx, actor.organizationId, actor.companyId, journalId, input.lines ?? [], rate, transactionCurrency);
 
-    const updated = await loadJournal(trx, actor.organizationId, journalId);
+    const updated = await loadJournal(trx, actor, journalId);
     await writeVersion(trx, actor, updated, 'amended', options.reason ?? '');
     await hooks.afterVersion?.(trx, updated);
     await writeAccountingAudit(trx, actor, {
@@ -926,6 +974,7 @@ export async function deleteDraft(
     await trx
       .deleteFrom('journal_entries')
       .where('organization_id', '=', actor.organizationId)
+      .where('company_id', '=', actor.companyId)
       .where('id', '=', journalId)
       .execute();
 
@@ -961,8 +1010,8 @@ export async function postJournal(
     if (journal.status === 'posted') throw errors.conflict('This entry is already posted.');
     if (journal.status !== 'draft') throw errors.conflict(`A ${journal.status} entry cannot be posted.`);
 
-    await assertPeriodAccepts(trx, actor.organizationId, journal.postingDate, 'post');
-    await validateForPosting(trx, actor.organizationId, journal);
+    await assertPeriodAccepts(trx, actor.organizationId, actor.companyId, journal.postingDate, 'post');
+    await validateForPosting(trx, actor.organizationId, actor.companyId, journal);
 
     const now = new Date();
     await trx
@@ -976,10 +1025,11 @@ export async function postJournal(
         updated_at: now,
       })
       .where('organization_id', '=', actor.organizationId)
+      .where('company_id', '=', actor.companyId)
       .where('id', '=', journalId)
       .execute();
 
-    const posted = await loadJournal(trx, actor.organizationId, journalId);
+    const posted = await loadJournal(trx, actor, journalId);
     await writeVersion(trx, actor, posted, 'posted', options.reason ?? '');
     await hooks.afterVersion?.(trx, posted);
 
@@ -1036,12 +1086,12 @@ export async function assessAmendment(
   actor: AccountingActor,
   journalId: string,
 ): Promise<AmendmentAssessment> {
-  const journal = await loadJournal(db, actor.organizationId, journalId);
+  const journal = await loadJournal(db, actor, journalId);
   const base = { journalId, status: journal.status, version: journal.version };
 
   const period = await (async () => {
     try {
-      await assertPeriodAccepts(db, actor.organizationId, journal.postingDate, 'amend');
+      await assertPeriodAccepts(db, actor.organizationId, actor.companyId, journal.postingDate, 'amend');
       return null;
     } catch (error) {
       return error instanceof Error ? error.message : String(error);
@@ -1103,8 +1153,8 @@ export async function amendPostedJournal(
     }
 
     const postingDate = resolveDates(input);
-    await assertPeriodAccepts(trx, actor.organizationId, existing.postingDate, 'amend');
-    await assertPeriodAccepts(trx, actor.organizationId, postingDate, 'amend');
+    await assertPeriodAccepts(trx, actor.organizationId, actor.companyId, existing.postingDate, 'amend');
+    await assertPeriodAccepts(trx, actor.organizationId, actor.companyId, postingDate, 'amend');
 
     // A POSTED entry's denomination is settled history. An amendment corrects
     // figures within it; it does not re-denominate them.
@@ -1124,19 +1174,21 @@ export async function amendPostedJournal(
         updated_at: new Date(),
       })
       .where('organization_id', '=', actor.organizationId)
+      .where('company_id', '=', actor.companyId)
       .where('id', '=', journalId)
       .execute();
 
     await trx
       .deleteFrom('journal_lines')
       .where('organization_id', '=', actor.organizationId)
+      .where('company_id', '=', actor.companyId)
       .where('journal_entry_id', '=', journalId)
       .execute();
-    await insertLines(trx, actor.organizationId, journalId, input.lines ?? [], rate, existing.transactionCurrency);
+    await insertLines(trx, actor.organizationId, actor.companyId, journalId, input.lines ?? [], rate, existing.transactionCurrency);
 
-    const amended = await loadJournal(trx, actor.organizationId, journalId);
+    const amended = await loadJournal(trx, actor, journalId);
     // A correction to a POSTED entry must still be a valid posting.
-    await validateForPosting(trx, actor.organizationId, amended);
+    await validateForPosting(trx, actor.organizationId, actor.companyId, amended);
     await writeVersion(trx, actor, amended, 'amended', reason);
 
     await writeAccountingAudit(trx, actor, {
@@ -1174,13 +1226,14 @@ async function insertReversal(
   // Mirrors the original's denomination exactly, including a legacy one. A
   // reversal that withdrew a USD entry in JOD would not withdraw it.
   const rate = amount(original.exchangeRate, 'exchangeRate');
-  const number = await allocateJournalNumber(trx, actor.organizationId);
+  const number = await allocateJournalNumber(trx, actor.organizationId, actor.companyId);
   const now = new Date();
 
   const created = await trx
     .insertInto('journal_entries')
     .values({
       organization_id: actor.organizationId,
+      company_id: actor.companyId,
       journal_number: number,
       journal_type: original.journalType,
       transaction_date: original.transactionDate,
@@ -1202,13 +1255,13 @@ async function insertReversal(
     .executeTakeFirstOrThrow();
 
   // null: a reversal copies figures already in the books. See insertLines.
-  await insertLines(trx, actor.organizationId, created.id, reverseLines(original), rate, null);
+  await insertLines(trx, actor.organizationId, actor.companyId, created.id, reverseLines(original), rate, null);
 
-  const reversal = await loadJournal(trx, actor.organizationId, created.id);
+  const reversal = await loadJournal(trx, actor, created.id);
   // A reversal withdraws an already-recorded posting. Re-check its balance and
   // tenant-owned references, but do not strand history because an account was
   // subsequently retired or blocked.
-  await validateForPosting(trx, actor.organizationId, reversal, { enforceCurrentAccountEligibility: false });
+  await validateForPosting(trx, actor.organizationId, actor.companyId, reversal, { enforceCurrentAccountEligibility: false });
   // It is born posted, so its first version is the posted one.
   await writeVersion(trx, actor, reversal, 'posted', reason);
   return reversal;
@@ -1232,8 +1285,8 @@ export async function reverseJournal(
     if (original.status !== 'posted') throw errors.conflict('Only a posted entry can be reversed.');
 
     const postingDate = options.postingDate ?? original.postingDate;
-    await assertPeriodAccepts(trx, actor.organizationId, original.postingDate, 'amend');
-    await assertPeriodAccepts(trx, actor.organizationId, postingDate, 'post');
+    await assertPeriodAccepts(trx, actor.organizationId, actor.companyId, original.postingDate, 'amend');
+    await assertPeriodAccepts(trx, actor.organizationId, actor.companyId, postingDate, 'post');
 
     const reversal = await insertReversal(trx, actor, original, reason, postingDate);
 
@@ -1247,10 +1300,11 @@ export async function reverseJournal(
         updated_at: new Date(),
       })
       .where('organization_id', '=', actor.organizationId)
+      .where('company_id', '=', actor.companyId)
       .where('id', '=', journalId)
       .execute();
 
-    const withdrawn = await loadJournal(trx, actor.organizationId, journalId);
+    const withdrawn = await loadJournal(trx, actor, journalId);
     await writeVersion(trx, actor, withdrawn, 'reversed', reason);
     await hooks.afterVersion?.(trx, withdrawn);
     await hooks.afterReversal?.(trx, withdrawn, reversal);
@@ -1293,8 +1347,8 @@ export async function reverseAndReplace(
     if (original.status !== 'posted') throw errors.conflict('Only a posted entry can be reversed and replaced.');
 
     const postingDate = options.postingDate ?? resolveDates(input);
-    await assertPeriodAccepts(trx, actor.organizationId, original.postingDate, 'amend');
-    await assertPeriodAccepts(trx, actor.organizationId, postingDate, 'post');
+    await assertPeriodAccepts(trx, actor.organizationId, actor.companyId, original.postingDate, 'amend');
+    await assertPeriodAccepts(trx, actor.organizationId, actor.companyId, postingDate, 'post');
 
     const reversal = await insertReversal(trx, actor, original, reason, original.postingDate);
 
@@ -1311,12 +1365,13 @@ export async function reverseAndReplace(
       input,
       original.functionalCurrency,
     );
-    const replacementNumber = await allocateJournalNumber(trx, actor.organizationId);
+    const replacementNumber = await allocateJournalNumber(trx, actor.organizationId, actor.companyId);
     const now = new Date();
     const createdReplacement = await trx
       .insertInto('journal_entries')
       .values({
         organization_id: actor.organizationId,
+        company_id: actor.companyId,
         journal_number: replacementNumber,
         journal_type: original.journalType,
         transaction_date: input.transactionDate,
@@ -1337,9 +1392,9 @@ export async function reverseAndReplace(
       .returning('id')
       .executeTakeFirstOrThrow();
 
-    await insertLines(trx, actor.organizationId, createdReplacement.id, input.lines ?? [], rate, replacementCurrency);
-    const replacement = await loadJournal(trx, actor.organizationId, createdReplacement.id);
-    await validateForPosting(trx, actor.organizationId, replacement);
+    await insertLines(trx, actor.organizationId, actor.companyId, createdReplacement.id, input.lines ?? [], rate, replacementCurrency);
+    const replacement = await loadJournal(trx, actor, createdReplacement.id);
+    await validateForPosting(trx, actor.organizationId, actor.companyId, replacement);
     await writeVersion(trx, actor, replacement, 'posted', reason);
 
     await trx
@@ -1353,10 +1408,11 @@ export async function reverseAndReplace(
         updated_at: now,
       })
       .where('organization_id', '=', actor.organizationId)
+      .where('company_id', '=', actor.companyId)
       .where('id', '=', journalId)
       .execute();
 
-    const withdrawn = await loadJournal(trx, actor.organizationId, journalId);
+    const withdrawn = await loadJournal(trx, actor, journalId);
     await writeVersion(trx, actor, withdrawn, 'replaced', reason);
 
     await writeAccountingAudit(trx, actor, {

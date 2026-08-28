@@ -60,6 +60,22 @@ async function user(email: string): Promise<string> {
   return rows[0]!.id;
 }
 
+/**
+ * The set of books for a directly-seeded organization.
+ *
+ * These tests insert their tenant with raw SQL rather than through
+ * `createOrganization`, so they bypass the first company it creates. Accounting
+ * rows are company-scoped, so without this there is nowhere to post.
+ */
+async function books(organizationId: string): Promise<string> {
+  const { rows } = await sql<{ id: string }>`
+    INSERT INTO companies (organization_id, client_reference, legal_name)
+    VALUES (${organizationId}, ${`co_${organizationId}`}, 'Test Books')
+    RETURNING id
+  `.execute(ctx.db);
+  return rows[0]!.id;
+}
+
 /** A two-line balanced entry, the shape most tests start from. */
 function balanced(debit: string, credit = debit, date = '2026-08-01'): journals.JournalInput {
   return {
@@ -77,8 +93,8 @@ const draftOf = async (input = balanced('100.00')) => journals.createDraft(ctx.d
 beforeEach(async () => {
   ctx = await createTestContext();
   const [a, b] = [await organization('Org A'), await organization('Org B')];
-  orgA = { organizationId: a, userId: await user('a@test.local'), name: 'Ayman A' };
-  orgB = { organizationId: b, userId: await user('b@test.local'), name: 'Bilal B' };
+  orgA = { organizationId: a, companyId: await books(a), userId: await user('a@test.local'), name: 'Ayman A' };
+  orgB = { organizationId: b, companyId: await books(b), userId: await user('b@test.local'), name: 'Bilal B' };
 
   cash = (await accounts.createAccount(ctx.db, orgA, {
     accountCode: '1000', accountName: 'Cash', accountType: 'asset',
@@ -136,9 +152,9 @@ describe('journal numbering', () => {
   it('is refused a duplicate by the database, not only by the service', async () => {
     await draftOf();
     const clash = sql`
-      INSERT INTO journal_entries (organization_id, journal_number, transaction_date, posting_date,
+      INSERT INTO journal_entries (organization_id, company_id, journal_number, transaction_date, posting_date,
                                    transaction_currency, functional_currency)
-      VALUES (${orgA.organizationId}, 'JE-000001', '2026-08-01', '2026-08-01', 'JOD', 'JOD')
+      VALUES (${orgA.organizationId}, ${orgA.companyId}, 'JE-000001', '2026-08-01', '2026-08-01', 'JOD', 'JOD')
     `.execute(ctx.db);
     await expect(clash).rejects.toThrow(/unique|duplicate/i);
   });
@@ -746,11 +762,11 @@ describe('tenant isolation', () => {
     ).rejects.toMatchObject({ code: 'validation_error' });
 
     const direct = sql`
-      INSERT INTO journal_lines (organization_id, journal_entry_id, line_number, account_id,
+      INSERT INTO journal_lines (organization_id, company_id, journal_entry_id, line_number, account_id,
                                  debit_transaction, credit_transaction, debit_functional, credit_functional)
-      VALUES (${orgA.organizationId}, ${(await draftOf()).id}, 9, ${theirs.id}, 1, 0, 1, 0)
+      VALUES (${orgA.organizationId}, ${orgA.companyId}, ${(await draftOf()).id}, 9, ${theirs.id}, 1, 0, 1, 0)
     `.execute(ctx.db);
-    await expect(direct).rejects.toThrow(/journal_lines_account_same_org|foreign key/i);
+    await expect(direct).rejects.toThrow(/journal_lines_account_same_company|foreign key/i);
   });
 
   it('lists only the caller’s own entries', async () => {

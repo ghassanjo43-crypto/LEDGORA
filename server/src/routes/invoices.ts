@@ -16,6 +16,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { errors } from '../lib/errors.js';
 import { requireOwnOrganizationPermission } from '../guards/permissions.js';
+import { requireCompanyScope, companyOf } from '../guards/companyScope.js';
 import type { AccountingActor } from '../services/accounting/audit.js';
 import type { SalesInvoiceStatus } from '../db/schema.js';
 import * as invoices from '../services/invoicing/invoiceService.js';
@@ -23,17 +24,19 @@ import * as imports from '../services/invoicing/invoiceImportService.js';
 import * as settlement from '../services/invoicing/invoiceSettlementService.js';
 
 /**
- * Who is acting.
+ * Who is acting, and on whose books.
  *
- * The organization comes from `request.permissions`, which the guard resolved —
- * never from the body. A null there means the guard did not run, which is a
- * programming error rather than an authorization decision, so it throws instead
- * of falling back to something permissive.
+ * The organization comes from `request.permissions`; the company from
+ * `request.company`, resolved by `requireCompanyScope` from the selector header
+ * WITHIN that organization. Neither is read from the request payload. A null in
+ * either place is a route wiring mistake and throws rather than degrading to
+ * organization-wide scope.
  */
 function actorOf(request: FastifyRequest): AccountingActor {
   if (!request.permissions) throw errors.forbidden('You do not have access to this organization.');
   return {
     organizationId: request.permissions.organizationId,
+    companyId: companyOf(request).id,
     userId: request.principal!.user.id,
     name: request.principal!.user.full_name,
     requestId: request.id,
@@ -66,28 +69,37 @@ export async function invoiceRoutes(app: FastifyInstance): Promise<void> {
   const postInvoices = requireOwnOrganizationPermission('invoices', 'post');
   const voidInvoices = requireOwnOrganizationPermission('invoices', 'void');
 
-  app.get('/api/invoices', { preHandler: viewInvoices }, async (request, reply) => {
+  /**
+   * Permission first, company second — see `routes/accounting.ts` for why the
+   * order is load-bearing. One helper rather than a repeated pair, because
+   * omitting the company guard fails silently rather than loudly.
+   */
+  const onBooks = (
+    ...guards: Array<ReturnType<typeof requireOwnOrganizationPermission>>
+  ) => [...guards, requireCompanyScope];
+
+  app.get('/api/invoices', { preHandler: onBooks(viewInvoices) }, async (request, reply) => {
     const { status, customerId } = request.query as { status?: SalesInvoiceStatus; customerId?: string };
     return reply.send({
       invoices: await invoices.listInvoices(app.db, actorOf(request), { status, customerId }),
     });
   });
 
-  app.get('/api/invoices/:id', { preHandler: viewInvoices }, async (request, reply) =>
+  app.get('/api/invoices/:id', { preHandler: onBooks(viewInvoices) }, async (request, reply) =>
     reply.send({ invoice: await invoices.getInvoice(app.db, actorOf(request), idOf(request)) }),
   );
 
-  app.get('/api/invoices/:id/history', { preHandler: viewInvoices }, async (request, reply) =>
+  app.get('/api/invoices/:id/history', { preHandler: onBooks(viewInvoices) }, async (request, reply) =>
     reply.send({ history: await invoices.auditHistory(app.db, actorOf(request), idOf(request)) }),
   );
 
-  app.post('/api/invoices', { preHandler: createInvoices }, async (request, reply) =>
+  app.post('/api/invoices', { preHandler: onBooks(createInvoices) }, async (request, reply) =>
     reply.code(201).send({
       invoice: await invoices.createDraft(app.db, actorOf(request), request.body as invoices.InvoiceInput),
     }),
   );
 
-  app.patch('/api/invoices/:id', { preHandler: editInvoices }, async (request, reply) => {
+  app.patch('/api/invoices/:id', { preHandler: onBooks(editInvoices) }, async (request, reply) => {
     const body = request.body as invoices.InvoiceInput & { expectedVersion?: number };
     return reply.send({
       invoice: await invoices.updateDraft(app.db, actorOf(request), idOf(request), body, {
@@ -96,7 +108,7 @@ export async function invoiceRoutes(app: FastifyInstance): Promise<void> {
     });
   });
 
-  app.delete('/api/invoices/:id', { preHandler: deleteInvoices }, async (request, reply) => {
+  app.delete('/api/invoices/:id', { preHandler: onBooks(deleteInvoices) }, async (request, reply) => {
     const body = (request.body ?? {}) as { expectedVersion?: number };
     await invoices.deleteDraft(app.db, actorOf(request), idOf(request), {
       expectedVersion: expectedVersionOf(body),
@@ -109,7 +121,7 @@ export async function invoiceRoutes(app: FastifyInstance): Promise<void> {
    * same separation the general journal makes between authoring a draft and
    * making it permanent.
    */
-  app.post('/api/invoices/:id/issue', { preHandler: postInvoices }, async (request, reply) => {
+  app.post('/api/invoices/:id/issue', { preHandler: onBooks(postInvoices) }, async (request, reply) => {
     const body = (request.body ?? {}) as {
       expectedVersion?: number;
       receivableAccountId?: string;
@@ -141,7 +153,7 @@ export async function invoiceRoutes(app: FastifyInstance): Promise<void> {
    * be talked into. Gated on `create` — it writes invoices — and idempotent, so
    * an interrupted migration is resumed by running it again.
    */
-  app.post('/api/invoices/import', { preHandler: createInvoices }, async (request, reply) => {
+  app.post('/api/invoices/import', { preHandler: onBooks(createInvoices) }, async (request, reply) => {
     const body = (request.body ?? {}) as { invoices?: imports.ImportedInvoice[] };
     return reply.send({
       outcome: await imports.importInvoices(app.db, actorOf(request), body.invoices ?? []),
@@ -156,11 +168,11 @@ export async function invoiceRoutes(app: FastifyInstance): Promise<void> {
    * `void`: undoing a settlement is the same class of act as undoing an
    * invoice, and neither belongs to whoever can merely edit a draft.
    */
-  app.get('/api/invoices/:id/payments', { preHandler: viewInvoices }, async (request, reply) =>
+  app.get('/api/invoices/:id/payments', { preHandler: onBooks(viewInvoices) }, async (request, reply) =>
     reply.send({ payments: await settlement.listPayments(app.db, actorOf(request), idOf(request)) }),
   );
 
-  app.post('/api/invoices/:id/payments', { preHandler: postInvoices }, async (request, reply) => {
+  app.post('/api/invoices/:id/payments', { preHandler: onBooks(postInvoices) }, async (request, reply) => {
     const body = (request.body ?? {}) as settlement.PaymentInput & { expectedVersion?: number };
     return reply.code(201).send({
       invoice: await settlement.recordPayment(app.db, actorOf(request), idOf(request), body, {
@@ -169,7 +181,7 @@ export async function invoiceRoutes(app: FastifyInstance): Promise<void> {
     });
   });
 
-  app.post('/api/invoices/payments/:id/reverse', { preHandler: voidInvoices }, async (request, reply) => {
+  app.post('/api/invoices/payments/:id/reverse', { preHandler: onBooks(voidInvoices) }, async (request, reply) => {
     const body = (request.body ?? {}) as { expectedVersion?: number; reason?: string };
     return reply.send({
       invoice: await settlement.reversePayment(app.db, actorOf(request), idOf(request), {
@@ -179,7 +191,7 @@ export async function invoiceRoutes(app: FastifyInstance): Promise<void> {
     });
   });
 
-  app.post('/api/invoices/:id/void', { preHandler: voidInvoices }, async (request, reply) => {
+  app.post('/api/invoices/:id/void', { preHandler: onBooks(voidInvoices) }, async (request, reply) => {
     const body = (request.body ?? {}) as { expectedVersion?: number; reason?: string };
     return reply.send({
       invoice: await invoices.voidInvoice(app.db, actorOf(request), idOf(request), {

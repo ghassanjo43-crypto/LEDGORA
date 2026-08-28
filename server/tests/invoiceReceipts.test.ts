@@ -56,10 +56,25 @@ async function account(user: SessionCookies, code: string, name: string, type: s
   return response.json().account.id;
 }
 
-const actorFor = (organizationId: string) => ({ organizationId, userId: null, name: 'test', requestId: 't' });
+/**
+ * A reader for this organization's books.
+ *
+ * Carries the COMPANY as well as the organization: journals are company-scoped,
+ * so an actor without one resolves nothing. The tenant keeps exactly one set of
+ * books, so it is found rather than passed in.
+ */
+async function actorFor(organizationId: string) {
+  const company = await ctx.db
+    .selectFrom('companies')
+    .select('id')
+    .where('organization_id', '=', organizationId)
+    .executeTakeFirstOrThrow();
+  return { organizationId, companyId: company.id, userId: null, name: 'test', requestId: 't' };
+}
 
 async function postedLines(organizationId: string, journalEntryId: string) {
-  const entry = await journals.getJournal(ctx.db, actorFor(organizationId) as never, journalEntryId);
+  const actor = await actorFor(organizationId);
+  const entry = await journals.getJournal(ctx.db, actor as never, journalEntryId);
   return entry.lines.map((line: { accountId: string; debit: string; credit: string }) => ({
     accountId: line.accountId, debit: Number(line.debit), credit: Number(line.credit),
   }));

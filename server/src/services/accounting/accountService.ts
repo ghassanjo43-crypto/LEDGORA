@@ -101,7 +101,8 @@ export async function listAccounts(
   let query = db
     .selectFrom('accounts')
     .selectAll()
-    .where('organization_id', '=', actor.organizationId);
+    .where('organization_id', '=', actor.organizationId)
+    .where('company_id', '=', actor.companyId);
   if (!options.includeInactive) query = query.where('active', '=', true);
   const rows = await query.orderBy('account_code').execute();
   return rows.map(toRecord);
@@ -123,16 +124,26 @@ export async function getAccount(
     .selectFrom('accounts')
     .selectAll()
     .where('organization_id', '=', actor.organizationId)
+    .where('company_id', '=', actor.companyId)
     .where('id', '=', accountId)
     .executeTakeFirst();
   if (!row) throw errors.notFound('Account');
   return toRecord(row);
 }
 
-/** Resolve ids to accounts, refusing any that is not this organization's. */
+/**
+ * Resolve ids to accounts, refusing any that is not THIS COMPANY'S.
+ *
+ * Scoped by company as well as organization, so an id belonging to a sibling
+ * company under the same subscriber simply does not resolve. The caller reports
+ * it as "no such account", which is the honest answer: there is no such account
+ * in these books. The composite foreign key would refuse the posting anyway —
+ * this is what turns that constraint violation into a readable message.
+ */
 export async function loadAccountsForPosting(
   db: Executor,
   organizationId: string,
+  companyId: string,
   accountIds: readonly string[],
 ): Promise<Map<string, AccountRecord>> {
   if (accountIds.length === 0) return new Map();
@@ -140,12 +151,14 @@ export async function loadAccountsForPosting(
     .selectFrom('accounts')
     .selectAll()
     .where('organization_id', '=', organizationId)
+    .where('company_id', '=', companyId)
     .where('id', 'in', [...new Set(accountIds)])
     .execute();
   const children = await db
     .selectFrom('accounts')
     .select('parent_account_id')
     .where('organization_id', '=', organizationId)
+    .where('company_id', '=', companyId)
     .where('parent_account_id', 'in', rows.map((row) => row.id))
     .execute();
   const parentIds = new Set(children.map((row) => row.parent_account_id).filter(Boolean));
@@ -155,6 +168,7 @@ export async function loadAccountsForPosting(
 async function assertParentIsUsable(
   db: Executor,
   organizationId: string,
+  companyId: string,
   parentAccountId: string | null | undefined,
   selfId?: string,
 ): Promise<void> {
@@ -166,10 +180,15 @@ async function assertParentIsUsable(
     .selectFrom('accounts')
     .select(['id', 'is_postable', 'parent_account_id'])
     .where('organization_id', '=', organizationId)
+    .where('company_id', '=', companyId)
     .where('id', '=', parentAccountId)
     .executeTakeFirst();
-  // Cross-tenant parents surface as "not found" for the reason above.
-  if (!parent) throw errors.validation('The parent account does not exist in this organization.');
+  /*
+   * A parent in another COMPANY surfaces as "not found", exactly as a
+   * cross-tenant one does. The composite foreign key would refuse the row
+   * anyway; this makes the refusal a sentence rather than a constraint name.
+   */
+  if (!parent) throw errors.validation('The parent account does not exist in this company.');
   if (parent.is_postable) {
     throw errors.validation('A postable account cannot have children. Make the parent a header account first.');
   }
@@ -189,6 +208,7 @@ async function assertParentIsUsable(
         .selectFrom('accounts')
         .select('parent_account_id')
         .where('organization_id', '=', organizationId)
+        .where('company_id', '=', companyId)
         .where('id', '=', cursor)
         .executeTakeFirst();
       cursor = next?.parent_account_id ?? null;
@@ -210,12 +230,13 @@ export async function createAccount(
   if (active && archived) throw errors.validation('An archived account cannot be active.');
 
   return db.transaction().execute(async (trx) => {
-    await assertParentIsUsable(trx, actor.organizationId, input.parentAccountId);
+    await assertParentIsUsable(trx, actor.organizationId, actor.companyId, input.parentAccountId);
 
     const duplicate = await trx
       .selectFrom('accounts')
       .select('id')
       .where('organization_id', '=', actor.organizationId)
+      .where('company_id', '=', actor.companyId)
       .where('account_code', '=', code)
       .executeTakeFirst();
     if (duplicate) throw errors.conflict(`Account code "${code}" already exists in this organization.`);
@@ -224,6 +245,7 @@ export async function createAccount(
       .insertInto('accounts')
       .values({
         organization_id: actor.organizationId,
+        company_id: actor.companyId,
         account_code: code,
         account_name: name,
         account_type: input.accountType,
@@ -262,6 +284,7 @@ export async function updateAccount(
       .selectFrom('accounts')
       .selectAll()
       .where('organization_id', '=', actor.organizationId)
+      .where('company_id', '=', actor.companyId)
       .where('id', '=', accountId)
       .executeTakeFirst();
     if (!existing) throw errors.notFound('Account');
@@ -273,7 +296,7 @@ export async function updateAccount(
     }
 
     if (input.parentAccountId !== undefined) {
-      await assertParentIsUsable(trx, actor.organizationId, input.parentAccountId, accountId);
+      await assertParentIsUsable(trx, actor.organizationId, actor.companyId, input.parentAccountId, accountId);
     }
 
     if (input.accountCode !== undefined && input.accountCode.trim() !== existing.account_code) {
@@ -283,6 +306,7 @@ export async function updateAccount(
         .selectFrom('accounts')
         .select('id')
         .where('organization_id', '=', actor.organizationId)
+        .where('company_id', '=', actor.companyId)
         .where('account_code', '=', code)
         .executeTakeFirst();
       if (clash) throw errors.conflict(`Account code "${code}" already exists in this organization.`);
@@ -297,6 +321,7 @@ export async function updateAccount(
         .selectFrom('accounts')
         .select('id')
         .where('organization_id', '=', actor.organizationId)
+        .where('company_id', '=', actor.companyId)
         .where('parent_account_id', '=', accountId)
         .executeTakeFirst();
       if (child) throw errors.validation('This account has children and cannot be made postable.');
@@ -320,6 +345,7 @@ export async function updateAccount(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       .set(patch as any)
       .where('organization_id', '=', actor.organizationId)
+      .where('company_id', '=', actor.companyId)
       .where('id', '=', accountId)
       .returningAll()
       .executeTakeFirstOrThrow();
@@ -354,6 +380,7 @@ export async function deleteAccount(
       .selectFrom('accounts')
       .select(['id', 'system_account', 'account_code'])
       .where('organization_id', '=', actor.organizationId)
+      .where('company_id', '=', actor.companyId)
       .where('id', '=', accountId)
       .executeTakeFirst();
     if (!existing) throw errors.notFound('Account');
@@ -365,6 +392,7 @@ export async function deleteAccount(
       .selectFrom('journal_lines')
       .select('id')
       .where('organization_id', '=', actor.organizationId)
+      .where('company_id', '=', actor.companyId)
       .where('account_id', '=', accountId)
       .executeTakeFirst();
     if (used) {
@@ -377,6 +405,7 @@ export async function deleteAccount(
       .selectFrom('accounts')
       .select('id')
       .where('organization_id', '=', actor.organizationId)
+      .where('company_id', '=', actor.companyId)
       .where('parent_account_id', '=', accountId)
       .executeTakeFirst();
     if (child) throw errors.conflict('This account has children. Remove or re-parent them first.');
@@ -384,6 +413,7 @@ export async function deleteAccount(
     await trx
       .deleteFrom('accounts')
       .where('organization_id', '=', actor.organizationId)
+      .where('company_id', '=', actor.companyId)
       .where('id', '=', accountId)
       .execute();
 

@@ -71,6 +71,7 @@ export async function listPeriods(db: Executor, actor: AccountingActor): Promise
     .selectFrom('accounting_periods')
     .selectAll()
     .where('organization_id', '=', actor.organizationId)
+    .where('company_id', '=', actor.companyId)
     .orderBy('fiscal_year')
     .orderBy('period_number')
     .execute();
@@ -82,6 +83,7 @@ export async function getPeriod(db: Executor, actor: AccountingActor, periodId: 
     .selectFrom('accounting_periods')
     .selectAll()
     .where('organization_id', '=', actor.organizationId)
+    .where('company_id', '=', actor.companyId)
     .where('id', '=', periodId)
     .executeTakeFirst();
   if (!row) throw errors.notFound('Accounting period');
@@ -98,12 +100,14 @@ export async function getPeriod(db: Executor, actor: AccountingActor, periodId: 
 export async function findPeriodForDate(
   db: Executor,
   organizationId: string,
+  companyId: string,
   date: string,
 ): Promise<PeriodRecord | undefined> {
   const row = await db
     .selectFrom('accounting_periods')
     .selectAll()
     .where('organization_id', '=', organizationId)
+    .where('company_id', '=', companyId)
     .where('start_date', '<=', date)
     .where('end_date', '>=', date)
     .executeTakeFirst();
@@ -119,10 +123,11 @@ export async function findPeriodForDate(
 export async function assertPeriodAccepts(
   db: Executor,
   organizationId: string,
+  companyId: string,
   date: string,
   intent: 'post' | 'amend',
 ): Promise<PeriodRecord | undefined> {
-  const period = await findPeriodForDate(db, organizationId, date);
+  const period = await findPeriodForDate(db, organizationId, companyId, date);
   if (!period) return undefined;
 
   if (period.status === 'locked') {
@@ -138,10 +143,17 @@ export async function assertPeriodAccepts(
   return period;
 }
 
-/** Refuse a range that overlaps an existing period for this organization. */
+/**
+ * Refuse a range that overlaps an existing period for THIS COMPANY.
+ *
+ * Scoped to the company, not the subscriber: two companies keep their own
+ * calendars, and an organization-wide check would let one company's January
+ * block another company from ever opening its own January.
+ */
 async function assertNoOverlap(
   db: Executor,
   organizationId: string,
+  companyId: string,
   startDate: string,
   endDate: string,
   excludeId?: string,
@@ -150,6 +162,7 @@ async function assertNoOverlap(
     .selectFrom('accounting_periods')
     .select(['id', 'start_date', 'end_date'])
     .where('organization_id', '=', organizationId)
+    .where('company_id', '=', companyId)
     // Two ranges overlap when each starts before the other ends.
     .where('start_date', '<=', endDate)
     .where('end_date', '>=', startDate);
@@ -176,12 +189,13 @@ export async function createPeriod(
   }
 
   return db.transaction().execute(async (trx) => {
-    await assertNoOverlap(trx, actor.organizationId, input.startDate, input.endDate);
+    await assertNoOverlap(trx, actor.organizationId, actor.companyId, input.startDate, input.endDate);
 
     const duplicate = await trx
       .selectFrom('accounting_periods')
       .select('id')
       .where('organization_id', '=', actor.organizationId)
+      .where('company_id', '=', actor.companyId)
       .where('fiscal_year', '=', input.fiscalYear)
       .where('period_number', '=', input.periodNumber)
       .executeTakeFirst();
@@ -193,6 +207,7 @@ export async function createPeriod(
       .insertInto('accounting_periods')
       .values({
         organization_id: actor.organizationId,
+        company_id: actor.companyId,
         fiscal_year: input.fiscalYear,
         period_number: input.periodNumber,
         start_date: input.startDate,
@@ -238,6 +253,7 @@ export async function setPeriodStatus(
       .selectFrom('accounting_periods')
       .selectAll()
       .where('organization_id', '=', actor.organizationId)
+      .where('company_id', '=', actor.companyId)
       .where('id', '=', periodId)
       .executeTakeFirst();
     if (!existing) throw errors.notFound('Accounting period');
@@ -259,6 +275,7 @@ export async function setPeriodStatus(
         updated_at: now,
       })
       .where('organization_id', '=', actor.organizationId)
+      .where('company_id', '=', actor.companyId)
       .where('id', '=', periodId)
       .returningAll()
       .executeTakeFirstOrThrow();
@@ -290,6 +307,7 @@ export async function updatePeriod(
       .selectFrom('accounting_periods')
       .selectAll()
       .where('organization_id', '=', actor.organizationId)
+      .where('company_id', '=', actor.companyId)
       .where('id', '=', periodId)
       .executeTakeFirst();
     if (!existing) throw errors.notFound('Accounting period');
@@ -300,7 +318,7 @@ export async function updatePeriod(
     const startDate = input.startDate ?? toRecord(existing).startDate;
     const endDate = input.endDate ?? toRecord(existing).endDate;
     if (endDate < startDate) throw errors.validation('A period cannot end before it starts.');
-    await assertNoOverlap(trx, actor.organizationId, startDate, endDate, periodId);
+    await assertNoOverlap(trx, actor.organizationId, actor.companyId, startDate, endDate, periodId);
 
     const row = await trx
       .updateTable('accounting_periods')
@@ -312,6 +330,7 @@ export async function updatePeriod(
         updated_at: new Date(),
       })
       .where('organization_id', '=', actor.organizationId)
+      .where('company_id', '=', actor.companyId)
       .where('id', '=', periodId)
       .returningAll()
       .executeTakeFirstOrThrow();

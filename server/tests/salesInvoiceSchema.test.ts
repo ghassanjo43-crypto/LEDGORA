@@ -18,35 +18,56 @@ let ctx: TestContext;
 let orgA: string;
 let orgB: string;
 
-/** A bare organization with one owner — enough to hang invoices off. */
+/** The set of books each seeded organization keeps, by organization id. */
+const booksFor = new Map<string, string>();
+const books = (org: string): string => booksFor.get(org)!;
+
+/**
+ * A bare organization with one owner and one company — enough to hang invoices
+ * off.
+ *
+ * The company is created here because this helper inserts organizations
+ * directly rather than through `createOrganization`, and every invoice, account
+ * and journal row is company-scoped since migration 025. Marked adopted, since
+ * at most one PROVISIONAL company may exist per organization (migration 026)
+ * and nothing here is waiting for a browser to claim it.
+ */
 async function organization(name: string): Promise<string> {
   const owner = await seedUser(ctx, { email: `${name.toLowerCase()}@invoices.test` });
-  return ctx.db.transaction().execute(async (trx) => {
-    const org = await trx.insertInto('organizations')
+  const org = await ctx.db.transaction().execute(async (trx) => {
+    const row = await trx.insertInto('organizations')
       .values({
         subscriber_owner_user_id: owner.id, legal_name: name, country: 'JO',
         base_currency: 'JOD', fiscal_year_start: '01-01', data_classification: 'test',
       })
       .returning('id').executeTakeFirstOrThrow();
     await trx.insertInto('organization_memberships')
-      .values({ organization_id: org.id, user_id: owner.id, role: 'owner' }).execute();
-    return org.id;
+      .values({ organization_id: row.id, user_id: owner.id, role: 'owner' }).execute();
+    return row.id;
   });
+
+  const { rows } = await sql<{ id: string }>`
+    INSERT INTO companies (organization_id, client_reference, legal_name, adopted_at)
+    VALUES (${org}, ${`co_${org}`}, ${`${name} Books`}, now())
+    RETURNING id
+  `.execute(ctx.db);
+  booksFor.set(org, rows[0]!.id);
+  return org;
 }
 
 async function account(org: string, code: string): Promise<string> {
   const { rows } = await sql<{ id: string }>`
-    INSERT INTO accounts (organization_id, account_code, account_name, account_type, normal_balance)
-    VALUES (${org}, ${code}, 'Sales', 'income', 'credit') RETURNING id
+    INSERT INTO accounts (organization_id, company_id, account_code, account_name, account_type, normal_balance)
+    VALUES (${org}, ${books(org)}, ${code}, 'Sales', 'income', 'credit') RETURNING id
   `.execute(ctx.db);
   return rows[0]!.id;
 }
 
 async function invoice(org: string, number: string): Promise<string> {
   const { rows } = await sql<{ id: string }>`
-    INSERT INTO invoices (organization_id, issuing_entity_id, customer_id, invoice_number,
+    INSERT INTO invoices (organization_id, company_id, issuing_entity_id, customer_id, invoice_number,
                           issue_date, due_date, transaction_currency, functional_currency)
-    VALUES (${org}, gen_random_uuid(), gen_random_uuid(), ${number},
+    VALUES (${org}, ${books(org)}, gen_random_uuid(), gen_random_uuid(), ${number},
             '2026-01-15', '2026-02-15', 'JOD', 'JOD')
     RETURNING id
   `.execute(ctx.db);
@@ -55,6 +76,7 @@ async function invoice(org: string, number: string): Promise<string> {
 
 beforeEach(async () => {
   ctx = await createTestContext();
+  booksFor.clear();
   orgA = await organization('Alpha');
   orgB = await organization('Beta');
 });
@@ -80,8 +102,8 @@ describe('tenant isolation', () => {
     // The composite key carries the organization, so this is refused by the
     // database rather than by a check somebody has to remember to write.
     await expect(sql`
-      INSERT INTO invoice_lines (organization_id, invoice_id, line_number, account_id)
-      VALUES (${orgA}, ${alphaInvoice}, 1, ${betaAccount})
+      INSERT INTO invoice_lines (organization_id, company_id, invoice_id, line_number, account_id)
+      VALUES (${orgA}, ${books(orgA)}, ${alphaInvoice}, 1, ${betaAccount})
     `.execute(ctx.db)).rejects.toThrow();
   });
 });
@@ -91,9 +113,9 @@ describe('money and lifecycle', () => {
     const id = await invoice(orgA, 'INV-0004');
     const account4000 = await account(orgA, '4000');
     await sql`
-      INSERT INTO invoice_lines (organization_id, invoice_id, line_number, account_id,
+      INSERT INTO invoice_lines (organization_id, company_id, invoice_id, line_number, account_id,
                                  quantity, unit_price, line_total)
-      VALUES (${orgA}, ${id}, 1, ${account4000}, 3, '0.1', '0.3')
+      VALUES (${orgA}, ${books(orgA)}, ${id}, 1, ${account4000}, 3, '0.1', '0.3')
     `.execute(ctx.db);
 
     const { rows } = await sql<{ line_total: string }>`
@@ -145,8 +167,8 @@ describe('numbering', () => {
      * that has already cleared the first INV-0009 will reject the second.
      */
     await sql`
-      INSERT INTO invoice_numbering (organization_id, issuing_entity_id, next_sequence)
-      VALUES (${orgA}, gen_random_uuid(), 9)
+      INSERT INTO invoice_numbering (organization_id, company_id, issuing_entity_id, next_sequence)
+      VALUES (${orgA}, ${books(orgA)}, gen_random_uuid(), 9)
     `.execute(ctx.db);
 
     const { rows } = await sql<{ next_sequence: number; prefix: string }>`
@@ -160,9 +182,9 @@ describe('the ledger link', () => {
   it('will not let the journal entry an invoice posted be deleted', async () => {
     const id = await invoice(orgA, 'INV-0008');
     const { rows } = await sql<{ id: string }>`
-      INSERT INTO journal_entries (organization_id, journal_number, transaction_date, posting_date,
+      INSERT INTO journal_entries (organization_id, company_id, journal_number, transaction_date, posting_date,
                                    transaction_currency, functional_currency)
-      VALUES (${orgA}, 'JE-0001', '2026-01-15', '2026-01-15', 'JOD', 'JOD')
+      VALUES (${orgA}, ${books(orgA)}, 'JE-0001', '2026-01-15', '2026-01-15', 'JOD', 'JOD')
       RETURNING id
     `.execute(ctx.db);
     const entry = rows[0]!.id;

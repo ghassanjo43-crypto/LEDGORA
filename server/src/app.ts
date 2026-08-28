@@ -20,6 +20,7 @@ import { adminRoutes } from './routes/admin.js';
 import { subscriptionRoutes } from './routes/subscriptions.js';
 import { memberRoutes } from './routes/members.js';
 import { legalRoutes } from './routes/legal.js';
+import { companyRoutes } from './routes/companies.js';
 import { adminBillingRoutes } from './routes/adminBilling.js';
 import { adminApplicantRoutes } from './routes/adminApplicants.js';
 import { adminMemberRoutes } from './routes/adminMembers.js';
@@ -32,6 +33,7 @@ import { accountingRoutes } from './routes/accounting.js';
 import { invoiceRoutes } from './routes/invoices.js';
 import { joFotaraMockRoutes } from './services/joFotara/index.js';
 import { decoratePermissions } from './guards/permissions.js';
+import { decorateCompany, COMPANY_REFERENCE_HEADER } from './guards/companyScope.js';
 import { enforcePersistenceEntitlement } from './guards/persistence.js';
 import { enforcePasswordChange } from './guards/passwordChange.js';
 import { LocalFileStorage, type FileStorage } from './storage/fileStorage.js';
@@ -158,7 +160,13 @@ export async function buildApp({
     },
     credentials: true,
     methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['content-type', 'x-csrf-token'],
+    /*
+     * The company selector is a custom header, so a cross-origin browser client
+     * cannot send it unless it is named here — the preflight would fail and the
+     * request would silently fall back to no selector, which for a subscriber
+     * with several companies means an `ambiguous` refusal that looks like a bug.
+     */
+    allowedHeaders: ['content-type', 'x-csrf-token', COMPANY_REFERENCE_HEADER],
     // Let cross-origin JS read the CSRF token from the response header (the body
     // field is the primary channel; this is the belt-and-braces companion).
     exposedHeaders: ['x-csrf-token'],
@@ -191,6 +199,7 @@ export async function buildApp({
    * resolution and cannot get two different answers. See guards/permissions.
    */
   decoratePermissions(app);
+  decorateCompany(app);
 
   /**
    * Durable-write authorization, applied to EVERY route.
@@ -243,6 +252,7 @@ export async function buildApp({
   await app.register(subscriptionRoutes);
   await app.register(memberRoutes);
   await app.register(legalRoutes);
+  await app.register(companyRoutes);
   await app.register(adminBillingRoutes);
   await app.register(adminApplicantRoutes);
   await app.register(adminMemberRoutes);

@@ -250,6 +250,7 @@ async function loadInvoice(executor: Executor, actor: AccountingActor, id: strin
   const row = await executor
     .selectFrom('invoices').selectAll()
     .where('organization_id', '=', actor.organizationId)
+    .where('company_id', '=', actor.companyId)
     .where('id', '=', id)
     .executeTakeFirst();
   if (!row) throw errors.notFound('Invoice');
@@ -257,6 +258,7 @@ async function loadInvoice(executor: Executor, actor: AccountingActor, id: strin
   const lines = await executor
     .selectFrom('invoice_lines').selectAll()
     .where('organization_id', '=', actor.organizationId)
+    .where('company_id', '=', actor.companyId)
     .where('invoice_id', '=', id)
     .execute();
 
@@ -273,7 +275,8 @@ export async function listInvoices(
   filter: { status?: SalesInvoiceStatus; customerId?: string } = {},
 ): Promise<InvoiceRecord[]> {
   let query = db.selectFrom('invoices').selectAll()
-    .where('organization_id', '=', actor.organizationId);
+    .where('organization_id', '=', actor.organizationId)
+    .where('company_id', '=', actor.companyId);
   if (filter.status) query = query.where('status', '=', filter.status);
   if (filter.customerId) query = query.where('customer_id', '=', filter.customerId);
 
@@ -282,6 +285,7 @@ export async function listInvoices(
 
   const lines = await db.selectFrom('invoice_lines').selectAll()
     .where('organization_id', '=', actor.organizationId)
+    .where('company_id', '=', actor.companyId)
     .where('invoice_id', 'in', rows.map((r) => r.id))
     .execute();
 
@@ -302,14 +306,23 @@ export async function listInvoices(
 export async function allocateInvoiceNumber(
   trx: Trx,
   organizationId: string,
+  companyId: string,
   issuingEntityId: string,
   issueDate: string,
 ): Promise<string> {
-  await sql`select pg_advisory_xact_lock(hashtext(${`invoice_number:${organizationId}:${issuingEntityId}`}))`.execute(trx);
+  /*
+   * The lock key includes the COMPANY, so two companies under one subscriber
+   * hold different locks and number their invoices independently and
+   * concurrently. Locking on the organization alone would be correct but
+   * needlessly serialising — and, worse, it would read as though the two
+   * companies shared a sequence, which after migration 025 they do not.
+   */
+  await sql`select pg_advisory_xact_lock(hashtext(${`invoice_number:${organizationId}:${companyId}:${issuingEntityId}`}))`.execute(trx);
 
   const existing = await trx
     .selectFrom('invoice_numbering').selectAll()
     .where('organization_id', '=', organizationId)
+    .where('company_id', '=', companyId)
     .where('issuing_entity_id', '=', issuingEntityId)
     .executeTakeFirst();
 
@@ -322,12 +335,18 @@ export async function allocateInvoiceNumber(
 
   if (!existing) {
     await trx.insertInto('invoice_numbering')
-      .values({ organization_id: organizationId, issuing_entity_id: issuingEntityId, next_sequence: 2 })
+      .values({
+        organization_id: organizationId,
+        company_id: companyId,
+        issuing_entity_id: issuingEntityId,
+        next_sequence: 2,
+      })
       .execute();
   } else {
     await trx.updateTable('invoice_numbering')
       .set({ next_sequence: config.next_sequence + 1, updated_at: new Date() })
       .where('organization_id', '=', organizationId)
+      .where('company_id', '=', companyId)
       .where('issuing_entity_id', '=', issuingEntityId)
       .execute();
   }
@@ -421,7 +440,7 @@ async function assertAccountsArePostable(
 
   // The same loader the ledger uses, so an invoice and a journal cannot
   // disagree about whether an account may receive a posting.
-  const accounts = await loadAccountsForPosting(trx, actor.organizationId, ids);
+  const accounts = await loadAccountsForPosting(trx, actor.organizationId, actor.companyId, ids);
 
   for (const [index, line] of lines.entries()) {
     const at = index + 1;
@@ -431,6 +450,7 @@ async function assertAccountsArePostable(
 
     const child = await trx.selectFrom('accounts').select('id')
       .where('organization_id', '=', actor.organizationId)
+      .where('company_id', '=', actor.companyId)
       .where('parent_account_id', '=', line.accountId)
       .executeTakeFirst();
 
@@ -468,6 +488,7 @@ async function writeAudit(
   await trx.insertInto('invoice_audit_events')
     .values({
       organization_id: actor.organizationId,
+      company_id: actor.companyId,
       invoice_id: invoiceId,
       action,
       detail,
@@ -485,6 +506,7 @@ async function replaceLines(
 ): Promise<void> {
   await trx.deleteFrom('invoice_lines')
     .where('organization_id', '=', actor.organizationId)
+    .where('company_id', '=', actor.companyId)
     .where('invoice_id', '=', invoiceId)
     .execute();
 
@@ -499,6 +521,7 @@ async function replaceLines(
     }
     await trx.insertInto('invoice_lines').values({
       organization_id: actor.organizationId,
+      company_id: actor.companyId,
       invoice_id: invoiceId,
       line_number: index + 1,
       account_id: value.accountId,
@@ -541,10 +564,11 @@ export async function createDraft(
 
     const currency = await functionalCurrencyOf(trx, actor.organizationId);
     const decimals = monetaryDecimalsFor(currency);
-    const invoiceNumber = await allocateInvoiceNumber(trx, actor.organizationId, input.issuingEntityId, input.issueDate);
+    const invoiceNumber = await allocateInvoiceNumber(trx, actor.organizationId, actor.companyId, input.issuingEntityId, input.issueDate);
 
     const created = await trx.insertInto('invoices').values({
       organization_id: actor.organizationId,
+      company_id: actor.companyId,
       issuing_entity_id: input.issuingEntityId,
       customer_id: input.customerId,
       invoice_number: invoiceNumber,
@@ -621,7 +645,7 @@ export async function updateDraft(
       version: current.version + 1,
       updated_by: actor.userId,
       updated_at: new Date(),
-    }).where('organization_id', '=', actor.organizationId).where('id', '=', id).execute();
+    }).where('organization_id', '=', actor.organizationId).where('company_id', '=', actor.companyId).where('id', '=', id).execute();
 
     await replaceLines(trx, actor, id, computed, decimals);
     await writeAudit(trx, actor, id, 'invoice.updated');
@@ -643,6 +667,7 @@ async function lockInvoice(
 ) {
   const row = await trx.selectFrom('invoices').selectAll()
     .where('organization_id', '=', actor.organizationId)
+    .where('company_id', '=', actor.companyId)
     .where('id', '=', id)
     .forUpdate()
     .executeTakeFirst();
@@ -669,7 +694,9 @@ export async function deleteDraft(
       );
     }
     await trx.deleteFrom('invoices')
-      .where('organization_id', '=', actor.organizationId).where('id', '=', id).execute();
+      .where('organization_id', '=', actor.organizationId)
+      .where('company_id', '=', actor.companyId)
+      .where('id', '=', id).execute();
   });
 }
 
@@ -699,6 +726,7 @@ export async function issueInvoice(
 
     const lines = await trx.selectFrom('invoice_lines').selectAll()
       .where('organization_id', '=', actor.organizationId)
+      .where('company_id', '=', actor.companyId)
       .where('invoice_id', '=', id)
       .orderBy('line_number', 'asc')
       .execute();
@@ -798,7 +826,7 @@ export async function issueInvoice(
       version: current.version + 1,
       updated_by: actor.userId,
       updated_at: new Date(),
-    }).where('organization_id', '=', actor.organizationId).where('id', '=', id).execute();
+    }).where('organization_id', '=', actor.organizationId).where('company_id', '=', actor.companyId).where('id', '=', id).execute();
 
     await writeAudit(trx, actor, id, 'invoice.issued', posted.journalNumber);
     return loadInvoice(trx, actor, id);
@@ -824,8 +852,19 @@ export async function voidInvoice(
     });
   }
 
+  /*
+   * Company-scoped, like every other read of an invoice.
+   *
+   * This runs BEFORE the transaction that locks the row, so an
+   * organization-only filter disclosed another company's invoice number, status
+   * and journal id — and could answer "this invoice is already void" for a
+   * document the caller may not see. The write below was always safe, because
+   * `lockInvoice` is scoped; the disclosure happened before it.
+   */
   const current = await db.selectFrom('invoices').selectAll()
-    .where('organization_id', '=', actor.organizationId).where('id', '=', id)
+    .where('organization_id', '=', actor.organizationId)
+    .where('company_id', '=', actor.companyId)
+    .where('id', '=', id)
     .executeTakeFirst();
   if (!current) throw errors.notFound('Invoice');
   if (current.status === 'void') throw errors.conflict('This invoice is already void.');
@@ -851,7 +890,7 @@ export async function voidInvoice(
       version: locked.version + 1,
       updated_by: actor.userId,
       updated_at: new Date(),
-    }).where('organization_id', '=', actor.organizationId).where('id', '=', id).execute();
+    }).where('organization_id', '=', actor.organizationId).where('company_id', '=', actor.companyId).where('id', '=', id).execute();
 
     await writeAudit(trx, actor, id, 'invoice.voided', reason);
     return loadInvoice(trx, actor, id);
@@ -867,6 +906,7 @@ export async function auditHistory(
   await loadInvoice(db, actor, id); // 404 for another tenant's id, not an empty list.
   const rows = await db.selectFrom('invoice_audit_events').selectAll()
     .where('organization_id', '=', actor.organizationId)
+    .where('company_id', '=', actor.companyId)
     .where('invoice_id', '=', id)
     .orderBy('occurred_at', 'asc')
     .execute();

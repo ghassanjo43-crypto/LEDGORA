@@ -86,6 +86,59 @@ export async function createOrganization(
       .values({ organization_id: organization.id, user_id: userId, role: 'owner', status: 'active' })
       .execute();
 
+    /*
+     * The organization's first set of books.
+     *
+     * A subscriber always keeps books for at least one company, and accounting
+     * records are scoped to a company (migration 025), so an organization with
+     * none could not post anything at all. Creating it here — in the same
+     * transaction, at the moment the tenant comes into existence — means the
+     * state "a customer exists but has nowhere to write" is never reachable.
+     *
+     * This is NOT the same act the migration's backfill refuses. That one would
+     * guess which of several existing companies some historical journal belonged
+     * to. This creates the first company for an organization that has no books
+     * yet, so there is nothing to attribute and nothing to get wrong.
+     *
+     * The name is the organization's own legal name because at this moment they
+     * are the same thing; a customer who later keeps several companies renames
+     * this one and adds the others. The client reference is the server id — the
+     * browser has not minted one, and reusing the uuid keeps the column's
+     * meaning ("whatever the client calls these books") honest rather than
+     * leaving it empty.
+     */
+    await trx
+      .insertInto('companies')
+      .values({
+        /*
+         * A company id of its own, deliberately NOT reused from the
+         * organization. Making them equal would be convenient and would mean
+         * that passing an organization id where a company id belongs — the
+         * exact confusion company scoping exists to prevent — worked perfectly
+         * for every single-company tenant and failed only once a customer added
+         * a second company.
+         */
+        organization_id: organization.id,
+      /*
+       * PROVISIONAL — see migration 026.
+       *
+       * This is the organization's one set of books, created here so a
+       * subscriber never exists with nowhere to post. It is not yet claimed by
+       * a client, so `adopted_at` stays NULL and the first browser registration
+       * ADOPTS this very row: same server id, new client reference. That is what
+       * keeps "one real set of books, exactly one company row" true, and what
+       * stops journals posted before the browser syncs from ending up in a
+       * different ledger than journals posted after.
+       *
+       * The reference is prefixed rather than left empty because the column is
+       * NOT NULL and unique per organization. `adopted_at` — not the shape of
+       * this string — is what makes the row provisional.
+       */
+        client_reference: `provisional:${organization.id}`,
+        legal_name: input.legalName.trim(),
+      })
+      .execute();
+
     // Attach the tenant to the applicant record. `ensureApplication` first, so a
     // pre-backfill account still gets one rather than silently losing the link.
     await ensureApplication(trx, userId, { source: 'organization_created' });

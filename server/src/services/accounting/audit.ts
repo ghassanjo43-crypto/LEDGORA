@@ -53,9 +53,29 @@ export type AccountingAuditAction =
   | 'OPENING_BALANCE_REVERSED'
   | 'OPENING_BALANCE_REPLACEMENT_CREATED';
 
-/** Who is acting, carried from the route into every service call. */
+/**
+ * Who is acting, and on which books — carried from the route into every service
+ * call.
+ *
+ * `companyId` sits beside `organizationId` rather than replacing it, and both
+ * are required. That pairing is deliberate: the organization is the
+ * authorization boundary, resolved from the caller's membership, and the
+ * company is the selection within it, resolved by the server from a reference
+ * the client supplied. Collapsing them into one field would lose the
+ * distinction between "may this caller act here" and "which books did they
+ * mean", which are answered by different evidence and must keep failing
+ * differently.
+ *
+ * Making it non-optional is the load-bearing choice. An optional company would
+ * compile at every call site that forgot it and then silently scope a query to
+ * the organization alone — one customer's second company reading the first
+ * company's ledger, with no error anywhere. Requiring it turns every such
+ * omission into a compile failure.
+ */
 export interface AccountingActor {
   organizationId: string;
+  /** The server-resolved company. Never taken from a request body. */
+  companyId: string;
   userId: string;
   /** Display name for the trail; the id is the identity. */
   name: string;
@@ -81,6 +101,7 @@ export async function writeAccountingAudit(
     .insertInto('accounting_audit_events')
     .values({
       organization_id: actor.organizationId,
+      company_id: actor.companyId,
       action: input.action,
       record_type: input.recordType,
       record_id: input.recordId,

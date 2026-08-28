@@ -15,6 +15,18 @@ export type ErrorCode =
   /** Free Preview: full features, no durable writes. See guards/persistence. */
   | 'subscription_required_for_persistence'
   | 'not_found'
+  /**
+   * The organization keeps no companies yet, so there are no books to write
+   * into. Distinct from `not_found`, which answers a reference that named
+   * nothing — this one says the workspace itself is not set up, and the client
+   * should offer to create a company rather than report a missing one.
+   */
+  | 'company_not_registered'
+  /**
+   * Several companies exist and the request did not say which. Refused rather
+   * than guessed: picking one would post into the wrong set of books silently.
+   */
+  | 'company_selection_required'
   | 'conflict'
   | 'password_policy'
   /** An administrator-issued temporary password has passed its expiry. */
@@ -41,6 +53,10 @@ const STATUS: Record<ErrorCode, number> = {
   forbidden: 403,
   subscription_required_for_persistence: 403,
   not_found: 404,
+  // Both are 400: the request is answerable, but not as it was asked. Neither is
+  // a permission failure, so neither should send a client to sign in again.
+  company_not_registered: 400,
+  company_selection_required: 400,
   conflict: 409,
   password_policy: 400,
   password_expired: 401,

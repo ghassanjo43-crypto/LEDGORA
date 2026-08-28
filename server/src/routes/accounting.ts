@@ -50,6 +50,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { errors } from '../lib/errors.js';
 import { requireOwnOrganizationPermission } from '../guards/permissions.js';
+import { requireCompanyScope, companyOf } from '../guards/companyScope.js';
 import type { AccountingActor } from '../services/accounting/audit.js';
 import * as accounts from '../services/accounting/accountService.js';
 import * as periods from '../services/accounting/periodService.js';
@@ -57,17 +58,24 @@ import * as journals from '../services/accounting/journalService.js';
 import * as openingBalances from '../services/accounting/openingBalanceService.js';
 
 /**
- * Who is acting.
+ * Who is acting, and on whose books.
  *
  * The organization comes from `request.permissions`, which the guard resolved —
- * never from the body. A null there means the guard did not run, which is a
- * programming error rather than an authorization decision, so it throws instead
- * of falling back to something permissive.
+ * never from the body. The company comes from `request.company`, which
+ * `requireCompanyScope` resolved from the selector header WITHIN that
+ * organization. Neither is read from the request payload.
+ *
+ * A null in either place means a guard did not run, which is a route wiring
+ * mistake rather than an authorization decision. Both throw instead of falling
+ * back to something permissive: an actor missing its company would scope every
+ * query to the organization alone, which is the organization-wide leak this
+ * whole change exists to close, arriving silently through a missing preHandler.
  */
 function actorOf(request: FastifyRequest): AccountingActor {
   if (!request.permissions) throw errors.forbidden('You do not have access to this organization.');
   return {
     organizationId: request.permissions.organizationId,
+    companyId: companyOf(request).id,
     userId: request.principal!.user.id,
     name: request.principal!.user.full_name,
     requestId: request.id,
@@ -125,9 +133,24 @@ export async function accountingRoutes(app: FastifyInstance): Promise<void> {
     'manage_organization_settings',
   );
 
+  /**
+   * Every accounting route runs its permission guard and THEN resolves the
+   * company. The order is the point: authorization comes from the session, and
+   * only once an organization is established does the selector header say which
+   * of that organization's companies is meant. Resolving the company first
+   * would let a header decide which tenant's data was in play.
+   *
+   * Written as one helper rather than repeated per route because the failure of
+   * forgetting it is silent — an actor with no company would scope its queries
+   * to the organization alone and read every company's books at once.
+   */
+  const onBooks = (
+    ...guards: Array<ReturnType<typeof requireOwnOrganizationPermission>>
+  ) => [...guards, requireCompanyScope];
+
   /* ══ Chart of accounts ═══════════════════════════════════════════════════ */
 
-  app.get('/api/accounting/accounts', { preHandler: viewAccounts }, async (request, reply) => {
+  app.get('/api/accounting/accounts', { preHandler: onBooks(viewAccounts) }, async (request, reply) => {
     const { includeInactive } = request.query as { includeInactive?: string };
     return reply.send({
       accounts: await accounts.listAccounts(app.db, actorOf(request), {
@@ -136,11 +159,11 @@ export async function accountingRoutes(app: FastifyInstance): Promise<void> {
     });
   });
 
-  app.get('/api/accounting/accounts/:id', { preHandler: viewAccounts }, async (request, reply) =>
+  app.get('/api/accounting/accounts/:id', { preHandler: onBooks(viewAccounts) }, async (request, reply) =>
     reply.send({ account: await accounts.getAccount(app.db, actorOf(request), idOf(request)) }),
   );
 
-  app.post('/api/accounting/accounts', { preHandler: createAccounts }, async (request, reply) => {
+  app.post('/api/accounting/accounts', { preHandler: onBooks(createAccounts) }, async (request, reply) => {
     const account = await accounts.createAccount(
       app.db,
       actorOf(request),
@@ -149,7 +172,7 @@ export async function accountingRoutes(app: FastifyInstance): Promise<void> {
     return reply.code(201).send({ account });
   });
 
-  app.patch('/api/accounting/accounts/:id', { preHandler: editAccounts }, async (request, reply) =>
+  app.patch('/api/accounting/accounts/:id', { preHandler: onBooks(editAccounts) }, async (request, reply) =>
     reply.send({
       account: await accounts.updateAccount(
         app.db,
@@ -165,18 +188,18 @@ export async function accountingRoutes(app: FastifyInstance): Promise<void> {
    * carrying history is deactivated, never removed: deleting it would orphan
    * every line that references it and silently change past reports.
    */
-  app.delete('/api/accounting/accounts/:id', { preHandler: deleteAccounts }, async (request, reply) => {
+  app.delete('/api/accounting/accounts/:id', { preHandler: onBooks(deleteAccounts) }, async (request, reply) => {
     await accounts.deleteAccount(app.db, actorOf(request), idOf(request));
     return reply.code(204).send();
   });
 
   /* ══ Accounting periods ══════════════════════════════════════════════════ */
 
-  app.get('/api/accounting/periods', { preHandler: viewJournal }, async (request, reply) =>
+  app.get('/api/accounting/periods', { preHandler: onBooks(viewJournal) }, async (request, reply) =>
     reply.send({ periods: await periods.listPeriods(app.db, actorOf(request)) }),
   );
 
-  app.post('/api/accounting/periods', { preHandler: manageSettings }, async (request, reply) => {
+  app.post('/api/accounting/periods', { preHandler: onBooks(manageSettings) }, async (request, reply) => {
     const period = await periods.createPeriod(
       app.db,
       actorOf(request),
@@ -186,37 +209,37 @@ export async function accountingRoutes(app: FastifyInstance): Promise<void> {
   });
 
   /* Opening balances: lifecycle metadata wrapped around the authoritative journal. */
-  app.get('/api/accounting/opening-balances/current', { preHandler: viewOpening }, async (request, reply) =>
+  app.get('/api/accounting/opening-balances/current', { preHandler: onBooks(viewOpening) }, async (request, reply) =>
     reply.send({ openingBalance: await openingBalances.getCurrent(app.db, actorOf(request)) }));
-  app.get('/api/accounting/opening-balances/accounts', { preHandler: viewOpening }, async (request, reply) =>
+  app.get('/api/accounting/opening-balances/accounts', { preHandler: onBooks(viewOpening) }, async (request, reply) =>
     reply.send(await openingBalances.listEligibleAccounts(app.db, actorOf(request))));
-  app.get('/api/accounting/opening-balances/:id', { preHandler: viewOpening }, async (request, reply) =>
+  app.get('/api/accounting/opening-balances/:id', { preHandler: onBooks(viewOpening) }, async (request, reply) =>
     reply.send({ openingBalance: await openingBalances.getById(app.db, actorOf(request), idOf(request)) }));
-  app.get('/api/accounting/opening-balances/:id/history', { preHandler: viewOpening }, async (request, reply) =>
+  app.get('/api/accounting/opening-balances/:id/history', { preHandler: onBooks(viewOpening) }, async (request, reply) =>
     reply.send({ history: await openingBalances.auditHistory(app.db, actorOf(request), idOf(request)) }));
-  app.post('/api/accounting/opening-balances', { preHandler: createOpening }, async (request, reply) =>
+  app.post('/api/accounting/opening-balances', { preHandler: onBooks(createOpening) }, async (request, reply) =>
     reply.code(201).send({ openingBalance: await openingBalances.createOrLoadDraft(app.db, actorOf(request), request.body as openingBalances.OpeningBalanceInput) }));
-  app.patch('/api/accounting/opening-balances/:id', { preHandler: editOpening }, async (request, reply) => {
+  app.patch('/api/accounting/opening-balances/:id', { preHandler: onBooks(editOpening) }, async (request, reply) => {
     const body = request.body as openingBalances.OpeningBalanceInput & { expectedVersion?: number };
     return reply.send({ openingBalance: await openingBalances.updateDraft(app.db, actorOf(request), idOf(request), body, body.expectedVersion) });
   });
-  app.post('/api/accounting/opening-balances/:id/submit', { preHandler: submitOpening }, async (request, reply) => {
+  app.post('/api/accounting/opening-balances/:id/submit', { preHandler: onBooks(submitOpening) }, async (request, reply) => {
     const body = (request.body ?? {}) as { expectedVersion?: number };
     return reply.send({ openingBalance: await openingBalances.submit(app.db, actorOf(request), idOf(request), body.expectedVersion) });
   });
-  app.post('/api/accounting/opening-balances/:id/approve', { preHandler: approveOpening }, async (request, reply) => {
+  app.post('/api/accounting/opening-balances/:id/approve', { preHandler: onBooks(approveOpening) }, async (request, reply) => {
     const body = (request.body ?? {}) as { expectedVersion?: number };
     return reply.send({ openingBalance: await openingBalances.approve(app.db, actorOf(request), idOf(request), body.expectedVersion) });
   });
-  app.post('/api/accounting/opening-balances/:id/post', { preHandler: postOpening }, async (request, reply) => {
+  app.post('/api/accounting/opening-balances/:id/post', { preHandler: onBooks(postOpening) }, async (request, reply) => {
     const body = (request.body ?? {}) as { expectedVersion?: number };
     return reply.send({ openingBalance: await openingBalances.post(app.db, actorOf(request), idOf(request), body.expectedVersion) });
   });
-  app.post('/api/accounting/opening-balances/:id/reverse', { preHandler: reverseOpening }, async (request, reply) => {
+  app.post('/api/accounting/opening-balances/:id/reverse', { preHandler: onBooks(reverseOpening) }, async (request, reply) => {
     const body = (request.body ?? {}) as { expectedVersion?: number; reason?: string };
     return reply.send({ openingBalance: await openingBalances.reverse(app.db, actorOf(request), idOf(request), body.expectedVersion, body.reason) });
   });
-  app.post('/api/accounting/opening-balances/:id/replacement', { preHandler: [reverseOpening, createOpening] }, async (request, reply) =>
+  app.post('/api/accounting/opening-balances/:id/replacement', { preHandler: onBooks(reverseOpening, createOpening) }, async (request, reply) =>
     reply.code(201).send({ openingBalance: await openingBalances.createReplacement(app.db, actorOf(request), idOf(request), request.body as openingBalances.OpeningBalanceInput) }));
 
   /**
@@ -226,7 +249,7 @@ export async function accountingRoutes(app: FastifyInstance): Promise<void> {
    * again. The service demands a reason for it and records the transition in the
    * accounting audit trail; this route only carries the value through.
    */
-  app.patch('/api/accounting/periods/:id', { preHandler: manageSettings }, async (request, reply) =>
+  app.patch('/api/accounting/periods/:id', { preHandler: onBooks(manageSettings) }, async (request, reply) =>
     reply.send({
       period: await periods.updatePeriod(
         app.db,
@@ -239,7 +262,7 @@ export async function accountingRoutes(app: FastifyInstance): Promise<void> {
 
   /* ══ Journal entries ═════════════════════════════════════════════════════ */
 
-  app.get('/api/accounting/journals', { preHandler: viewJournal }, async (request, reply) => {
+  app.get('/api/accounting/journals', { preHandler: onBooks(viewJournal) }, async (request, reply) => {
     const query = request.query as journals.ListOptions & { limit?: string };
     return reply.send({
       journals: await journals.listJournals(app.db, actorOf(request), {
@@ -251,11 +274,11 @@ export async function accountingRoutes(app: FastifyInstance): Promise<void> {
     });
   });
 
-  app.get('/api/accounting/journals/:id', { preHandler: viewJournal }, async (request, reply) =>
+  app.get('/api/accounting/journals/:id', { preHandler: onBooks(viewJournal) }, async (request, reply) =>
     reply.send({ journal: await journals.getJournal(app.db, actorOf(request), idOf(request)) }),
   );
 
-  app.get('/api/accounting/journals/:id/history', { preHandler: viewJournal }, async (request, reply) =>
+  app.get('/api/accounting/journals/:id/history', { preHandler: onBooks(viewJournal) }, async (request, reply) =>
     reply.send({ history: await journals.listJournalHistory(app.db, actorOf(request), idOf(request)) }),
   );
 
@@ -263,11 +286,11 @@ export async function accountingRoutes(app: FastifyInstance): Promise<void> {
    * How may this entry be corrected? Asked BEFORE offering the user a choice, so
    * the screen presents the same options the server will actually accept.
    */
-  app.get('/api/accounting/journals/:id/amendment', { preHandler: viewJournal }, async (request, reply) =>
+  app.get('/api/accounting/journals/:id/amendment', { preHandler: onBooks(viewJournal) }, async (request, reply) =>
     reply.send({ assessment: await journals.assessAmendment(app.db, actorOf(request), idOf(request)) }),
   );
 
-  app.post('/api/accounting/journals', { preHandler: createJournal }, async (request, reply) => {
+  app.post('/api/accounting/journals', { preHandler: onBooks(createJournal) }, async (request, reply) => {
     const journal = await journals.createDraft(
       app.db,
       actorOf(request),
@@ -276,7 +299,7 @@ export async function accountingRoutes(app: FastifyInstance): Promise<void> {
     return reply.code(201).send({ journal });
   });
 
-  app.patch('/api/accounting/journals/:id', { preHandler: editJournal }, async (request, reply) => {
+  app.patch('/api/accounting/journals/:id', { preHandler: onBooks(editJournal) }, async (request, reply) => {
     const body = request.body as journals.JournalInput & { expectedVersion?: number; reason?: string };
     return reply.send({
       journal: await journals.updateDraft(app.db, actorOf(request), idOf(request), body, {
@@ -286,7 +309,7 @@ export async function accountingRoutes(app: FastifyInstance): Promise<void> {
     });
   });
 
-  app.delete('/api/accounting/journals/:id', { preHandler: deleteJournal }, async (request, reply) => {
+  app.delete('/api/accounting/journals/:id', { preHandler: onBooks(deleteJournal) }, async (request, reply) => {
     const body = (request.body ?? {}) as { expectedVersion?: number };
     await journals.deleteDraft(app.db, actorOf(request), idOf(request), {
       expectedVersion: expectedVersionOf(body),
@@ -294,7 +317,7 @@ export async function accountingRoutes(app: FastifyInstance): Promise<void> {
     return reply.code(204).send();
   });
 
-  app.post('/api/accounting/journals/:id/post', { preHandler: postJournal }, async (request, reply) => {
+  app.post('/api/accounting/journals/:id/post', { preHandler: onBooks(postJournal) }, async (request, reply) => {
     const body = (request.body ?? {}) as { expectedVersion?: number };
     return reply.send({
       journal: await journals.postJournal(app.db, actorOf(request), idOf(request), {
@@ -314,7 +337,7 @@ export async function accountingRoutes(app: FastifyInstance): Promise<void> {
    */
   app.post(
     '/api/accounting/journals/:id/amend',
-    { preHandler: [editJournal, postJournal] },
+    { preHandler: onBooks(editJournal, postJournal) },
     async (request, reply) => {
       const body = request.body as journals.JournalInput & { expectedVersion?: number; reason?: string };
       return reply.send({
@@ -326,7 +349,7 @@ export async function accountingRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
-  app.post('/api/accounting/journals/:id/reverse', { preHandler: voidJournal }, async (request, reply) => {
+  app.post('/api/accounting/journals/:id/reverse', { preHandler: onBooks(voidJournal) }, async (request, reply) => {
     const body = (request.body ?? {}) as { expectedVersion?: number; reason?: string; postingDate?: string };
     const result = await journals.reverseJournal(app.db, actorOf(request), idOf(request), {
       expectedVersion: expectedVersionOf(body),
@@ -339,7 +362,7 @@ export async function accountingRoutes(app: FastifyInstance): Promise<void> {
   /** Reverse and replace: `void` AND `create`, as one atomic operation. */
   app.post(
     '/api/accounting/journals/:id/reverse-and-replace',
-    { preHandler: [voidJournal, createJournal] },
+    { preHandler: onBooks(voidJournal, createJournal) },
     async (request, reply) => {
       const body = request.body as journals.JournalInput & {
         expectedVersion?: number;

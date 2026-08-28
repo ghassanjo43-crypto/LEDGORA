@@ -83,6 +83,21 @@ export type AuditAction =
    * and a trail that lumped them together could not answer which of them
    * happened without reading metadata.
    */
+  /*
+   * A set of books gained a server identity, or had its bookkeeping language
+   * fixed. The language act is audited separately and permanently because it
+   * can never be superseded by a later one — there is no second choice to
+   * record, so this row is the only account of who decided and when.
+   */
+  | 'company.registered'
+  /*
+   * A client claimed the organization's provisional books. Distinct from
+   * `company.registered` because no set of books came into existence — an
+   * existing row acquired the name its owner calls it by, keeping its server id
+   * and everything already posted against it.
+   */
+  | 'company.adopted'
+  | 'company.language_locked'
   | 'legal.organization_accepted'
   | 'legal.individual_acknowledged'
   | 'legal.country_changed'

@@ -122,12 +122,14 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 async function suspenseAccount(trx: Trx, actor: AccountingActor): Promise<string> {
   const existing = await trx.selectFrom('accounts').select('id')
     .where('organization_id', '=', actor.organizationId)
+    .where('company_id', '=', actor.companyId)
     .where('account_code', '=', SUSPENSE_ACCOUNT_CODE)
     .executeTakeFirst();
   if (existing) return existing.id;
 
   const created = await trx.insertInto('accounts').values({
     organization_id: actor.organizationId,
+    company_id: actor.companyId,
     account_code: SUSPENSE_ACCOUNT_CODE,
     account_name: SUSPENSE_ACCOUNT_NAME,
     account_type: 'income',
@@ -137,10 +139,15 @@ async function suspenseAccount(trx: Trx, actor: AccountingActor): Promise<string
   return created.id;
 }
 
-/** Every account in this organization, by code. */
-async function accountsByCode(trx: Trx, organizationId: string): Promise<Map<string, string>> {
+/** Every account in THIS COMPANY, by code. */
+async function accountsByCode(
+  trx: Trx,
+  organizationId: string,
+  companyId: string,
+): Promise<Map<string, string>> {
   const rows = await trx.selectFrom('accounts').select(['id', 'account_code'])
-    .where('organization_id', '=', organizationId).execute();
+    .where('organization_id', '=', organizationId)
+    .where('company_id', '=', companyId).execute();
   return new Map(rows.map((row) => [row.account_code, row.id]));
 }
 
@@ -181,6 +188,7 @@ export async function importInvoices(
 
         const already = await trx.selectFrom('invoices').select('id')
           .where('organization_id', '=', actor.organizationId)
+          .where('company_id', '=', actor.companyId)
           .where('invoice_number', '=', invoice.invoiceNumber)
           .executeTakeFirst();
         if (already) {
@@ -190,7 +198,7 @@ export async function importInvoices(
 
         const org = await trx.selectFrom('organizations').select('base_currency')
           .where('id', '=', actor.organizationId).executeTakeFirstOrThrow();
-        const byCode = await accountsByCode(trx, actor.organizationId);
+        const byCode = await accountsByCode(trx, actor.organizationId, actor.companyId);
 
         let suspense: string | null = null;
         const resolved: Array<{ line: ImportedLine; accountId: string; matched: boolean }> = [];
@@ -227,6 +235,7 @@ export async function importInvoices(
 
         const created = await trx.insertInto('invoices').values({
           organization_id: actor.organizationId,
+          company_id: actor.companyId,
           issuing_entity_id: invoice.issuingEntityId,
           customer_id: invoice.customerId,
           invoice_number: invoice.invoiceNumber,
@@ -256,6 +265,7 @@ export async function importInvoices(
         for (const [index, entry] of resolved.entries()) {
           await trx.insertInto('invoice_lines').values({
             organization_id: actor.organizationId,
+            company_id: actor.companyId,
             invoice_id: created.id,
             line_number: index + 1,
             account_id: entry.accountId,
@@ -283,6 +293,7 @@ export async function importInvoices(
         for (const payment of invoice.payments ?? []) {
           await trx.insertInto('invoice_payments').values({
             organization_id: actor.organizationId,
+            company_id: actor.companyId,
             invoice_id: created.id,
             paid_on: payment.paidOn,
             amount: payment.amount,
@@ -302,6 +313,7 @@ export async function importInvoices(
          */
         await trx.insertInto('invoice_audit_events').values({
           organization_id: actor.organizationId,
+          company_id: actor.companyId,
           invoice_id: created.id,
           action: 'invoice.imported',
           detail:
@@ -314,6 +326,7 @@ export async function importInvoices(
         if (unmatched.length > 0) {
           await trx.insertInto('invoice_audit_events').values({
             organization_id: actor.organizationId,
+            company_id: actor.companyId,
             invoice_id: created.id,
             action: 'invoice.import_account_unmatched',
             detail:
@@ -353,13 +366,19 @@ export async function importInvoices(
     await db.transaction().execute(async (trx) => {
       const existing = await trx.selectFrom('invoice_numbering').selectAll()
         .where('organization_id', '=', actor.organizationId)
+        .where('company_id', '=', actor.companyId)
         .where('issuing_entity_id', '=', issuingEntityId)
         .executeTakeFirst();
 
       const next = sequence + 1;
       if (!existing) {
         await trx.insertInto('invoice_numbering')
-          .values({ organization_id: actor.organizationId, issuing_entity_id: issuingEntityId, next_sequence: next })
+          .values({
+            organization_id: actor.organizationId,
+            company_id: actor.companyId,
+            issuing_entity_id: issuingEntityId,
+            next_sequence: next,
+          })
           .execute();
         outcome.sequences.push({ issuingEntityId, nextSequence: next });
         return;
@@ -371,6 +390,7 @@ export async function importInvoices(
       await trx.updateTable('invoice_numbering')
         .set({ next_sequence: next, updated_at: new Date() })
         .where('organization_id', '=', actor.organizationId)
+        .where('company_id', '=', actor.companyId)
         .where('issuing_entity_id', '=', issuingEntityId)
         .execute();
       outcome.sequences.push({ issuingEntityId, nextSequence: next });

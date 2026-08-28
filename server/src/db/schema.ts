@@ -177,6 +177,15 @@ export interface CompaniesTable {
   /** Set once. A database trigger refuses every later change to it. */
   language_locked_at: Timestamp | null;
   language_selected_by: string | null;
+  /**
+   * NULL means PROVISIONAL: created automatically with the organization, and
+   * still waiting for a client to claim it. The first browser registration
+   * adopts this very row — same server id — rather than adding a second one.
+   *
+   * A partial unique index allows at most one such row per organization.
+   */
+  adopted_at: Timestamp | null;
+  adopted_by: string | null;
   created_at: Generated<Timestamp>;
   updated_at: Generated<Timestamp>;
 }
@@ -749,6 +758,12 @@ export interface Database {
 export interface AccountingPeriodsTable {
   id: Generated<string>;
   organization_id: string;
+  /**
+   * Which set of books this row belongs to. Scoped WITH `organization_id`,
+   * never instead of it: the composite foreign key is what makes a
+   * cross-company reference unrepresentable rather than merely refused.
+   */
+  company_id: string;
   fiscal_year: number;
   period_number: number;
   start_date: string;
@@ -764,6 +779,12 @@ export interface AccountingPeriodsTable {
 export interface AccountsTable {
   id: Generated<string>;
   organization_id: string;
+  /**
+   * Which set of books this row belongs to. Scoped WITH `organization_id`,
+   * never instead of it: the composite foreign key is what makes a
+   * cross-company reference unrepresentable rather than merely refused.
+   */
+  company_id: string;
   account_code: string;
   account_name: string;
   /** asset | liability | equity | income | expense */
@@ -785,6 +806,12 @@ export interface AccountsTable {
 export interface JournalEntriesTable {
   id: Generated<string>;
   organization_id: string;
+  /**
+   * Which set of books this row belongs to. Scoped WITH `organization_id`,
+   * never instead of it: the composite foreign key is what makes a
+   * cross-company reference unrepresentable rather than merely refused.
+   */
+  company_id: string;
   journal_number: string;
   journal_type: Generated<string>;
   transaction_date: string;
@@ -815,6 +842,12 @@ export interface JournalEntriesTable {
 export interface JournalLinesTable {
   id: Generated<string>;
   organization_id: string;
+  /**
+   * Which set of books this row belongs to. Scoped WITH `organization_id`,
+   * never instead of it: the composite foreign key is what makes a
+   * cross-company reference unrepresentable rather than merely refused.
+   */
+  company_id: string;
   journal_entry_id: string;
   line_number: number;
   account_id: string;
@@ -835,6 +868,12 @@ export interface JournalLinesTable {
 export interface JournalEntryVersionsTable {
   id: Generated<string>;
   organization_id: string;
+  /**
+   * Which set of books this row belongs to. Scoped WITH `organization_id`,
+   * never instead of it: the composite foreign key is what makes a
+   * cross-company reference unrepresentable rather than merely refused.
+   */
+  company_id: string;
   journal_entry_id: string;
   version: number;
   change_kind: string;
@@ -850,6 +889,12 @@ export interface JournalEntryVersionsTable {
 export interface AccountingAuditEventsTable {
   id: Generated<string>;
   organization_id: string;
+  /**
+   * Which set of books this row belongs to. Scoped WITH `organization_id`,
+   * never instead of it: the composite foreign key is what makes a
+   * cross-company reference unrepresentable rather than merely refused.
+   */
+  company_id: string;
   action: string;
   record_type: string;
   record_id: string | null;
@@ -866,6 +911,12 @@ export interface AccountingAuditEventsTable {
 export interface OpeningBalanceSetsTable {
   id: Generated<string>;
   organization_id: string;
+  /**
+   * Which set of books this row belongs to. Scoped WITH `organization_id`,
+   * never instead of it: the composite foreign key is what makes a
+   * cross-company reference unrepresentable rather than merely refused.
+   */
+  company_id: string;
   journal_entry_id: string;
   bookkeeping_start_date: string;
   opening_balance_date: string;
@@ -922,6 +973,12 @@ export type InventoryFulfillmentMode = 'none' | 'issue-on-invoice' | 'delivered-
 export interface InvoicesTable {
   id: Generated<string>;
   organization_id: string;
+  /**
+   * Which set of books this row belongs to. Scoped WITH `organization_id`,
+   * never instead of it: the composite foreign key is what makes a
+   * cross-company reference unrepresentable rather than merely refused.
+   */
+  company_id: string;
   issuing_entity_id: string;
   customer_id: string;
   invoice_number: string;
@@ -979,6 +1036,12 @@ export interface InvoicesTable {
 export interface InvoiceLinesTable {
   id: Generated<string>;
   organization_id: string;
+  /**
+   * Which set of books this row belongs to. Scoped WITH `organization_id`,
+   * never instead of it: the composite foreign key is what makes a
+   * cross-company reference unrepresentable rather than merely refused.
+   */
+  company_id: string;
   invoice_id: string;
   line_number: number;
   account_id: string;
@@ -1013,6 +1076,12 @@ export interface InvoiceLinesTable {
 export interface InvoicePaymentsTable {
   id: Generated<string>;
   organization_id: string;
+  /**
+   * Which set of books this row belongs to. Scoped WITH `organization_id`,
+   * never instead of it: the composite foreign key is what makes a
+   * cross-company reference unrepresentable rather than merely refused.
+   */
+  company_id: string;
   invoice_id: string;
   paid_on: string;
   amount: string;
@@ -1035,6 +1104,12 @@ export interface InvoicePaymentsTable {
 
 export interface InvoiceNumberingTable {
   organization_id: string;
+  /**
+   * Which set of books this row belongs to. Scoped WITH `organization_id`,
+   * never instead of it: the composite foreign key is what makes a
+   * cross-company reference unrepresentable rather than merely refused.
+   */
+  company_id: string;
   issuing_entity_id: string;
   prefix: Generated<string>;
   include_year: Generated<boolean>;
@@ -1047,6 +1122,12 @@ export interface InvoiceNumberingTable {
 export interface InvoiceAuditEventsTable {
   id: Generated<string>;
   organization_id: string;
+  /**
+   * Which set of books this row belongs to. Scoped WITH `organization_id`,
+   * never instead of it: the composite foreign key is what makes a
+   * cross-company reference unrepresentable rather than merely refused.
+   */
+  company_id: string;
   invoice_id: string;
   action: string;
   detail: Generated<string>;

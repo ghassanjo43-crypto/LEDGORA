@@ -283,6 +283,42 @@ export async function createSubscriber(
       .returning('id')
       .executeTakeFirstOrThrow();
 
+    /*
+     * 2b ── the tenant's first set of books.
+     *
+     * Accounting records are company-scoped (migration 025), so a subscriber
+     * created without a company would be one who cannot post anything. Created
+     * here, in the same transaction, so that state is never reachable — a
+     * customer who exists always has somewhere to write.
+     *
+     * The same act `organizationService.createOrganization` performs for a
+     * self-service registration; both paths into existence must produce a
+     * tenant that works.
+     */
+    await trx
+      .insertInto('companies')
+      .values({
+        organization_id: organization.id,
+      /*
+       * PROVISIONAL — see migration 026.
+       *
+       * This is the organization's one set of books, created here so a
+       * subscriber never exists with nowhere to post. It is not yet claimed by
+       * a client, so `adopted_at` stays NULL and the first browser registration
+       * ADOPTS this very row: same server id, new client reference. That is what
+       * keeps "one real set of books, exactly one company row" true, and what
+       * stops journals posted before the browser syncs from ending up in a
+       * different ledger than journals posted after.
+       *
+       * The reference is prefixed rather than left empty because the column is
+       * NOT NULL and unique per organization. `adopted_at` — not the shape of
+       * this string — is what makes the row provisional.
+       */
+        client_reference: `provisional:${organization.id}`,
+        legal_name: input.organizationLegalName.trim(),
+      })
+      .execute();
+
     /* 3 ── the owner membership: this is what makes them the owner */
     const membership = await trx
       .insertInto('organization_memberships')

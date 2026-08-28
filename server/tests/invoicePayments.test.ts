@@ -77,11 +77,28 @@ async function taxedInvoice(name: string) {
   return { user, organizationId, invoice: response.json().invoice, receivable, sales, taxPayable, bank };
 }
 
-const actorFor = (organizationId: string) => ({ organizationId, userId: null, name: 'test', requestId: 't' });
+/**
+ * A reader for this organization's books.
+ *
+ * Carries the COMPANY as well as the organization, because journals are
+ * company-scoped: an actor without one resolves nothing at all, which is the
+ * point — there is no such thing as reading an organization's journals without
+ * saying which set of books. The tenant keeps exactly one, so it is found
+ * rather than passed in.
+ */
+async function actorFor(organizationId: string) {
+  const company = await ctx.db
+    .selectFrom('companies')
+    .select('id')
+    .where('organization_id', '=', organizationId)
+    .executeTakeFirstOrThrow();
+  return { organizationId, companyId: company.id, userId: null, name: 'test', requestId: 't' };
+}
 
 /** The posted journal behind an invoice, as debit/credit pairs by account. */
 async function postedLines(organizationId: string, journalEntryId: string) {
-  const entry = await journals.getJournal(ctx.db, actorFor(organizationId) as never, journalEntryId);
+  const actor = await actorFor(organizationId);
+  const entry = await journals.getJournal(ctx.db, actor as never, journalEntryId);
   return entry.lines.map((line: { accountId: string; debit: string; credit: string }) => ({
     accountId: line.accountId,
     debit: Number(line.debit),

@@ -237,12 +237,23 @@ export const TENANT_DEPENDENCIES: readonly TenantDependency[] = [
     ownershipKey: 'organization_id',
     kind: 'authoritative',
     disposition: 'delete',
-    order: 5.4,
+    /*
+     * AFTER every accounting table (40.1-46), not before them.
+     *
+     * Since migration 025 each accounting row carries a composite foreign key to
+     * its company with ON DELETE RESTRICT — which is what makes a set of books
+     * with live journals impossible to remove by accident. The same constraint
+     * means the books must go first: deleting the registry row while its
+     * journals still exist is refused outright, and the purge would fail
+     * part-way through with the tenant half-erased.
+     */
+    order: 46.5,
     label: 'Company registry',
     crossTenantReachable: false,
     rationale:
       'The server-side record of a tenant set of books, holding the authoritative bookkeeping language. '
-      + 'It has no meaning once the tenant is gone.',
+      + 'It has no meaning once the tenant is gone. Removed after the books it owns, because the '
+      + 'accounting tables reference it with ON DELETE RESTRICT.',
   },
   {
     table: 'legal_acceptances',
@@ -480,7 +491,6 @@ export const DELETION_SEQUENCE = TENANT_DEPENDENCIES.filter((d) => d.disposition
 export const DIRECTLY_OWNED_TABLES = [
   /* Sales invoices, children first — see migration 019. */
   'platform_preview_sessions',
-  'companies',
   'organization_language_changes',
   'invoice_audit_events',
   'invoice_payments',
@@ -494,6 +504,8 @@ export const DIRECTLY_OWNED_TABLES = [
   'journal_entries',
   'accounts',
   'accounting_periods',
+  /* After the books: the accounting tables reference it with ON DELETE RESTRICT. */
+  'companies',
   'legal_acceptances',
   'organization_legal_country_changes',
   'subscription_invoices',

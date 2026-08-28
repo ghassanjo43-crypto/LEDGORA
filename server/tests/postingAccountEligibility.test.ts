@@ -27,6 +27,20 @@ async function user(email: string): Promise<string> {
   return rows[0]!.id;
 }
 
+/**
+ * The set of books for a directly-seeded organization. These tests build their
+ * tenants with raw inserts rather than through `createOrganization`, so they
+ * bypass the first company it creates — and accounting rows are company-scoped.
+ */
+async function books(organizationId: string): Promise<string> {
+  const { rows } = await sql<{ id: string }>`
+    INSERT INTO companies (organization_id, client_reference, legal_name)
+    VALUES (${organizationId}, ${`co_${organizationId}`}, 'Eligibility Books')
+    RETURNING id
+  `.execute(ctx.db);
+  return rows[0]!.id;
+}
+
 async function account(overrides: Partial<accounts.CreateAccountInput> = {}, owner = actor) {
   sequence += 1;
   return accounts.createAccount(ctx.db, owner, {
@@ -59,8 +73,8 @@ beforeAll(async () => {
   ctx = await createTestContext();
   const ownOrganization = await organization('Eligibility A');
   const otherOrganization = await organization('Eligibility B');
-  actor = { organizationId: ownOrganization, userId: await user('eligibility-a@test.local'), name: 'Eligibility A' };
-  otherActor = { organizationId: otherOrganization, userId: await user('eligibility-b@test.local'), name: 'Eligibility B' };
+  actor = { organizationId: ownOrganization, companyId: await books(ownOrganization), userId: await user('eligibility-a@test.local'), name: 'Eligibility A' };
+  otherActor = { organizationId: otherOrganization, companyId: await books(otherOrganization), userId: await user('eligibility-b@test.local'), name: 'Eligibility B' };
 });
 
 afterAll(async () => ctx.close());
@@ -71,8 +85,8 @@ describe('authoritative posting-account eligibility', () => {
     expect(created).toMatchObject({ active: true, blocked: false, archived: false, isPostable: true });
 
     const { rows } = await sql<{ active: boolean; blocked: boolean; archived: boolean }>`
-      INSERT INTO accounts (organization_id, account_code, account_name, account_type, normal_balance)
-      VALUES (${actor.organizationId}, ${`RAW${++sequence}`}, 'Pre-migration-shaped account', 'asset', 'debit')
+      INSERT INTO accounts (organization_id, company_id, account_code, account_name, account_type, normal_balance)
+      VALUES (${actor.organizationId}, ${actor.companyId}, ${`RAW${++sequence}`}, 'Pre-migration-shaped account', 'asset', 'debit')
       RETURNING active, blocked, archived
     `.execute(ctx.db);
     expect(rows[0]).toEqual({ active: true, blocked: false, archived: false });
@@ -106,9 +120,9 @@ describe('authoritative posting-account eligibility', () => {
   it('rejects an actual parent even when its stored postable flag is malformed', async () => {
     const parent = await account();
     await sql`
-      INSERT INTO accounts (organization_id, account_code, account_name, account_type, normal_balance,
+      INSERT INTO accounts (organization_id, company_id, account_code, account_name, account_type, normal_balance,
                             parent_account_id, is_postable)
-      VALUES (${actor.organizationId}, ${`CHILD${++sequence}`}, 'Child', 'asset', 'debit', ${parent.id}, true)
+      VALUES (${actor.organizationId}, ${actor.companyId}, ${`CHILD${++sequence}`}, 'Child', 'asset', 'debit', ${parent.id}, true)
     `.execute(ctx.db);
     await expectPostingRefused(parent.id, /parent accounts cannot receive transactions/i);
   });

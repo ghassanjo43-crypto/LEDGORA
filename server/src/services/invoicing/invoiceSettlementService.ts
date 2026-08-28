@@ -110,6 +110,7 @@ export async function listPayments(
   const decimals = monetaryDecimalsFor(invoice.transactionCurrency);
   const rows = await db.selectFrom('invoice_payments').selectAll()
     .where('organization_id', '=', actor.organizationId)
+    .where('company_id', '=', actor.companyId)
     .where('invoice_id', '=', invoiceId)
     .orderBy('paid_on', 'asc')
     .orderBy('created_at', 'asc')
@@ -155,6 +156,7 @@ export async function recordPayment(
   const prepared = await db.transaction().execute(async (trx) => {
     const row = await trx.selectFrom('invoices').selectAll()
       .where('organization_id', '=', actor.organizationId)
+      .where('company_id', '=', actor.companyId)
       .where('id', '=', invoiceId)
       .forUpdate()
       .executeTakeFirst();
@@ -211,6 +213,7 @@ export async function recordPayment(
   return db.transaction().execute(async (trx) => {
     const row = await trx.selectFrom('invoices').selectAll()
       .where('organization_id', '=', actor.organizationId)
+      .where('company_id', '=', actor.companyId)
       .where('id', '=', invoiceId)
       .forUpdate()
       .executeTakeFirst();
@@ -219,6 +222,7 @@ export async function recordPayment(
 
     await trx.insertInto('invoice_payments').values({
       organization_id: actor.organizationId,
+      company_id: actor.companyId,
       invoice_id: invoiceId,
       paid_on: input.paidOn,
       amount: Money.toDecimalString(paid),
@@ -243,10 +247,11 @@ export async function recordPayment(
       version: row.version + 1,
       updated_by: actor.userId,
       updated_at: new Date(),
-    }).where('organization_id', '=', actor.organizationId).where('id', '=', invoiceId).execute();
+    }).where('organization_id', '=', actor.organizationId).where('company_id', '=', actor.companyId).where('id', '=', invoiceId).execute();
 
     await trx.insertInto('invoice_audit_events').values({
       organization_id: actor.organizationId,
+      company_id: actor.companyId,
       invoice_id: invoiceId,
       action: 'invoice.payment_recorded',
       detail: `${Money.toDecimalString(paid)} received on ${input.paidOn} (${posted.journalNumber})`,
@@ -279,6 +284,7 @@ export async function reversePayment(
 
   const payment = await db.selectFrom('invoice_payments').selectAll()
     .where('organization_id', '=', actor.organizationId)
+    .where('company_id', '=', actor.companyId)
     .where('id', '=', paymentId)
     .executeTakeFirst();
   if (!payment) throw errors.notFound('Receipt');
@@ -303,6 +309,7 @@ export async function reversePayment(
   return db.transaction().execute(async (trx) => {
     const row = await trx.selectFrom('invoices').selectAll()
       .where('organization_id', '=', actor.organizationId)
+      .where('company_id', '=', actor.companyId)
       .where('id', '=', payment.invoice_id)
       .forUpdate()
       .executeTakeFirst();
@@ -319,7 +326,7 @@ export async function reversePayment(
       reversed_at: new Date(),
       reversal_journal_entry_id: reversal?.reversal.id ?? null,
       reversal_reason: reason,
-    }).where('organization_id', '=', actor.organizationId).where('id', '=', paymentId).execute();
+    }).where('organization_id', '=', actor.organizationId).where('company_id', '=', actor.companyId).where('id', '=', paymentId).execute();
 
     await trx.updateTable('invoices').set({
       amount_paid: Money.toDecimalString(nowPaid),
@@ -334,10 +341,11 @@ export async function reversePayment(
       version: row.version + 1,
       updated_by: actor.userId,
       updated_at: new Date(),
-    }).where('organization_id', '=', actor.organizationId).where('id', '=', payment.invoice_id).execute();
+    }).where('organization_id', '=', actor.organizationId).where('company_id', '=', actor.companyId).where('id', '=', payment.invoice_id).execute();
 
     await trx.insertInto('invoice_audit_events').values({
       organization_id: actor.organizationId,
+      company_id: actor.companyId,
       invoice_id: payment.invoice_id,
       action: 'invoice.payment_reversed',
       detail: `${Money.toDecimalString(reversed)} reversed: ${reason}`,

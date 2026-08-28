@@ -20,6 +20,23 @@
 export const CSRF_HEADER = 'X-CSRF-Token';
 
 /**
+ * Which of the organization's companies this client currently has open.
+ *
+ * A SELECTOR, never a credential. The server derives the organization from the
+ * session and resolves this reference only within it, so the value cannot widen
+ * access — the worst a tampered header achieves is a 404 for books that are not
+ * the caller's. It is deliberately the browser's own `co_...` reference and not
+ * the server's company UUID: sending an internal key that appears in every
+ * accounting foreign key would make it behave like a token that never expires.
+ *
+ * Held in memory alongside the CSRF token, for the same reason. It is derived
+ * from whichever company the app has open, so persisting a second copy would
+ * create a value that can disagree with the one on screen — and a request
+ * carrying a stale selector writes into the wrong set of books.
+ */
+export const COMPANY_REFERENCE_HEADER = 'X-Ledgora-Company-Reference';
+
+/**
  * The CSRF token, held only for the lifetime of the page. A reload drops it;
  * `GET /api/auth/session` re-supplies it, so it is recovered before any unsafe
  * request the app makes after start-up.
@@ -36,6 +53,21 @@ export function getCsrfToken(): string {
 
 export function clearCsrfToken(): void {
   csrfToken = '';
+}
+
+let companyReference = '';
+
+/**
+ * Point subsequent requests at a company. Pass null when no company is open —
+ * the header is then omitted entirely, and the server applies its own rule:
+ * resolve when the organization has exactly one company, refuse otherwise.
+ */
+export function setCompanyReference(reference: string | null | undefined): void {
+  companyReference = typeof reference === 'string' ? reference.trim() : '';
+}
+
+export function getCompanyReference(): string {
+  return companyReference;
 }
 
 export class ApiError extends Error {
@@ -129,6 +161,15 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions = {
   const headers: Record<string, string> = {};
   if (UNSAFE.has(method) && csrfToken) {
     headers[CSRF_HEADER] = csrfToken;
+  }
+  /*
+   * On reads as well as writes: a report scoped to the wrong company is as
+   * wrong as a journal posted into it, and sending the selector only on unsafe
+   * methods would make GETs silently fall back to the server's omitted-selector
+   * rule.
+   */
+  if (companyReference) {
+    headers[COMPANY_REFERENCE_HEADER] = companyReference;
   }
 
   let payload: BodyInit | undefined;

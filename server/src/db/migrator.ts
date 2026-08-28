@@ -35,6 +35,8 @@ import * as organizationLanguage from './migrations/021_organization_language.js
 import * as companyRegistry from './migrations/022_company_registry.js';
 import * as previewSessions from './migrations/023_preview_sessions.js';
 import * as legalAcceptance from './migrations/024_legal_acceptance.js';
+import * as companyScopedAccounting from './migrations/025_company_scoped_accounting.js';
+import * as companyAdoptionState from './migrations/026_company_adoption_state.js';
 
 const MIGRATIONS: Record<string, Migration> = {
   '001_initial_schema': initialSchema,
@@ -61,6 +63,8 @@ const MIGRATIONS: Record<string, Migration> = {
   '022_company_registry': companyRegistry,
   '023_preview_sessions': previewSessions,
   '024_legal_acceptance': legalAcceptance,
+  '025_company_scoped_accounting': companyScopedAccounting,
+  '026_company_adoption_state': companyAdoptionState,
 };
 
 class StaticMigrationProvider implements MigrationProvider {

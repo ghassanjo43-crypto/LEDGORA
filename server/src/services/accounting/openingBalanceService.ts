@@ -63,9 +63,25 @@ function resolveDates(input: OpeningBalanceInput): { start: string; opening: str
   return { start, opening };
 }
 
+/**
+ * One opening-balance set, or a 404.
+ *
+ * Scoped by COMPANY as well as organization, and that pairing is the whole
+ * point: this function is the only gate in front of reading, editing,
+ * submitting, approving, posting and reversing an opening balance, so an
+ * organization-only filter here made every one of those reachable across the
+ * companies of a single subscriber.
+ *
+ * A set belonging to a sibling company is answered as "not found", exactly as
+ * one that does not exist — the caller is a legitimate member of the owning
+ * organization, so anything else would confirm the record to somebody with no
+ * business in those books.
+ */
 async function rowOf(executor: Executor, actor: AccountingActor, id: string, lock = false): Promise<any> {
   let query = executor.selectFrom('opening_balance_sets').selectAll()
-    .where('organization_id', '=', actor.organizationId).where('id', '=', id);
+    .where('organization_id', '=', actor.organizationId)
+    .where('company_id', '=', actor.companyId)
+    .where('id', '=', id);
   if (lock) query = query.forUpdate();
   const row = await query.executeTakeFirst();
   if (!row) throw errors.notFound('Opening balance');
@@ -88,6 +104,7 @@ async function toRecord(executor: Executor, actor: AccountingActor, row: any): P
 export async function getCurrent(db: Kysely<Database>, actor: AccountingActor): Promise<OpeningBalanceRecord | null> {
   const row = await db.selectFrom('opening_balance_sets').selectAll()
     .where('organization_id', '=', actor.organizationId)
+    .where('company_id', '=', actor.companyId)
     .orderBy('created_at', 'desc').executeTakeFirst();
   return row ? toRecord(db, actor, row) : null;
 }
@@ -97,14 +114,23 @@ export async function getById(db: Kysely<Database>, actor: AccountingActor, id: 
 }
 
 export async function listEligibleAccounts(db: Kysely<Database>, actor: AccountingActor): Promise<{ accounts: unknown[]; restrictions: string[] }> {
-  const rows = await db.selectFrom('accounts').selectAll().where('organization_id', '=', actor.organizationId)
+  /*
+   * THIS COMPANY'S chart, not the subscriber's. Organization-only here offered
+   * one company's accounts to another for selection, and this is the endpoint
+   * the opening-balance screen actually calls.
+   */
+  const rows = await db.selectFrom('accounts').selectAll()
+    .where('organization_id', '=', actor.organizationId)
+    .where('company_id', '=', actor.companyId)
     .where('active', '=', true).where('is_postable', '=', true).where('blocked', '=', false).where('archived', '=', false)
     .orderBy('account_code', 'asc').execute();
   const accounts: unknown[] = [];
   const restrictions = new Set<string>();
   for (const account of rows) {
     if (!['asset', 'liability', 'equity'].includes(account.account_type.toLowerCase())) continue;
-    const child = await db.selectFrom('accounts').select('id').where('organization_id', '=', actor.organizationId)
+    const child = await db.selectFrom('accounts').select('id')
+      .where('organization_id', '=', actor.organizationId)
+      .where('company_id', '=', actor.companyId)
       .where('parent_account_id', '=', account.id).executeTakeFirst();
     if (child) continue;
     const restriction = isControlAccount(account);
@@ -131,10 +157,16 @@ async function validateOpeningJournal(executor: Executor, actor: AccountingActor
   let credit = Money.ZERO;
   for (const line of lines) {
     const account = await executor.selectFrom('accounts').selectAll()
-      .where('organization_id', '=', actor.organizationId).where('id', '=', line.accountId).executeTakeFirst();
-    if (!account) throw errors.validation(`Line ${line.lineNumber}: the account does not exist in this organization.`);
+      .where('organization_id', '=', actor.organizationId)
+      .where('company_id', '=', actor.companyId)
+      .where('id', '=', line.accountId).executeTakeFirst();
+    /* An account of a sibling company does not resolve, so it reads as absent —
+     * which is the honest answer: it is not an account of THESE books. */
+    if (!account) throw errors.validation(`Line ${line.lineNumber}: the account does not exist in this company.`);
     const hasChildren = Boolean(await executor.selectFrom('accounts').select('id')
-      .where('organization_id', '=', actor.organizationId).where('parent_account_id', '=', account.id).executeTakeFirst());
+      .where('organization_id', '=', actor.organizationId)
+      .where('company_id', '=', actor.companyId)
+      .where('parent_account_id', '=', account.id).executeTakeFirst());
     const eligibility = assessPostingAccount({
       id: account.id, accountCode: account.account_code, accountName: account.account_name,
       accountType: account.account_type as 'asset' | 'liability' | 'equity' | 'income' | 'expense', accountSubtype: account.account_subtype,
@@ -172,7 +204,7 @@ export async function createOrLoadDraft(db: Kysely<Database>, actor: AccountingA
   const journal = await journals.createDraft(db, actor, journalInput(id, dates, input), {
     afterVersion: async (trx, created) => {
       await trx.insertInto('opening_balance_sets').values({
-        id, organization_id: actor.organizationId, journal_entry_id: created.id,
+        id, organization_id: actor.organizationId, company_id: actor.companyId, journal_entry_id: created.id,
         bookkeeping_start_date: dates.start, opening_balance_date: dates.opening,
         reference: input.reference ?? `OPENING-${dates.start}`, description: input.description ?? '',
         prepared_by: actor.userId,
@@ -192,7 +224,7 @@ export async function updateDraft(db: Kysely<Database>, actor: AccountingActor, 
       const result = await trx.updateTable('opening_balance_sets').set({
         bookkeeping_start_date: dates.start, opening_balance_date: dates.opening,
         reference: input.reference ?? '', description: input.description ?? '', version: row.version + 1, updated_at: new Date(),
-      }).where('organization_id', '=', actor.organizationId).where('id', '=', id).where('status', '=', 'draft').where('version', '=', expectedVersion ?? -1).executeTakeFirst();
+      }).where('organization_id', '=', actor.organizationId).where('company_id', '=', actor.companyId).where('id', '=', id).where('status', '=', 'draft').where('version', '=', expectedVersion ?? -1).executeTakeFirst();
       if (result.numUpdatedRows !== 1n) throw errors.conflict(journals.CONCURRENCY_MESSAGE);
       await writeAccountingAudit(trx, actor, { action: 'OPENING_BALANCE_UPDATED', recordType: 'opening_balance', recordId: id, previousVersion: row.version, resultingVersion: row.version + 1 });
     },
@@ -210,7 +242,7 @@ async function transition(db: Kysely<Database>, actor: AccountingActor, id: stri
     const now = new Date();
     await trx.updateTable('opening_balance_sets').set({ status: to, version: row.version + 1, updated_at: now,
       ...(to === 'submitted' ? { submitted_by: actor.userId, submitted_at: now } : { approved_by: actor.userId, approved_at: now }),
-    }).where('organization_id', '=', actor.organizationId).where('id', '=', id).execute();
+    }).where('organization_id', '=', actor.organizationId).where('company_id', '=', actor.companyId).where('id', '=', id).execute();
     await writeAccountingAudit(trx, actor, { action, recordType: 'opening_balance', recordId: id, previousVersion: row.version, resultingVersion: row.version + 1, detail: { journalId: journal.id } });
     return toRecord(trx, actor, await rowOf(trx, actor, id));
   });
@@ -230,7 +262,7 @@ export async function post(db: Kysely<Database>, actor: AccountingActor, id: str
       await validateOpeningJournal(trx, actor, posted);
       const now = new Date();
       await trx.updateTable('opening_balance_sets').set({ status: 'posted', version: locked.version + 1, posted_by: actor.userId, posted_at: now, updated_at: now })
-        .where('organization_id', '=', actor.organizationId).where('id', '=', id).execute();
+        .where('organization_id', '=', actor.organizationId).where('company_id', '=', actor.companyId).where('id', '=', id).execute();
       await writeAccountingAudit(trx, actor, { action: 'OPENING_BALANCE_POSTED', recordType: 'opening_balance', recordId: id, previousVersion: locked.version, resultingVersion: locked.version + 1, detail: { journalId: posted.id } });
     },
   });
@@ -247,7 +279,7 @@ export async function reverse(db: Kysely<Database>, actor: AccountingActor, id: 
       if (locked.version !== expectedVersion || locked.status !== 'posted') throw errors.conflict(journals.CONCURRENCY_MESSAGE);
       const now = new Date();
       await trx.updateTable('opening_balance_sets').set({ status: 'reversed', version: locked.version + 1, reversed_by: actor.userId, reversed_at: now, reversal_journal_entry_id: reversal.id, updated_at: now })
-        .where('organization_id', '=', actor.organizationId).where('id', '=', id).execute();
+        .where('organization_id', '=', actor.organizationId).where('company_id', '=', actor.companyId).where('id', '=', id).execute();
       await writeAccountingAudit(trx, actor, { action: 'OPENING_BALANCE_REVERSED', recordType: 'opening_balance', recordId: id, reason: reason ?? '', previousVersion: locked.version, resultingVersion: locked.version + 1 });
     },
   });
@@ -259,15 +291,24 @@ export async function createReplacement(
 ): Promise<OpeningBalanceRecord> {
   const original = await rowOf(db, actor, reversedId);
   if (original.status !== 'reversed') throw errors.conflict('A replacement can be created only after the original opening balance is reversed.');
+  /*
+   * One active set per COMPANY, matching `opening_balance_sets_one_active`.
+   * Organization-wide, this was stricter than the database and wrong in a way
+   * that blocked legitimate work: a subscriber's second company could never
+   * record its opening balances, because the first company's set occupied the
+   * only slot — while the message already claimed to speak "for this company".
+   */
   const active = await db.selectFrom('opening_balance_sets').select('id')
-    .where('organization_id', '=', actor.organizationId).where('status', 'in', ['draft', 'submitted', 'approved', 'posted']).executeTakeFirst();
+    .where('organization_id', '=', actor.organizationId)
+    .where('company_id', '=', actor.companyId)
+    .where('status', 'in', ['draft', 'submitted', 'approved', 'posted']).executeTakeFirst();
   if (active) throw errors.conflict('An active opening-balance set already exists for this company.');
   const dates = resolveDates(input);
   const id = randomUUID();
   await journals.createDraft(db, actor, journalInput(id, dates, input), {
     afterVersion: async (trx, created) => {
       await trx.insertInto('opening_balance_sets').values({
-        id, organization_id: actor.organizationId, journal_entry_id: created.id,
+        id, organization_id: actor.organizationId, company_id: actor.companyId, journal_entry_id: created.id,
         bookkeeping_start_date: dates.start, opening_balance_date: dates.opening,
         reference: input.reference ?? `OPENING-${dates.start}`, description: input.description ?? '',
         prepared_by: actor.userId, replaces_opening_balance_id: original.id,
@@ -283,6 +324,8 @@ export async function createReplacement(
 
 export async function auditHistory(db: Kysely<Database>, actor: AccountingActor, id: string): Promise<unknown[]> {
   await rowOf(db, actor, id);
-  return db.selectFrom('accounting_audit_events').selectAll().where('organization_id', '=', actor.organizationId)
+  return db.selectFrom('accounting_audit_events').selectAll()
+    .where('organization_id', '=', actor.organizationId)
+    .where('company_id', '=', actor.companyId)
     .where('record_type', '=', 'opening_balance').where('record_id', '=', id).orderBy('at', 'asc').execute();
 }
