@@ -24,6 +24,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { errors } from '../lib/errors.js';
 import { requireOwnOrganizationPermission } from '../guards/permissions.js';
+import { organizationMayPersist } from '../guards/persistence.js';
 import {
   listCompanies,
   registerCompany,
@@ -91,11 +92,27 @@ export async function companyRoutes(app: FastifyInstance): Promise<void> {
     const body = registerSchema.parse(request.body);
     const actor = actorOf(request);
 
+    /*
+     * Free Preview grants every feature and no durable storage, and a company
+     * row is the most durable record there is. The verdict comes from the
+     * server's own subscription row — `organizationMayPersist` reads
+     * `subscriptions.status` — never from a workspace mode, a plan name or
+     * anything else a request could assert. There is no field in the body or
+     * header that reaches this decision, so there is nothing to forge.
+     *
+     * Platform staff are exempt, exactly as they are in `guards/persistence`:
+     * they are not subscribers, and their access to a route is already decided
+     * by the permission guard above.
+     */
+    const mayCreatePermanentCompany = request.principal!.platformRoles.length > 0
+      || (await organizationMayPersist(request.server.db, actor.organizationId));
+
     const { company, created, adopted } = await registerCompany(request.server.db, {
       organizationId: actor.organizationId,
       clientReference: body.clientReference,
       legalName: body.legalName,
       actorUserId: actor.userId,
+      mayCreatePermanentCompany,
       requestId: actor.requestId,
     });
 

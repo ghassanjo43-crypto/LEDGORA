@@ -118,6 +118,18 @@ export interface RegisterCompanyInput {
   clientReference: string;
   legalName: string;
   actorUserId: string;
+  /**
+   * Whether this organization may hold a PERMANENT company record.
+   *
+   * Resolved by the route from the server's own subscription row — never from a
+   * workspace mode, plan name or anything else the client could assert. Passed
+   * in rather than read here for the reason `routes/legal.ts` gives: one
+   * authorization decision, made in one place, instead of two that can disagree.
+   *
+   * Required, not optional. An optional flag defaulting to permissive is a rule
+   * that holds only for callers who remembered it.
+   */
+  mayCreatePermanentCompany: boolean;
   requestId?: string | null;
 }
 
@@ -196,6 +208,23 @@ export async function registerCompany(
   }
   if (legalName.length > 200) {
     throw errors.validation('That company legal name is too long.');
+  }
+
+  /*
+   * Free Preview may explore every feature and store nothing.
+   *
+   * A company row is the most permanent record Ledgora holds — every account,
+   * journal and invoice is scoped to it by foreign key, and the bookkeeping
+   * language locked against it can never be changed. Creating or ADOPTING one
+   * is therefore a durable write, and refused before the transaction opens so
+   * that nothing is inserted and no existing row is touched.
+   *
+   * Checked here as well as at the route because this function is the
+   * authority: a future scheduled job or CLI that reaches it directly is
+   * refused by the same rule, not by whichever caller remembered to ask.
+   */
+  if (!input.mayCreatePermanentCompany) {
+    throw errors.persistenceRequiresSubscription();
   }
 
   const outcome = await db.transaction().execute(async (trx): Promise<

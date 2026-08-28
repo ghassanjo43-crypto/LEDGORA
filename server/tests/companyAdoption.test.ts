@@ -31,6 +31,7 @@ import {
   type TestContext,
 } from './helpers/testApp.js';
 import { createOrganization } from '../src/services/organizationService.js';
+import { organizationMayPersist } from '../src/guards/persistence.js';
 import {
   registerCompany,
   listCompanies,
@@ -77,17 +78,32 @@ async function consoleTenant(name: string, plan = 'core'): Promise<{ organizatio
   return { organizationId, ownerId: owner.user_id };
 }
 
-/** A subscriber who registered themselves. */
+/**
+ * A self-service subscriber who has PAID.
+ *
+ * `createOrganization` leaves no subscription behind, and an organization
+ * without an active one may not hold a permanent company record — so the
+ * subscription is added here. These tests are about the mechanics of adoption,
+ * not about entitlement; entitlement has its own file, and leaving this fixture
+ * unentitled would only test the refusal twice.
+ */
 async function selfServiceTenant(name: string): Promise<{ organizationId: string; ownerId: string }> {
   const owner = await seedUser(ctx, { email: `${name.toLowerCase()}@self.test`, fullName: `${name} Owner` });
   const org = await createOrganization(ctx.db, owner.id, {
     legalName: `${name} Trading LLC`, country: 'JO', baseCurrency: 'JOD',
   });
+  await ctx.db.insertInto('subscriptions')
+    .values({ organization_id: org.id, status: 'active', billing_cycle: 'monthly' })
+    .execute();
   return { organizationId: org.id, ownerId: owner.id };
 }
 
-const register = (organizationId: string, actorUserId: string, reference: string, legalName: string) =>
-  registerCompany(ctx.db, { organizationId, clientReference: reference, legalName, actorUserId });
+/** Register through the REAL entitlement rule, exactly as the route does. */
+const register = async (organizationId: string, actorUserId: string, reference: string, legalName: string) =>
+  registerCompany(ctx.db, {
+    organizationId, clientReference: reference, legalName, actorUserId,
+    mayCreatePermanentCompany: await organizationMayPersist(ctx.db, organizationId),
+  });
 
 /* ══ Birth: exactly one, and provisional ═══════════════════════════════════ */
 

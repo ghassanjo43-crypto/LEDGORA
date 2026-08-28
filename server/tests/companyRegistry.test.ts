@@ -31,6 +31,7 @@ import {
   type SessionCookies,
   type TestContext,
 } from './helpers/testApp.js';
+import { organizationMayPersist } from '../src/guards/persistence.js';
 import {
   registerCompany,
   resolveCompany,
@@ -88,12 +89,21 @@ async function tenant(name: string, plan = 'core'): Promise<{ organizationId: st
   return { organizationId, ownerId: owner.user_id };
 }
 
-const register = (organizationId: string, ownerId: string, reference: string, legalName: string) =>
+/**
+ * Register through the REAL entitlement rule.
+ *
+ * `mayCreatePermanentCompany` is resolved the way the route resolves it —
+ * from the organization's own subscription row — rather than hardcoded true.
+ * Passing a literal would test a code path no request can produce, and would
+ * keep passing if the rule were removed.
+ */
+const register = async (organizationId: string, ownerId: string, reference: string, legalName: string) =>
   registerCompany(ctx.db, {
     organizationId,
     clientReference: reference,
     legalName,
     actorUserId: ownerId,
+    mayCreatePermanentCompany: await organizationMayPersist(ctx.db, organizationId),
   });
 
 /* ══ Registration and adoption ═════════════════════════════════════════════ */
