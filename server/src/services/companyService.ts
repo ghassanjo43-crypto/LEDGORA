@@ -430,6 +430,16 @@ export interface LockLanguageInput {
   language: BookkeepingLanguage;
   actorUserId: string;
   actorName: string;
+  /**
+   * Whether this organization may hold a PERMANENT record — the same verdict
+   * `registerCompany` requires, from the same authoritative subscription row.
+   *
+   * Locking a language is the least reversible act in the product: migration
+   * 022's trigger refuses every later change to it, by any role, through any
+   * route, including a direct UPDATE. A preview customer who locked one would
+   * be permanently bound by a decision made while exploring.
+   */
+  mayCreatePermanentCompany: boolean;
   requestId?: string | null;
 }
 
@@ -452,6 +462,21 @@ export async function lockBookkeepingLanguage(
 ): Promise<CompanyView> {
   if (input.language !== 'en' && input.language !== 'ar') {
     throw errors.validation('Books may be kept in English or Arabic.');
+  }
+
+  /*
+   * Free Preview may explore every feature and keep none of it — and this is
+   * the one act nothing can undo. Refused before the transaction opens, so an
+   * organization that is not entitled writes nothing and a company whose
+   * language is ALREADY locked is not read, touched or reported on.
+   *
+   * Ordered ahead of the already-locked check deliberately: a lapsed customer
+   * asking again is told about their subscription rather than about a record
+   * they can no longer act on either way, and the row stays untouched in both
+   * readings.
+   */
+  if (!input.mayCreatePermanentCompany) {
+    throw errors.persistenceRequiresSubscription();
   }
 
   const company = await db.transaction().execute(async (trx) => {

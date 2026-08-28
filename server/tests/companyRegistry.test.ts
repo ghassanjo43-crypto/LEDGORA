@@ -324,6 +324,7 @@ describe('the bookkeeping language', () => {
     const { organizationId, ownerId, companyId } = await companyFor('Acme');
     const locked = await lockBookkeepingLanguage(ctx.db, {
       organizationId, companyId, language: 'ar', actorUserId: ownerId, actorName: 'Acme Owner',
+      mayCreatePermanentCompany: await organizationMayPersist(ctx.db, organizationId),
     });
 
     expect(locked.bookkeepingLanguage).toBe('ar');
@@ -335,10 +336,12 @@ describe('the bookkeeping language', () => {
     const { organizationId, ownerId, companyId } = await companyFor('Acme');
     await lockBookkeepingLanguage(ctx.db, {
       organizationId, companyId, language: 'en', actorUserId: ownerId, actorName: 'Acme Owner',
+      mayCreatePermanentCompany: await organizationMayPersist(ctx.db, organizationId),
     });
 
     await expect(lockBookkeepingLanguage(ctx.db, {
       organizationId, companyId, language: 'ar', actorUserId: ownerId, actorName: 'Acme Owner',
+      mayCreatePermanentCompany: await organizationMayPersist(ctx.db, organizationId),
     })).rejects.toThrow(/chosen once and cannot be changed/i);
   });
 
@@ -346,6 +349,7 @@ describe('the bookkeeping language', () => {
     const { organizationId, ownerId, companyId } = await companyFor('Acme');
     await lockBookkeepingLanguage(ctx.db, {
       organizationId, companyId, language: 'en', actorUserId: ownerId, actorName: 'Acme Owner',
+      mayCreatePermanentCompany: await organizationMayPersist(ctx.db, organizationId),
     });
 
     /*
@@ -371,6 +375,7 @@ describe('the bookkeeping language', () => {
     const { organizationId, ownerId, companyId } = await companyFor('Acme');
     await lockBookkeepingLanguage(ctx.db, {
       organizationId, companyId, language: 'ar', actorUserId: ownerId, actorName: 'Acme Owner',
+      mayCreatePermanentCompany: await organizationMayPersist(ctx.db, organizationId),
     });
 
     const row = await ctx.db.selectFrom('audit_logs').selectAll()
@@ -396,6 +401,9 @@ describe('the bookkeeping language', () => {
       language: 'en',
       actorUserId: globex.ownerId,
       actorName: 'Globex Owner',
+      /* Globex is entitled; the refusal must come from the COMPANY boundary,
+       * not from entitlement, or this would prove the wrong thing. */
+      mayCreatePermanentCompany: await organizationMayPersist(ctx.db, globex.organizationId),
     })).rejects.toThrow(/not found/i);
 
     const untouched = await ctx.db.selectFrom('companies').selectAll()

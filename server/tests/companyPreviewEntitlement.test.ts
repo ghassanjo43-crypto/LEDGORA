@@ -30,7 +30,11 @@ import {
   type SessionCookies,
   type TestContext,
 } from './helpers/testApp.js';
-import { listCompanies, registerCompany } from '../src/services/companyService.js';
+import {
+  listCompanies,
+  registerCompany,
+  lockBookkeepingLanguage,
+} from '../src/services/companyService.js';
 import { organizationMayPersist } from '../src/guards/persistence.js';
 import { recalculateEntitlements } from '../src/services/entitlementService.js';
 
@@ -340,5 +344,150 @@ describe('companies that already exist', () => {
     });
     expect(listed.statusCode).toBe(200);
     expect(listed.json().companies).toHaveLength(1);
+  });
+});
+
+/* == The bookkeeping language ============================================== */
+
+/**
+ * Locking a language is the least reversible act in the product: migration
+ * 022's trigger refuses every later change, by any role, through any route,
+ * including a direct UPDATE. So it carries the same entitlement rule as
+ * registration — a preview customer must not be permanently bound by a choice
+ * made while exploring.
+ */
+describe('locking the bookkeeping language', () => {
+  const lockUrl = (companyId: string) => COMPANIES + '/' + companyId + '/bookkeeping-language';
+
+  /** The organization's own company row, provisional or adopted. */
+  async function companyIdFor(organizationId: string): Promise<string> {
+    return (await listCompanies(ctx.db, organizationId))[0]!.id;
+  }
+
+  const lock = (
+    cookies: SessionCookies,
+    companyId: string,
+    payload: Record<string, unknown>,
+    headers: Record<string, string> = {},
+  ) => ctx.app.inject({
+    method: 'POST', url: lockUrl(companyId),
+    headers: { ...authHeaders(cookies), ...headers },
+    payload,
+  });
+
+  const rowOf = (companyId: string) => ctx.db.selectFrom('companies').selectAll()
+    .where('id', '=', companyId).executeTakeFirstOrThrow();
+
+  it('is refused to a Free Preview customer through the API', async () => {
+    const org = await tenant('Preview', false);
+    const user = await member(org, 'admin@preview.test');
+    const companyId = await companyIdFor(org);
+
+    const response = await lock(user, companyId, { language: 'ar' });
+    expect(response.statusCode).toBe(403);
+
+    /* Nothing was written: no language, no lock, no selecting user. */
+    const row = await rowOf(companyId);
+    expect(row.bookkeeping_language).toBeNull();
+    expect(row.language_locked_at).toBeNull();
+    expect(row.language_selected_by).toBeNull();
+  });
+
+  it('gains nothing from headers or extra body fields', async () => {
+    const org = await tenant('Preview', false);
+    const user = await member(org, 'admin@preview.test');
+    const companyId = await companyIdFor(org);
+
+    const response = await lock(user, companyId, {
+      language: 'ar',
+      mayCreatePermanentCompany: true,
+      canPersistData: true,
+      subscriptionStatus: 'active',
+    }, {
+      'x-subscription-status': 'active',
+      'x-workspace-mode': 'backend',
+      'x-ledgora-can-persist': 'true',
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect((await rowOf(companyId)).language_locked_at).toBeNull();
+  });
+
+  it('is refused by the SERVICE as well, not only by the route', async () => {
+    const org = await tenant('Preview', false);
+    const owner = await ctx.db.selectFrom('organization_memberships').select('user_id')
+      .where('organization_id', '=', org).where('role', '=', 'owner').executeTakeFirstOrThrow();
+    const companyId = await companyIdFor(org);
+
+    await expect(lockBookkeepingLanguage(ctx.db, {
+      organizationId: org,
+      companyId,
+      language: 'ar',
+      actorUserId: owner.user_id,
+      actorName: 'Preview Owner',
+      mayCreatePermanentCompany: await organizationMayPersist(ctx.db, org),
+    })).rejects.toMatchObject({ code: 'subscription_required_for_persistence' });
+  });
+
+  it('lets an entitled subscriber lock it once, and refuses a second choice', async () => {
+    const org = await tenant('Paid', true);
+    const user = await member(org, 'admin@paid.test');
+    const companyId = await companyIdFor(org);
+
+    const locked = await lock(user, companyId, { language: 'ar' });
+    expect(locked.statusCode).toBe(200);
+    expect(locked.json().company.bookkeepingLanguage).toBe('ar');
+
+    /* Immutability is unchanged: a second attempt conflicts, never rewrites. */
+    const again = await lock(user, companyId, { language: 'en' });
+    expect(again.statusCode).toBe(409);
+    expect((await rowOf(companyId)).bookkeeping_language).toBe('ar');
+  });
+
+  it('lets an upgraded preview customer lock it afterwards', async () => {
+    const org = await tenant('Upgrading', false);
+    const user = await member(org, 'admin@upgrading.test');
+    const companyId = await companyIdFor(org);
+
+    expect((await lock(user, companyId, { language: 'ar' })).statusCode).toBe(403);
+
+    await ctx.db.updateTable('subscriptions').set({ status: 'active' })
+      .where('organization_id', '=', org).execute();
+    await recalculateEntitlements(ctx.db, org);
+
+    const allowed = await lock(user, companyId, { language: 'ar' });
+
+    /*
+     * And the choice is still THEIRS to make: the refusal left no language
+     * behind, so upgrading does not inherit a decision nobody took.
+     */
+    expect(allowed.statusCode).toBe(200);
+    expect(allowed.json().company.bookkeepingLanguage).toBe('ar');
+    expect(allowed.json().company.languageLockedAt).not.toBeNull();
+  });
+
+  it('leaves an ALREADY locked language untouched when entitlement lapses', async () => {
+    const org = await tenant('Lapsing', true);
+    const user = await member(org, 'admin@lapsing.test');
+    const companyId = await companyIdFor(org);
+
+    expect((await lock(user, companyId, { language: 'ar' })).statusCode).toBe(200);
+    const before = await rowOf(companyId);
+
+    await ctx.db.updateTable('subscriptions').set({ status: 'expired' })
+      .where('organization_id', '=', org).execute();
+    await recalculateEntitlements(ctx.db, org);
+
+    expect((await lock(user, companyId, { language: 'en' })).statusCode).toBe(403);
+
+    /*
+     * The books stay in the language they were kept in. The rule governs making
+     * a permanent record, never unmaking one — a customer whose subscription
+     * lapsed must not find their ledger's language changed.
+     */
+    const after = await rowOf(companyId);
+    expect(after.bookkeeping_language).toBe(before.bookkeeping_language);
+    expect(after.language_locked_at).toEqual(before.language_locked_at);
+    expect(after.language_selected_by).toBe(before.language_selected_by);
   });
 });

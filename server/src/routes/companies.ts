@@ -131,6 +131,10 @@ export async function companyRoutes(app: FastifyInstance): Promise<void> {
    * The database trigger from migration 022 is the final boundary. This route
    * refusing a second attempt is a courtesy that produces a readable message;
    * the trigger is what makes the guarantee true.
+   *
+   * Entitlement is checked here for the same reason it is on registration: this
+   * is the least reversible act in the product, and a preview customer must not
+   * be permanently bound by a choice made while exploring.
    */
   app.post('/api/organizations/current/companies/:companyId/bookkeeping-language', {
     preHandler: requireOwnOrganizationPermission('organization_settings', 'manage_organization_settings'),
@@ -139,12 +143,17 @@ export async function companyRoutes(app: FastifyInstance): Promise<void> {
     const { companyId } = request.params as { companyId: string };
     const actor = actorOf(request);
 
+    /* The same authoritative verdict registration uses. See that route above. */
+    const mayCreatePermanentCompany = request.principal!.platformRoles.length > 0
+      || (await organizationMayPersist(request.server.db, actor.organizationId));
+
     const company = await lockBookkeepingLanguage(request.server.db, {
       organizationId: actor.organizationId,
       companyId,
       language: body.language,
       actorUserId: actor.userId,
       actorName: actor.name,
+      mayCreatePermanentCompany,
       requestId: actor.requestId,
     });
 
