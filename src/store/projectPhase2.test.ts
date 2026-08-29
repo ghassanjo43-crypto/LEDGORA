@@ -178,7 +178,7 @@ describe('revenue recognition', () => {
 
     const built = useProjectRecognitionStore.getState().buildRun(P.SOLAR, '2026-06-30');
     expect(built.ok).toBe(true);
-    expect(useProjectRecognitionStore.getState().postRun(built.id!).ok).toBe(true);
+    expect((await useProjectRecognitionStore.getState().postRun(built.id!)).ok).toBe(true);
     const run = useProjectRecognitionStore.getState().getRun(built.id!)!;
     const entry = je(run.journalEntryId!);
     expect(computeTotals(entry.lines).difference).toBe(0);
@@ -188,7 +188,7 @@ describe('revenue recognition', () => {
     // A second run in the same period recognises nothing further (already up to date).
     expect(useProjectRecognitionStore.getState().buildRun(P.SOLAR, '2026-06-30').ok).toBe(false);
     // Reversal is exact.
-    expect(useProjectRecognitionStore.getState().reverseRun(built.id!, 'correction').ok).toBe(true);
+    expect((await useProjectRecognitionStore.getState().reverseRun(built.id!, 'correction')).ok).toBe(true);
     const rev = je(useProjectRecognitionStore.getState().getRun(built.id!)!.reversalJournalEntryId!);
     expect(rev.lines.find((l) => l.accountCode === '1230')!.credit).toBe(150000);
   });
@@ -200,7 +200,7 @@ describe('revenue recognition', () => {
     useProjectStore.getState().updateProject(P.SOLAR, { revenueRecognitionMethod: 'manual' });
     const built = useProjectRecognitionStore.getState().buildRun(P.SOLAR, '2026-06-30', 70000); // target 70,000 < 100,000 billed
     expect(built.ok).toBe(true);
-    useProjectRecognitionStore.getState().postRun(built.id!);
+    await useProjectRecognitionStore.getState().postRun(built.id!);
     const entry = je(useProjectRecognitionStore.getState().getRun(built.id!)!.journalEntryId!);
     expect(entry.lines.find((l) => l.accountCode === '2230')!.credit).toBe(30000); // deferred revenue (contract liability)
     expect(entry.lines.find((l) => l.accountCode === '4120')!.debit).toBe(30000);

@@ -28,7 +28,19 @@ export function CurrencyRevaluationPage() {
   const baseCur = curMap.get(config.baseCurrencyCode);
   const baseMoney = (n: number): string => formatCurrencyAmount(n, baseCur);
 
-  const act = (fn: () => { ok: boolean; error?: string; id?: string }, ok: string): void => { const r = fn(); if (r.ok) { notify(ok, 'success'); if (r.id) setSelectedRunId(r.id); } else notify(r.error ?? 'Action failed.', 'error'); };
+  /*
+   * Posting travels to the server, so the action may be async. Awaited rather
+   * than fired and forgotten: the confirmation must describe what actually
+   * happened, and a run is only posted once the server says so.
+   */
+  type ActionOutcome = { ok: boolean; error?: string; id?: string };
+  const act = (fn: () => ActionOutcome | Promise<ActionOutcome>, ok: string): void => {
+    void (async () => {
+      const r = await fn();
+      if (r.ok) { notify(ok, 'success'); if (r.id) setSelectedRunId(r.id); }
+      else notify(r.error ?? 'Action failed.', 'error');
+    })();
+  };
   const build = (): void => act(() => store.buildDraft({ revaluationDate: date }), 'Revaluation drafted.');
 
   const run = selectedRunId ? runs.find((r) => r.id === selectedRunId) : runs[runs.length - 1];

@@ -179,7 +179,7 @@ describe('currency revaluation', () => {
     j.postEntry(added.id!);
   }
 
-  it('scenario 5 — revalues a USD receivable up by JOD 110 and posts a balanced gain', () => {
+  it('scenario 5 — revalues a USD receivable up by JOD 110 and posts a balanced gain', async () => {
     // Reconfigure base to JOD so revaluation runs in JOD (3dp).
     // Base changes are guarded once postings exist — clear the seeded journal first.
     useJournalStore.getState().replaceAll([]);
@@ -197,14 +197,14 @@ describe('currency revaluation', () => {
     expect(line.unrealizedGain).toBe(110);
 
     // Post → balanced journal Dr receivable 110 / Cr unrealized gain 110.
-    expect(useCurrencyRevaluationStore.getState().postRun(res.id!).ok).toBe(true);
+    expect((await useCurrencyRevaluationStore.getState().postRun(res.id!)).ok).toBe(true);
     const posted = useCurrencyRevaluationStore.getState().getRun(res.id!)!;
     const je = useJournalStore.getState().entries.find((e) => e.id === posted.journalEntryId)!;
     expect(computeTotals(je.lines).difference).toBe(0);
     expect(je.lines.find((l) => l.accountCode === '1221')!.debit).toBe(110);
   });
 
-  it('excludes non-monetary accounts and blocks a duplicate posted run', () => {
+  it('excludes non-monetary accounts and blocks a duplicate posted run', async () => {
     // Base changes are guarded once postings exist — clear the seeded journal first.
     useJournalStore.getState().replaceAll([]);
     useCurrencyStore.getState().setBaseCurrency('primary', 'JOD');
@@ -212,12 +212,12 @@ describe('currency revaluation', () => {
     postForeignReceivable(10000, 0.709);
     const store = useCurrencyRevaluationStore.getState();
     const first = store.buildDraft({ revaluationDate: '2026-12-31' });
-    store.postRun(first.id!);
+    await store.postRun(first.id!);
     const second = useCurrencyRevaluationStore.getState().buildDraft({ revaluationDate: '2026-12-31' });
-    expect(useCurrencyRevaluationStore.getState().postRun(second.id!).ok).toBe(false);
+    expect((await useCurrencyRevaluationStore.getState().postRun(second.id!)).ok).toBe(false);
   });
 
-  it('reversal is exact (swaps the revaluation journal)', () => {
+  it('reversal is exact (swaps the revaluation journal)', async () => {
     // Base changes are guarded once postings exist — clear the seeded journal first.
     useJournalStore.getState().replaceAll([]);
     useCurrencyStore.getState().setBaseCurrency('primary', 'JOD');
@@ -225,8 +225,8 @@ describe('currency revaluation', () => {
     postForeignReceivable(10000, 0.709);
     const store = useCurrencyRevaluationStore.getState();
     const res = store.buildDraft({ revaluationDate: '2026-12-31' });
-    store.postRun(res.id!);
-    const rev = useCurrencyRevaluationStore.getState().reverseRun(res.id!);
+    await store.postRun(res.id!);
+    const rev = await useCurrencyRevaluationStore.getState().reverseRun(res.id!);
     expect(rev.ok).toBe(true);
     const run = useCurrencyRevaluationStore.getState().getRun(res.id!)!;
     expect(run.status).toBe('reversed');

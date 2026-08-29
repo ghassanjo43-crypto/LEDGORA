@@ -79,6 +79,16 @@ export interface JournalInput {
   exchangeRate?: string;
   sourceType?: string | null;
   sourceId?: string | null;
+  /**
+   * WHAT happened to the source document, when one produced this entry.
+   *
+   * Carries the uniqueness invariant with `sourceType` and `sourceId`: one
+   * journal per company, per document, per event. Set by
+   * `sourcePostingService`, which is the only door that guarantees it — left
+   * null by the invoice paths written before it, whose issue and settlement
+   * postings deliberately share a document identity.
+   */
+  sourceEvent?: string | null;
   lines: JournalLineInput[];
 }
 
@@ -111,6 +121,7 @@ export interface JournalRecord {
   exchangeRate: string;
   sourceType: string | null;
   sourceId: string | null;
+  sourceEvent: string | null;
   originalEntryId: string | null;
   reversalEntryId: string | null;
   replacementEntryId: string | null;
@@ -204,6 +215,7 @@ function toJournal(row: any, lines: any[]): JournalRecord {
     exchangeRate: String(row.exchange_rate),
     sourceType: row.source_type,
     sourceId: row.source_id,
+    sourceEvent: row.source_event ?? null,
     originalEntryId: row.original_entry_id,
     reversalEntryId: row.reversal_entry_id,
     replacementEntryId: row.replacement_entry_id,
@@ -873,6 +885,7 @@ export async function createDraft(
         exchange_rate: Money.toDecimalString(rate),
         source_type: input.sourceType ?? null,
         source_id: input.sourceId ?? null,
+        source_event: input.sourceEvent ?? null,
         created_by: actor.userId,
         updated_by: actor.userId,
       })
@@ -1267,16 +1280,26 @@ async function insertReversal(
   return reversal;
 }
 
-export async function reverseJournal(
-  db: Kysely<Database>,
+/**
+ * The reversal itself, inside a transaction the CALLER owns.
+ *
+ * Split out so `sourcePostingService` can hold an advisory lock on the source
+ * document and perform the reversal under it, in one transaction. Kysely does
+ * not nest transactions, so a caller that already has one cannot go through
+ * `reverseJournal` below — and taking the lock in a separate transaction would
+ * release it before the reversal ran, which is the whole race it exists to
+ * close.
+ */
+export async function reverseJournalIn(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  trx: any,
   actor: AccountingActor,
   journalId: string,
   options: MutationOptions & { postingDate?: string },
   hooks: PostingHooks = {},
 ): Promise<{ original: JournalRecord; reversal: JournalRecord }> {
   const reason = requireReason(options.reason);
-
-  return db.transaction().execute(async (trx) => {
+  {
     const original = await lockAndVerify(trx, actor, journalId, options.expectedVersion);
     // The specific answer before the general one: an entry that was already
     // reversed is no longer 'posted', and "only a posted entry can be reversed"
@@ -1320,7 +1343,17 @@ export async function reverseJournal(
     });
 
     return { original: withdrawn, reversal };
-  });
+  }
+}
+
+export async function reverseJournal(
+  db: Kysely<Database>,
+  actor: AccountingActor,
+  journalId: string,
+  options: MutationOptions & { postingDate?: string },
+  hooks: PostingHooks = {},
+): Promise<{ original: JournalRecord; reversal: JournalRecord }> {
+  return db.transaction().execute((trx) => reverseJournalIn(trx, actor, journalId, options, hooks));
 }
 
 /**

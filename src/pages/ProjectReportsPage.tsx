@@ -57,7 +57,19 @@ export function ProjectReportsPage() {
   const bva = useMemo(() => (report === 'budget-vs-actual' && budget ? calculateProjectBudgetActual({ budget, entries, accounts, base }) : null), [report, budget, entries, accounts, base]);
   const projectRuns = useMemo(() => runs.filter((r) => r.projectId === prjId), [runs, prjId]);
 
-  const act = (fn: () => { ok: boolean; error?: string; id?: string }, ok: string): void => { const r = fn(); if (r.ok) notify(ok, 'success'); else notify(r.error ?? 'Action failed.', 'error'); };
+  /*
+   * Posting travels to the server, so an action may be async. Awaited rather
+   * than fired and forgotten: the confirmation has to describe what actually
+   * happened, and a run is posted only once the server says so.
+   */
+  type ActionOutcome = { ok: boolean; error?: string; id?: string };
+  const act = (fn: () => ActionOutcome | Promise<ActionOutcome>, ok: string): void => {
+    void (async () => {
+      const r = await fn();
+      if (r.ok) notify(ok, 'success');
+      else notify(r.error ?? 'Action failed.', 'error');
+    })();
+  };
   const recognize = (): void => act(() => { const built = recognitionStore.buildRun(prjId, to); if (!built.ok || !built.id) return built; return recognitionStore.postRun(built.id); }, 'Revenue recognised & posted.');
 
   return (

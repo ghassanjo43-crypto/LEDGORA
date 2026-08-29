@@ -41,16 +41,28 @@ export function CostCenterAllocationsPage() {
 
   const ccName = (id: string): string => centers.find((c) => c.id === id)?.code ?? id;
   const pctTotal = useMemo(() => targets.reduce((s, t) => s + (Number(t.percentage) || 0), 0), [targets]);
-  const act = (fn: () => { ok: boolean; error?: string; id?: string }, ok: string): void => { const r = fn(); if (r.ok) notify(ok, 'success'); else notify(r.error ?? 'Action failed.', 'error'); };
+  /*
+   * Posting travels to the server, so an action may be async. Awaited rather
+   * than fired and forgotten: the confirmation has to describe what actually
+   * happened, and a run is posted only once the server says so.
+   */
+  type ActionOutcome = { ok: boolean; error?: string; id?: string };
+  const act = (fn: () => ActionOutcome | Promise<ActionOutcome>, ok: string): void => {
+    void (async () => {
+      const r = await fn();
+      if (r.ok) notify(ok, 'success');
+      else notify(r.error ?? 'Action failed.', 'error');
+    })();
+  };
 
   const saveRule = (): void => {
     if (!code.trim() || !accountId || targets.some((t) => !t.costCenterId)) { notify('Provide a code, account and target cost centers.', 'error'); return; }
     const res = store.createRule({ code, name, status: 'active', method: 'percentage', sourceCostCenterId: sourceCc || undefined, allocationAccountId: accountId, targets });
     if (res.ok) { notify('Allocation rule created.', 'success'); setOpen(false); setCode(''); setName(''); setTargets([{ costCenterId: '', percentage: 0, sortOrder: 0 }]); }
   };
-  const runRule = (ruleId: string): void => {
+  const runRule = async (ruleId: string): Promise<void> => {
     const built = store.buildRun(ruleId, { periodStart, periodEnd, postingDate: periodEnd, sourceAmountOverride: override === '' ? undefined : Number(override) });
-    if (built.ok && built.id) { const p = store.postRun(built.id); if (p.ok) notify('Allocation posted.', 'success'); else notify(p.error ?? 'Could not post.', 'error'); }
+    if (built.ok && built.id) { const p = await store.postRun(built.id); if (p.ok) notify('Allocation posted.', 'success'); else notify(p.error ?? 'Could not post.', 'error'); }
     else notify(built.error ?? 'Could not build the run.', 'error');
   };
 
@@ -100,7 +112,7 @@ export function CostCenterAllocationsPage() {
                   <td className="px-3 py-2 font-mono text-xs text-slate-500">{accounts.find((a) => a.id === r.allocationAccountId)?.code ?? '—'}</td>
                   <td className="px-3 py-2 text-xs text-slate-500">{r.targets.map((t) => `${ccName(t.costCenterId)} ${t.percentage}%`).join(', ')}</td>
                   <td className="px-3 py-2 text-xs text-slate-500">{r.method}</td>
-                  <td className="px-3 py-2 text-right"><Button size="sm" variant="secondary" onClick={() => runRule(r.id)}><Send className="h-4 w-4" /> Run &amp; post</Button></td>
+                  <td className="px-3 py-2 text-right"><Button size="sm" variant="secondary" onClick={() => void runRule(r.id)}><Send className="h-4 w-4" /> Run &amp; post</Button></td>
                 </tr>
               ))}
             </tbody>

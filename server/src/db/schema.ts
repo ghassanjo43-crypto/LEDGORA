@@ -894,7 +894,15 @@ export interface JournalEntriesTable {
   functional_currency: string;
   exchange_rate: Generated<string>;
   source_type: string | null;
+  /** TEXT, not uuid: a browser-minted `inv_…` is an external reference. */
   source_id: string | null;
+  /**
+   * WHAT happened to the document — `issue`, `settlement:<id>`,
+   * `depreciation:2026-06`. With `source_type` and `source_id` it forms the
+   * unique key that makes a repeated posting return the existing journal
+   * instead of writing a second one. Null on rows written before 029.
+   */
+  source_event: string | null;
   original_entry_id: string | null;
   reversal_entry_id: string | null;
   replacement_entry_id: string | null;

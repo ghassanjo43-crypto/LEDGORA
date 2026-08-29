@@ -9,6 +9,8 @@ import { roundMoney } from '@/lib/journalValidation';
 import { generateId, nowIso } from '@/lib/utils';
 import { useStore } from './useStore';
 import { useJournalStore } from './journalStore';
+import { booksAreServerAuthoritative } from '@/services/books/booksEngine';
+import { postRunJournal, reverseRunJournal } from '@/services/books/runPostings';
 import { useProjectStore } from './projectStore';
 
 export interface RecognitionActionResult {
@@ -49,8 +51,10 @@ interface RecognitionState {
 
   getRun: (id: string) => ProjectRecognitionRun | undefined;
   buildRun: (projectId: string, asOfDate: string, manualCumulative?: number) => RecognitionActionResult;
-  postRun: (id: string) => RecognitionActionResult;
-  reverseRun: (id: string, reason: string) => RecognitionActionResult;
+  /* Async: the journal travels to the server before the run may call itself
+   * posted. See `services/books/runPostings`. */
+  postRun: (id: string) => Promise<RecognitionActionResult>;
+  reverseRun: (id: string, reason: string) => Promise<RecognitionActionResult>;
   deleteDraft: (id: string) => RecognitionActionResult;
 
   replaceAll: (runs: ProjectRecognitionRun[]) => void;
@@ -83,7 +87,7 @@ export const useProjectRecognitionStore = create<RecognitionState>()(
         return { ok: true, id: run.id };
       },
 
-      postRun: (id) => {
+      postRun: async (id) => {
         const { runs } = get();
         const run = runs.find((r) => r.id === id);
         if (!run) return { ok: false, error: 'Recognition run not found.' };
@@ -91,27 +95,51 @@ export const useProjectRecognitionStore = create<RecognitionState>()(
         const config = postingConfig();
         if (!config.revenueAccountId || !config.contractAssetAccountId || !config.contractLiabilityAccountId) return { ok: false, error: 'Contract asset/liability or revenue account is not mapped.' };
         const project = useProjectStore.getState().getProject(run.projectId);
-        const journal = useJournalStore.getState();
+        /*
+         * The journal goes to the SERVER when the books are kept there, and the
+         * run is marked posted only once the server confirms - so a run
+         * recorded as posted is always one whose journal is genuinely in the
+         * books. Repeating this action returns the same journal, because the
+         * run id and the event name are what identify it.
+         */
         const je = buildRecognitionJournalEntry(run, project?.code ?? run.projectId, config, accountsById(), useStore.getState().settings.baseCurrency);
-        const added = journal.addEntry(je);
-        if (!added.ok || !added.id) return { ok: false, error: added.error ?? 'Could not create the recognition journal.' };
-        const posted = journal.postEntry(added.id);
-        if (!posted.ok) return { ok: false, error: posted.error ?? 'Could not post the recognition journal.' };
+
+        let journalEntryId: string;
+        if (booksAreServerAuthoritative()) {
+          const result = await postRunJournal('project_recognition', run.id, je);
+          if (!result.ok) return { ok: false, error: result.error };
+          journalEntryId = result.journalEntryId;
+        } else {
+          const journal = useJournalStore.getState();
+          const added = journal.addEntry(je);
+          if (!added.ok || !added.id) return { ok: false, error: added.error ?? 'Could not create the recognition journal.' };
+          const posted = journal.postEntry(added.id);
+          if (!posted.ok) return { ok: false, error: posted.error ?? 'Could not post the recognition journal.' };
+          journalEntryId = added.id;
+        }
         const now = nowIso();
-        set({ runs: runs.map((r) => (r.id === id ? { ...r, status: 'posted', journalEntryId: added.id, postedAt: now, updatedAt: now } : r)) });
+        set({ runs: get().runs.map((r) => (r.id === id ? { ...r, status: 'posted', journalEntryId, postedAt: now, updatedAt: now } : r)) });
         return { ok: true, id };
       },
 
-      reverseRun: (id, reason) => {
+      reverseRun: async (id, reason) => {
         const { runs } = get();
         const run = runs.find((r) => r.id === id);
         if (!run) return { ok: false, error: 'Recognition run not found.' };
         if (run.status !== 'posted' || !run.journalEntryId) return { ok: false, error: 'Only a posted run can be reversed.' };
         if (!reason.trim()) return { ok: false, error: 'A reversal reason is required.' };
-        const reversal = useJournalStore.getState().reverseEntry(run.journalEntryId);
-        if (!reversal.ok || !reversal.id) return { ok: false, error: reversal.error ?? 'Could not create the reversing journal.' };
+        let reversalId: string;
+        if (booksAreServerAuthoritative()) {
+          const result = await reverseRunJournal('project_recognition', run.id, reason.trim());
+          if (!result.ok) return { ok: false, error: result.error };
+          reversalId = result.journalEntryId;
+        } else {
+          const reversal = useJournalStore.getState().reverseEntry(run.journalEntryId);
+          if (!reversal.ok || !reversal.id) return { ok: false, error: reversal.error ?? 'Could not create the reversing journal.' };
+          reversalId = reversal.id;
+        }
         const now = nowIso();
-        set({ runs: runs.map((r) => (r.id === id ? { ...r, status: 'reversed', reversalJournalEntryId: reversal.id, reversedAt: now, updatedAt: now } : r)) });
+        set({ runs: get().runs.map((r) => (r.id === id ? { ...r, status: 'reversed', reversalJournalEntryId: reversalId, reversedAt: now, updatedAt: now } : r)) });
         return { ok: true, id };
       },
 

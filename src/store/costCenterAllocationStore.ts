@@ -9,6 +9,8 @@ import { generateId, nowIso } from '@/lib/utils';
 import { PRIMARY_ENTITY_ID } from '@/data/costCenterSeed';
 import { useStore } from './useStore';
 import { useJournalStore } from './journalStore';
+import { booksAreServerAuthoritative } from '@/services/books/booksEngine';
+import { postRunJournal, reverseRunJournal } from '@/services/books/runPostings';
 import { roundToCompanyPrecision } from '@/lib/monetaryPrecision';
 
 export interface AllocationActionResult {
@@ -35,8 +37,10 @@ interface AllocationState {
   updateRule: (id: string, patch: Partial<CostCenterAllocationRule>) => AllocationActionResult;
 
   buildRun: (ruleId: string, input: { periodStart: string; periodEnd: string; postingDate: string; sourceAmountOverride?: number }) => AllocationActionResult;
-  postRun: (id: string) => AllocationActionResult;
-  reverseRun: (id: string, reason: string) => AllocationActionResult;
+  /* Async: the journal travels to the server before the run may call itself
+   * posted. See `services/books/runPostings`. */
+  postRun: (id: string) => Promise<AllocationActionResult>;
+  reverseRun: (id: string, reason: string) => Promise<AllocationActionResult>;
   deleteDraft: (id: string) => AllocationActionResult;
 
   replaceAll: (state: Partial<Pick<AllocationState, 'rules' | 'runs'>>) => void;
@@ -91,7 +95,7 @@ export const useCostCenterAllocationStore = create<AllocationState>()(
         return { ok: true, id };
       },
 
-      postRun: (id) => {
+      postRun: async (id) => {
         const { runs, rules } = get();
         const run = runs.find((r) => r.id === id);
         if (!run) return { ok: false, error: 'Allocation run not found.' };
@@ -102,27 +106,51 @@ export const useCostCenterAllocationStore = create<AllocationState>()(
         const dup = runs.find((r) => r.id !== id && r.status === 'posted' && r.ruleId === run.ruleId && r.periodStart === run.periodStart && r.periodEnd === run.periodEnd);
         if (dup) return { ok: false, error: `A run for ${rule.code} covering ${run.periodStart}–${run.periodEnd} is already posted. Reverse it first.` };
 
-        const journal = useJournalStore.getState();
+        /*
+         * The journal goes to the SERVER when the books are kept there, and the
+         * run is marked posted only once the server confirms - so a run
+         * recorded as posted is always one whose journal is genuinely in the
+         * books. Repeating this action returns the same journal, because the
+         * run id and the event name are what identify it.
+         */
         const je = buildCostCenterAllocationJournal(run, rule, accountsById(), useStore.getState().settings.baseCurrency);
-        const added = journal.addEntry(je, { inheritCurrency: true });
-        if (!added.ok || !added.id) return { ok: false, error: added.error ?? 'Could not create the allocation journal.' };
-        const posted = journal.postEntry(added.id);
-        if (!posted.ok) return { ok: false, error: posted.error ?? 'Could not post the allocation journal.' };
+
+        let journalEntryId: string;
+        if (booksAreServerAuthoritative()) {
+          const result = await postRunJournal('cost_center_allocation', run.id, je);
+          if (!result.ok) return { ok: false, error: result.error };
+          journalEntryId = result.journalEntryId;
+        } else {
+          const journal = useJournalStore.getState();
+          const added = journal.addEntry(je, { inheritCurrency: true });
+          if (!added.ok || !added.id) return { ok: false, error: added.error ?? 'Could not create the allocation journal.' };
+          const posted = journal.postEntry(added.id);
+          if (!posted.ok) return { ok: false, error: posted.error ?? 'Could not post the allocation journal.' };
+          journalEntryId = added.id;
+        }
         const now = nowIso();
-        set({ runs: runs.map((r) => (r.id === id ? { ...r, status: 'posted', journalEntryId: added.id, postedAt: now, auditTrail: [...r.auditTrail, audit('allocation-posted', added.id)], updatedAt: now } : r)) });
+        set({ runs: get().runs.map((r) => (r.id === id ? { ...r, status: 'posted', journalEntryId, postedAt: now, auditTrail: [...r.auditTrail, audit('allocation-posted', journalEntryId)], updatedAt: now } : r)) });
         return { ok: true, id };
       },
 
-      reverseRun: (id, reason) => {
+      reverseRun: async (id, reason) => {
         const { runs } = get();
         const run = runs.find((r) => r.id === id);
         if (!run) return { ok: false, error: 'Allocation run not found.' };
         if (run.status !== 'posted' || !run.journalEntryId) return { ok: false, error: 'Only a posted run can be reversed.' };
         if (!reason.trim()) return { ok: false, error: 'A reversal reason is required.' };
-        const reversal = useJournalStore.getState().reverseEntry(run.journalEntryId);
-        if (!reversal.ok || !reversal.id) return { ok: false, error: reversal.error ?? 'Could not create the reversing journal.' };
+        let reversalId: string;
+        if (booksAreServerAuthoritative()) {
+          const result = await reverseRunJournal('cost_center_allocation', run.id, reason.trim());
+          if (!result.ok) return { ok: false, error: result.error };
+          reversalId = result.journalEntryId;
+        } else {
+          const reversal = useJournalStore.getState().reverseEntry(run.journalEntryId);
+          if (!reversal.ok || !reversal.id) return { ok: false, error: reversal.error ?? 'Could not create the reversing journal.' };
+          reversalId = reversal.id;
+        }
         const now = nowIso();
-        set({ runs: runs.map((r) => (r.id === id ? { ...r, status: 'reversed', reversalJournalEntryId: reversal.id, reversedAt: now, auditTrail: [...r.auditTrail, audit('allocation-reversed', reason.trim())], updatedAt: now } : r)) });
+        set({ runs: get().runs.map((r) => (r.id === id ? { ...r, status: 'reversed', reversalJournalEntryId: reversalId, reversedAt: now, auditTrail: [...r.auditTrail, audit('allocation-reversed', reason.trim())], updatedAt: now } : r)) });
         return { ok: true, id };
       },
 

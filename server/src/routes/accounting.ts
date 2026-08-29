@@ -56,6 +56,7 @@ import * as accounts from '../services/accounting/accountService.js';
 import * as periods from '../services/accounting/periodService.js';
 import * as journals from '../services/accounting/journalService.js';
 import * as openingBalances from '../services/accounting/openingBalanceService.js';
+import * as sourcePostings from '../services/accounting/sourcePostingService.js';
 
 /**
  * Who is acting, and on whose books.
@@ -380,6 +381,65 @@ export async function accountingRoutes(app: FastifyInstance): Promise<void> {
       reason: body.reason,
       postingDate: body.postingDate,
     });
+    return reply.send(result);
+  });
+
+  /* ══ Source-document postings ════════════════════════════════════════════
+   *
+   * A source document does not draft and post; it produces a balanced entry as
+   * part of one business action. These routes are that door, and the only one
+   * carrying an idempotency guarantee: repeating a posting returns the journal
+   * already made rather than writing a second.
+   *
+   * Guarded by `general_journal.post`, because that is exactly what they do.
+   * The document module's own permission is checked by the module; this is the
+   * ledger's.
+   */
+
+  app.post('/api/accounting/source-postings', { preHandler: onBooks(postJournal) }, async (request, reply) => {
+    const body = request.body as sourcePostings.SourcePostingInput;
+    const result = await sourcePostings.postSourceJournal(app.db, actorOf(request), body);
+    /*
+     * 201 for a journal this call created, 200 for one it found. A retry that
+     * got 201 the first time and 200 the second has proof it did not double
+     * post — which is the whole reason the distinction is returned.
+     */
+    return reply.code(result.created ? 201 : 200).send(result);
+  });
+
+  /** What this document has already posted. The reconcile after a lost answer. */
+  app.get('/api/accounting/source-postings', { preHandler: onBooks(viewJournal) }, async (request, reply) => {
+    const query = request.query as { sourceType?: string; sourceId?: string; sourceEvent?: string };
+    if (!query.sourceType || !query.sourceId) {
+      throw errors.validation('Name the source document type and id.');
+    }
+    if (query.sourceEvent) {
+      const journal = await sourcePostings.findSourceJournal(app.db, actorOf(request), {
+        sourceType: query.sourceType, sourceId: query.sourceId, sourceEvent: query.sourceEvent,
+      });
+      return reply.send({ journals: journal ? [journal] : [] });
+    }
+    return reply.send({
+      journals: await sourcePostings.listSourceJournals(app.db, actorOf(request), {
+        sourceType: query.sourceType, sourceId: query.sourceId,
+      }),
+    });
+  });
+
+  /** Withdraw a document's posting. `void`, and idempotent. */
+  app.post('/api/accounting/source-postings/reverse', { preHandler: onBooks(voidJournal) }, async (request, reply) => {
+    const body = (request.body ?? {}) as {
+      sourceType?: string; sourceId?: string; sourceEvent?: string;
+      reason?: string; postingDate?: string;
+    };
+    if (!body.sourceType || !body.sourceId || !body.sourceEvent) {
+      throw errors.validation('Name the source document type, id and posting event.');
+    }
+    const result = await sourcePostings.reverseSourceJournal(
+      app.db, actorOf(request),
+      { sourceType: body.sourceType, sourceId: body.sourceId, sourceEvent: body.sourceEvent },
+      { reason: body.reason ?? '', postingDate: body.postingDate },
+    );
     return reply.send(result);
   });
 

@@ -173,20 +173,20 @@ describe('shared-cost allocation', () => {
     expect(je.lines.every((l) => l.accountCode === '6860')).toBe(true);
   });
 
-  it('posts through the store, links a journal, and reverses exactly', () => {
+  it('posts through the store, links a journal, and reverses exactly', async () => {
     const store = useCostCenterAllocationStore.getState();
     const r = store.createRule(rule());
     const built = useCostCenterAllocationStore.getState().buildRun(r.id!, { periodStart: '2026-01-01', periodEnd: '2026-01-31', postingDate: '2026-01-31', sourceAmountOverride: 12000 });
     expect(built.ok).toBe(true);
-    expect(useCostCenterAllocationStore.getState().postRun(built.id!).ok).toBe(true);
+    expect((await useCostCenterAllocationStore.getState().postRun(built.id!)).ok).toBe(true);
     const posted = useCostCenterAllocationStore.getState().getRun(built.id!)!;
     const je = useJournalStore.getState().entries.find((e) => e.id === posted.journalEntryId)!;
     expect(computeTotals(je.lines).difference).toBe(0);
     // Duplicate posted run for same rule/period is blocked.
     const dup = useCostCenterAllocationStore.getState().buildRun(r.id!, { periodStart: '2026-01-01', periodEnd: '2026-01-31', postingDate: '2026-01-31', sourceAmountOverride: 12000 });
-    expect(useCostCenterAllocationStore.getState().postRun(dup.id!).ok).toBe(false);
+    expect((await useCostCenterAllocationStore.getState().postRun(dup.id!)).ok).toBe(false);
     // Reversal is exact.
-    expect(useCostCenterAllocationStore.getState().reverseRun(built.id!, 'correction').ok).toBe(true);
+    expect((await useCostCenterAllocationStore.getState().reverseRun(built.id!, 'correction')).ok).toBe(true);
     const rev = useJournalStore.getState().entries.find((e) => e.id === useCostCenterAllocationStore.getState().getRun(built.id!)!.reversalJournalEntryId)!;
     expect(computeTotals(rev.lines).difference).toBe(0);
   });

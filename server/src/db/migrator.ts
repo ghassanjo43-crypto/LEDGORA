@@ -39,6 +39,7 @@ import * as companyScopedAccounting from './migrations/025_company_scoped_accoun
 import * as companyAdoptionState from './migrations/026_company_adoption_state.js';
 import * as companySettings from './migrations/027_company_settings.js';
 import * as accountClassification from './migrations/028_account_classification.js';
+import * as sourcePostingIdentity from './migrations/029_source_posting_identity.js';
 
 const MIGRATIONS: Record<string, Migration> = {
   '001_initial_schema': initialSchema,
@@ -69,6 +70,7 @@ const MIGRATIONS: Record<string, Migration> = {
   '026_company_adoption_state': companyAdoptionState,
   '027_company_settings': companySettings,
   '028_account_classification': accountClassification,
+  '029_source_posting_identity': sourcePostingIdentity,
 };
 
 class StaticMigrationProvider implements MigrationProvider {
