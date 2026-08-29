@@ -74,8 +74,27 @@ export interface AccountAmount {
   accountId: string;
   accountCode: string;
   accountName: string;
+  /** The LEDGER type: asset | liability | equity | income | expense. */
   accountType: string;
   accountSubtype: string | null;
+  /**
+   * The IFRS PRESENTATION classification, and the reason a screen does not have
+   * to derive one.
+   *
+   * A browser grouping rows into "cost of sales", "finance costs" and "tax"
+   * from the five ledger types would be making an accounting classification
+   * locally — the same figure could be filed under a different heading by two
+   * clients, and neither would be authoritative. These come from the accounts
+   * table, so the server decides where a figure belongs and the screen only
+   * decides how it looks.
+   */
+  presentationType: string;
+  ifrsStatement: string;
+  ifrsCategory: string;
+  ifrsSubcategory: string;
+  cashFlowCategory: string;
+  /** none | cash_and_cash_equivalents | restricted_cash | bank_overdraft */
+  cashClassification: string;
   parentAccountId: string | null;
   isPostable: boolean;
   /** This account's own aggregated amount, as a decimal string. */
@@ -176,8 +195,31 @@ interface AccountRow {
   account_type: string;
   account_subtype: string | null;
   cash_classification: string | null;
+  presentation_type: string | null;
+  ifrs_statement: string | null;
+  ifrs_category: string | null;
+  ifrs_subcategory: string | null;
+  cash_flow_category: string | null;
   parent_account_id: string | null;
   is_postable: boolean;
+}
+
+/**
+ * The presentation classification, copied straight through.
+ *
+ * A helper rather than three repetitions, because the three row builders must
+ * agree: a figure filed under one heading in the trial balance and another in
+ * the balance sheet would be the same account appearing to be two.
+ */
+function presentationOf(account: AccountRow) {
+  return {
+    presentationType: account.presentation_type ?? '',
+    ifrsStatement: account.ifrs_statement ?? '',
+    ifrsCategory: account.ifrs_category ?? '',
+    ifrsSubcategory: account.ifrs_subcategory ?? '',
+    cashFlowCategory: account.cash_flow_category ?? '',
+    cashClassification: account.cash_classification ?? 'none',
+  };
 }
 
 /**
@@ -291,6 +333,8 @@ export async function buildReportBundle(
         .select([
           'id', 'account_code', 'account_name', 'account_type',
           'account_subtype', 'cash_classification', 'parent_account_id', 'is_postable',
+          'presentation_type', 'ifrs_statement', 'ifrs_category', 'ifrs_subcategory',
+          'cash_flow_category',
         ])
         .where('organization_id', '=', input.organizationId)
         .where('company_id', '=', input.companyId)
@@ -386,6 +430,7 @@ async function buildSection(
       accountName: account.account_name,
       accountType: account.account_type,
       accountSubtype: account.account_subtype,
+      ...presentationOf(account),
       parentAccountId: account.parent_account_id,
       isPostable: account.is_postable,
       amount: toDecimal(net, decimals),
@@ -437,6 +482,7 @@ async function buildSection(
       accountName: account.account_name,
       accountType: account.account_type,
       accountSubtype: account.account_subtype,
+      ...presentationOf(account),
       parentAccountId: account.parent_account_id,
       isPostable: account.is_postable,
       amount: toDecimal(presented, decimals),
@@ -487,6 +533,7 @@ async function buildSection(
       accountName: account.account_name,
       accountType: type,
       accountSubtype: account.account_subtype,
+      ...presentationOf(account),
       parentAccountId: account.parent_account_id,
       isPostable: account.is_postable,
       amount: toDecimal(type === 'asset' ? net : -net, decimals),
