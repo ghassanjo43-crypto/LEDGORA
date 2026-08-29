@@ -127,9 +127,18 @@ describe('migration 027', () => {
     const org = await tenant('Acme');
     const migrator = createMigrator(ctx.db);
 
-    const down = await migrator.migrateDown();
-    expect(down.error).toBeUndefined();
-    expect(down.results?.[0]?.migrationName).toBe('027_company_settings');
+    /*
+     * One step per migration stacked ABOVE 027, newest first, because
+     * `migrateDown` removes one at a time. The names are asserted rather than a
+     * count so that adding a later migration fails here loudly instead of
+     * silently rolling back something else — which is exactly what it did when
+     * 028 arrived.
+     */
+    for (const expected of ['028_account_classification', '027_company_settings']) {
+      const down = await migrator.migrateDown();
+      expect(down.error).toBeUndefined();
+      expect(down.results?.[0]?.migrationName).toBe(expected);
+    }
 
     const { rows: gone } = await sql<{ n: number }>`
       SELECT count(*)::int AS n FROM information_schema.tables WHERE table_name = 'company_settings'

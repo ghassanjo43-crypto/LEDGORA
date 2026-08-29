@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { AccountType } from '@/types';
 import type { AccountTreeNode } from '@/lib/accountTree';
 import { ACCOUNT_TYPE_OPTIONS } from '@/data/ifrsOptions';
-import { useStore } from '@/store/useStore';
+import * as booksAccounts from '@/services/books/accountsGateway';
 import { useToast } from '@/components/ui/Toast';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -46,11 +46,7 @@ export function AccountNode({
   const { account, depth, children } = node;
   const { callbacks, collapsedIds, onToggleCollapse, visibleIds, matchedIds } = view;
 
-  const quickUpdate = useStore((s) => s.quickUpdate);
-  const duplicateAccount = useStore((s) => s.duplicateAccount);
-  const setActive = useStore((s) => s.setActive);
-  const moveAccount = useStore((s) => s.moveAccount);
-  const reorderSibling = useStore((s) => s.reorderSibling);
+
   const { notify } = useToast();
 
   const [editing, setEditing] = useState(false);
@@ -73,8 +69,8 @@ export function AccountNode({
     setEditing(true);
   };
 
-  const saveInline = (): void => {
-    const result = quickUpdate(account.id, {
+  const saveInline = async (): Promise<void> => {
+    const result = await booksAccounts.renameAccount(account.id, {
       code: draft.code.trim(),
       name: draft.name.trim(),
       type: draft.type,
@@ -87,8 +83,24 @@ export function AccountNode({
     }
   };
 
-  const handleDuplicate = (): void => {
-    const result = duplicateAccount(account.id);
+  /*
+   * Deactivation, reordering and moving all travel through the gateway, which
+   * delegates to the server when the books are kept there. Calling the store
+   * directly would be refused — the store is a cache — so the failure of
+   * forgetting is visible rather than silent.
+   */
+  const setActive = async (id: string, isActive: boolean): Promise<void> => {
+    const result = await booksAccounts.setAccountActive(id, isActive);
+    if (!result.ok) notify(result.error ?? 'Could not change the account.', 'error');
+  };
+
+  const moveAccount = async (id: string, direction: 'up' | 'down'): Promise<void> => {
+    const result = await booksAccounts.moveAccount(id, direction);
+    if (!result.ok) notify(result.error ?? 'Could not reorder.', 'error');
+  };
+
+  const handleDuplicate = async (): Promise<void> => {
+    const result = await booksAccounts.duplicateAccount(account.id);
     notify(
       result.ok ? 'Account duplicated.' : result.error ?? 'Could not duplicate.',
       result.ok ? 'success' : 'error',
@@ -120,8 +132,10 @@ export function AccountNode({
           e.preventDefault();
           setDropTarget(false);
           if (view.dragId && view.dragId !== account.id) {
-            const result = reorderSibling(view.dragId, account.id);
-            if (!result.ok) notify(result.error ?? 'Could not reorder.', 'warning');
+            void (async () => {
+              const result = await booksAccounts.reorderByDrop(view.dragId!, account.id);
+              if (!result.ok) notify(result.error ?? 'Could not reorder.', 'warning');
+            })();
           }
           view.setDragId(null);
         }}
@@ -167,7 +181,7 @@ export function AccountNode({
               aria-label="Name"
               autoFocus
               onKeyDown={(e) => {
-                if (e.key === 'Enter') saveInline();
+                if (e.key === 'Enter') void saveInline();
                 if (e.key === 'Escape') setEditing(false);
               }}
             />
@@ -178,7 +192,7 @@ export function AccountNode({
               className="h-8 w-48"
               aria-label="Type"
             />
-            <Button size="sm" onClick={saveInline}>
+            <Button size="sm" onClick={() => void saveInline()}>
               <Icon.Check className="h-4 w-4" /> Save
             </Button>
             <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>
@@ -219,10 +233,10 @@ export function AccountNode({
             </div>
 
             <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
-              <IconAction label="Move up" onClick={() => moveAccount(account.id, 'up')}>
+              <IconAction label="Move up" onClick={() => void moveAccount(account.id, 'up')}>
                 <Icon.ArrowUp className="h-4 w-4" />
               </IconAction>
-              <IconAction label="Move down" onClick={() => moveAccount(account.id, 'down')}>
+              <IconAction label="Move down" onClick={() => void moveAccount(account.id, 'down')}>
                 <Icon.ArrowDown className="h-4 w-4" />
               </IconAction>
               {!account.isPostingAccount && (
@@ -233,12 +247,12 @@ export function AccountNode({
               <IconAction label="Edit account" onClick={() => callbacks.onEdit(account.id)}>
                 <Icon.Edit className="h-4 w-4" />
               </IconAction>
-              <IconAction label="Duplicate account" onClick={handleDuplicate}>
+              <IconAction label="Duplicate account" onClick={() => void handleDuplicate()}>
                 <Icon.Copy className="h-4 w-4" />
               </IconAction>
               <IconAction
                 label={account.isActive ? 'Deactivate' : 'Activate'}
-                onClick={() => setActive(account.id, !account.isActive)}
+                onClick={() => void setActive(account.id, !account.isActive)}
               >
                 {account.isActive ? <Icon.Moon className="h-4 w-4" /> : <Icon.Sun className="h-4 w-4" />}
               </IconAction>

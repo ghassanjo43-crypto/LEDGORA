@@ -144,7 +144,14 @@ describe('Opening Balances when the server holds no chart', () => {
     });
   });
 
-  it('offers to import the browser chart instead of showing an empty table', async () => {
+  it('says the company has no chart yet, and does not offer to copy one', async () => {
+    /*
+     * This used to offer an import of the browser's chart, which was right
+     * while the browser and the server each held one. There is ONE chart now
+     * and it is the server's, so an empty answer means the company genuinely
+     * has no accounts — and the fix is to create them, not to copy anything
+     * across. An import button here would be re-introducing the divergence.
+     */
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = String(input);
       if (url.includes('/opening-balances/accounts')) return json({ accounts: [], restrictions: [] });
@@ -155,8 +162,9 @@ describe('Opening Balances when the server holds no chart', () => {
 
     renderPage();
 
-    expect(await screen.findByText(/has not been shared with the accounting service/i)).toBeTruthy();
-    expect(screen.getByRole('button', { name: /Import chart of accounts/i })).toBeTruthy();
+    expect(await screen.findByText(/has no chart of accounts yet/i)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Import chart of accounts/i })).toBeNull();
+    expect(screen.getByRole('button', { name: /Open Chart of Accounts/i })).toBeTruthy();
   });
 
   it('stays quiet when the server has a chart but nothing in it is eligible', async () => {

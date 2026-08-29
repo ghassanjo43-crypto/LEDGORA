@@ -39,6 +39,7 @@ import { useEntityStore } from './useEntityStore';
 import { useCostCenterStore } from './costCenterStore';
 import { useProjectStore } from './projectStore';
 import { generateId, nowIso } from '@/lib/utils';
+import { booksAreServerAuthoritative, SERVER_BOOKS_MESSAGE } from '@/services/books/booksEngine';
 import {
   ORDINARY_TRANSACTION_EXCHANGE_RATE,
   transactionCurrencyCode,
@@ -483,6 +484,32 @@ export interface PostedEntryInput {
   }>;
 }
 
+/**
+ * The refusal every local journal write passes through first.
+ *
+ * ══ Why a refusal and not a fallback ═════════════════════════════════════════
+ *
+ * For a subscriber the journal lives on the server. A write that lands in this
+ * store instead produces an entry that is on their screen, in this cache, and
+ * in no set of books anywhere — and the next hydration removes it silently,
+ * because hydration REPLACES. A bookkeeper would have watched a transaction
+ * save and then vanish, with no error to report and nothing to retry.
+ *
+ * So there is no local fallback for offline, for a refusal, or for a conflict.
+ * "Could not save" is recoverable; "saved somewhere that does not count" is
+ * not. `services/books/journalsGateway` is the way through.
+ *
+ * ══ The programmatic paths are guarded too ═══════════════════════════════════
+ *
+ * `insertPostedEntry`, `reverseForSourceDocument` and `appendEntries` are how
+ * invoices, inventory and fixed assets post their own journals. They are
+ * refused here as well, and DELIBERATELY have no server route yet: moving
+ * source-document postings onto the server journal is the next slice. Leaving
+ * them writing to the cache would have been the silent-loss path again, this
+ * time for every document module at once.
+ */
+const SERVER_BOOKS_REFUSAL: JournalActionResult = { ok: false, error: SERVER_BOOKS_MESSAGE };
+
 export const useJournalStore = create<JournalState>()(
   persist(
     (set, get) => ({
@@ -503,6 +530,7 @@ export const useJournalStore = create<JournalState>()(
       entries: [],
 
       addEntry: (values, options) => {
+        if (booksAreServerAuthoritative()) return SERVER_BOOKS_REFUSAL;
         // Subscription gate: a suspended/expired subscription blocks new
         // posting activity (drafts included, so document flows never leave an
         // orphan draft). Existing data is never touched.
@@ -562,6 +590,7 @@ export const useJournalStore = create<JournalState>()(
        * to get wrong than the correction they were attempting.
        */
       updateEntry: (id, values, options = {}) => {
+        if (booksAreServerAuthoritative()) return SERVER_BOOKS_REFUSAL;
         const denied = requirePermission('journal.edit');
         if (denied) return denied;
 
@@ -646,6 +675,7 @@ export const useJournalStore = create<JournalState>()(
        * here removes or rewrites an existing history record.
        */
       amendPostedEntry: (id, values, options) => {
+        if (booksAreServerAuthoritative()) return SERVER_BOOKS_REFUSAL;
         const denied = requirePermission('journal.edit');
         if (denied) return denied;
 
@@ -753,6 +783,7 @@ export const useJournalStore = create<JournalState>()(
        * when it returns.
        */
       reverseAndReplace: (id, values, options) => {
+        if (booksAreServerAuthoritative()) return SERVER_BOOKS_REFUSAL;
         const denied = requirePermission('journal.edit') ?? requirePermission('journal.reverse');
         if (denied) return denied;
 
@@ -876,6 +907,7 @@ export const useJournalStore = create<JournalState>()(
       },
 
       reverseForSourceDocument: (entryId, input) => {
+        if (booksAreServerAuthoritative()) return SERVER_BOOKS_REFUSAL;
         /*
          * Authorised by the DOCUMENT permission, not by `journal.reverse`.
          *
@@ -954,6 +986,7 @@ export const useJournalStore = create<JournalState>()(
       },
 
       deleteEntry: (id) => {
+        if (booksAreServerAuthoritative()) return SERVER_BOOKS_REFUSAL;
         const denied = requirePermission('journal.edit');
         if (denied) return denied;
         const { entries } = get();
@@ -967,6 +1000,7 @@ export const useJournalStore = create<JournalState>()(
       },
 
       duplicateEntry: (id) => {
+        if (booksAreServerAuthoritative()) return SERVER_BOOKS_REFUSAL;
         const { entries } = get();
         const source = entries.find((e) => e.id === id);
         if (!source) return { ok: false, error: 'Journal entry not found.' };
@@ -1004,6 +1038,7 @@ export const useJournalStore = create<JournalState>()(
       },
 
       reverseEntry: (id) => {
+        if (booksAreServerAuthoritative()) return SERVER_BOOKS_REFUSAL;
         const denied = requirePermission('journal.reverse');
         if (denied) return denied;
         const { entries } = get();
@@ -1059,6 +1094,7 @@ export const useJournalStore = create<JournalState>()(
       },
 
       postEntry: (id) => {
+        if (booksAreServerAuthoritative()) return SERVER_BOOKS_REFUSAL;
         const guard = assertSubscriptionAllowsPosting(getSubscriptionStatus());
         if (!guard.ok) return { ok: false, error: guard.error };
         const denied = requirePermission('journal.post');
@@ -1119,6 +1155,7 @@ export const useJournalStore = create<JournalState>()(
       },
 
       voidEntry: (id) => {
+        if (booksAreServerAuthoritative()) return SERVER_BOOKS_REFUSAL;
         const { entries } = get();
         const existing = entries.find((e) => e.id === id);
         if (!existing) return { ok: false, error: 'Journal entry not found.' };
@@ -1145,6 +1182,7 @@ export const useJournalStore = create<JournalState>()(
       },
 
       appendEntries: (incoming) => {
+        if (booksAreServerAuthoritative()) return SERVER_BOOKS_REFUSAL;
         const { entries } = get();
         const used = new Set(entries.map((e) => e.entryNumber));
         let counter = entries;
@@ -1163,6 +1201,7 @@ export const useJournalStore = create<JournalState>()(
       },
 
       insertPostedEntry: (input) => {
+        if (booksAreServerAuthoritative()) return SERVER_BOOKS_REFUSAL;
         const guard = assertSubscriptionAllowsPosting(getSubscriptionStatus());
         if (!guard.ok) return { ok: false, error: guard.error };
         const active = input.lines.filter((l) => (Number(l.debit) || 0) !== 0 || (Number(l.credit) || 0) !== 0);
@@ -1239,7 +1278,12 @@ export const useJournalStore = create<JournalState>()(
         return { ok: true, id, lineIds };
       },
 
-      replaceAll: (entries) => set({ entries: entries.map(normalizeEntry) }),
+      /* Bulk user write; guarded. See the note on `replaceAll` in `useStore`
+       * for why `resetToDefault` below is not. */
+      replaceAll: (entries) => {
+        if (booksAreServerAuthoritative()) return;
+        set({ entries: entries.map(normalizeEntry) });
+      },
 
       resetToDefault: () =>
         set({ entries: SEED_JOURNAL_ENTRIES.map((e) => ({ ...e })) }),

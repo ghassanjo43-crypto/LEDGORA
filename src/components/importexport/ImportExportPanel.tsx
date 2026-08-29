@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import type { ImportResult } from '@/types';
 import { useStore } from '@/store/useStore';
+import { booksAreServerAuthoritative } from '@/services/books/booksEngine';
 import {
   exportToCsv,
   exportToJson,
@@ -70,6 +71,20 @@ export function ImportExportPanel() {
 
   const applyImport = (): void => {
     if (!preview) return;
+    /*
+     * Replacing a whole chart is not something the server offers, and writing
+     * it into the browser would produce a chart that looks imported and is
+     * erased by the next reload. So the refusal is shown instead of a success
+     * message for work that did not happen.
+     */
+    if (booksAreServerAuthoritative()) {
+      notify(
+        'These books are kept on the Ledgora service, so a chart cannot be replaced wholesale from a file. '
+        + 'Add or edit the accounts you need in Chart of Accounts.',
+        'error',
+      );
+      return;
+    }
     replaceAll(preview.accounts);
     notify(`Imported ${preview.accounts.length} accounts.`, 'success');
     setPreview(null);

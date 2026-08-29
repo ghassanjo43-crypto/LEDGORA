@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useStore } from '@/store/useStore';
+import * as booksAccounts from '@/services/books/accountsGateway';
 import { getDescendantIds } from '@/lib/accountTree';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -13,7 +14,6 @@ import { useToast } from '@/components/ui/Toast';
 
 export function TreePage() {
   const accounts = useStore((s) => s.accounts);
-  const deleteAccount = useStore((s) => s.deleteAccount);
   const setAllCollapsed = useStore((s) => s.setAllCollapsed);
   const { notify } = useToast();
 
@@ -36,9 +36,15 @@ export function TreePage() {
     ? getDescendantIds(accounts, pendingDeleteId).length
     : 0;
 
-  const confirmDelete = (): void => {
+  /*
+   * The SERVER decides whether an account may be deleted, and refuses the
+   * moment a journal line references it — telling the user to deactivate
+   * instead. That refusal is shown verbatim: it is the correct answer and it
+   * names the alternative.
+   */
+  const confirmDelete = async (): Promise<void> => {
     if (!pendingDeleteId) return;
-    const result = deleteAccount(pendingDeleteId, true);
+    const result = await booksAccounts.deleteAccount(pendingDeleteId);
     notify(
       result.ok ? 'Account deleted.' : result.error ?? 'Could not delete account.',
       result.ok ? 'success' : 'error',
@@ -100,7 +106,7 @@ export function TreePage() {
         }
         confirmLabel={descendantCount > 0 ? 'Delete all' : 'Delete'}
         destructive
-        onConfirm={confirmDelete}
+        onConfirm={() => void confirmDelete()}
         onCancel={() => setPendingDeleteId(null)}
       />
     </div>

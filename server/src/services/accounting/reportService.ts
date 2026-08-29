@@ -40,16 +40,26 @@ import { errors } from '../../lib/errors.js';
 import { monetaryDecimalsFor } from './currencyPrecision.js';
 
 /**
- * The one controlled value that marks an account as cash for reporting.
+ * Which classifications make up "cash" for the cash figure.
  *
- * Deliberately an EXACT token rather than a pattern. The browser decides this
- * with `/cash and cash equivalents/i` over a free-text subcategory, which is
- * why that classification is not authoritative: a customer who renames a
- * subcategory silently changes their cash-flow statement. Until a phase
- * introduces a constrained classification, no account carries this value and
- * cash flow reports `cash_accounts_not_configured` rather than a number.
+ * Read from `accounts.cash_classification`, a CHECK-constrained column, and no
+ * longer from a free-text subtype. The browser decided this with
+ * `/cash and cash equivalents/i` over a subcategory a customer could rename,
+ * and the first version of this file inherited the same weakness by matching an
+ * exact subtype string. A classification that changes when somebody edits a
+ * label is not one.
+ *
+ * `bank_overdraft` is INCLUDED: IAS 7 treats an overdraft repayable on demand
+ * as a negative component of cash, and because the aggregate is a signed net of
+ * debits less credits, a credit-balance liability subtracts itself without any
+ * special handling.
+ *
+ * `restricted_cash` is EXCLUDED, which is the whole reason it is a separate
+ * value. Cash the entity cannot use is not available to settle anything, so
+ * counting it would overstate the closing position — and leaving it
+ * unclassified instead would lose the fact that it is cash at all.
  */
-export const CASH_SUBTYPE = 'cash_and_cash_equivalents';
+export const CASH_CLASSIFICATIONS_IN_CASH_FLOW = ['cash_and_cash_equivalents', 'bank_overdraft'] as const;
 
 export interface ReportParameters {
   /** Cumulative statements are struck at this date, inclusive. */
@@ -165,6 +175,7 @@ interface AccountRow {
   account_name: string;
   account_type: string;
   account_subtype: string | null;
+  cash_classification: string | null;
   parent_account_id: string | null;
   is_postable: boolean;
 }
@@ -279,7 +290,7 @@ export async function buildReportBundle(
         .selectFrom('accounts')
         .select([
           'id', 'account_code', 'account_name', 'account_type',
-          'account_subtype', 'parent_account_id', 'is_postable',
+          'account_subtype', 'cash_classification', 'parent_account_id', 'is_postable',
         ])
         .where('organization_id', '=', input.organizationId)
         .where('company_id', '=', input.companyId)
@@ -491,8 +502,13 @@ async function buildSection(
   }
 
   /* ── Cash flow ─────────────────────────────────────────────────────────── */
-  const cashAccounts = accounts.filter(
-    (a) => a.account_type === 'asset' && a.account_subtype === CASH_SUBTYPE,
+  /*
+   * No `account_type` filter is needed: the database CHECK already ties each
+   * classification to the only account type it can be true of, so a value here
+   * cannot disagree with the account carrying it.
+   */
+  const cashAccounts = accounts.filter((a) =>
+    (CASH_CLASSIFICATIONS_IN_CASH_FLOW as readonly string[]).includes(a.cash_classification ?? 'none'),
   );
 
   let cashFlow: ReportBundle['cashFlow'];
@@ -500,8 +516,8 @@ async function buildSection(
     cashFlow = {
       status: 'cash_accounts_not_configured',
       reason:
-        'No account is classified as cash and cash equivalents, so a cash-flow statement cannot '
-        + 'be prepared. Classify the cash accounts and the statement becomes available.',
+        'No account carries a cash classification, so the cash figures cannot be prepared. Set the '
+        + 'cash classification on the bank and cash accounts and they become available.',
     };
   } else {
     /*

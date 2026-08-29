@@ -23,6 +23,8 @@ import type { BackendUser } from './api/authApi';
 import { subscriptionApi } from './api/authApi';
 import { clearCsrfToken, setCompanyReference } from './api/client';
 import { resetCompanyRegistration } from './api/companyRegistration';
+import { releaseServerBooks } from './books/booksEngine';
+import { leaveCompanyScope } from './books/booksScope';
 import { resetCompanySettings } from './companySettingsSync';
 import { useAuthStore } from '@/store/authStore';
 import { useOrganizationStore } from '@/store/organizationStore';
@@ -88,6 +90,15 @@ export function clearLocalSession(): void {
   resetCompanyRegistration();
   /* The settings version belonged to that company and that session. */
   resetCompanySettings();
+  /*
+   * And the durable-books latch, which is the ONE place it is correct to
+   * release it. Signing out genuinely ends the session; every other way the
+   * server becomes unreachable is an interruption, and downgrading to browser
+   * writes there is exactly the silent data loss the latch prevents.
+   */
+  releaseServerBooks();
+  /* Nothing cached about the previous company survives a sign-out. */
+  leaveCompanyScope();
   // The organization confirmation belonged to the session that just ended. Left
   // behind, the next visitor would inherit a "confirmed" verdict for an
   // organization that is not theirs.

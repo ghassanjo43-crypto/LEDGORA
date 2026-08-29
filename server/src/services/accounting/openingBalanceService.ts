@@ -167,12 +167,10 @@ async function validateOpeningJournal(executor: Executor, actor: AccountingActor
       .where('organization_id', '=', actor.organizationId)
       .where('company_id', '=', actor.companyId)
       .where('parent_account_id', '=', account.id).executeTakeFirst());
+    /* The four flags the rule consults; see `PostingAccountFacts`. */
     const eligibility = assessPostingAccount({
-      id: account.id, accountCode: account.account_code, accountName: account.account_name,
-      accountType: account.account_type as 'asset' | 'liability' | 'equity' | 'income' | 'expense', accountSubtype: account.account_subtype,
-      normalBalance: account.normal_balance as 'debit' | 'credit', parentAccountId: account.parent_account_id,
-      restrictedCurrency: account.restricted_currency, isPostable: account.is_postable, active: account.active,
-      blocked: account.blocked, archived: account.archived, systemAccount: account.system_account,
+      isPostable: account.is_postable, active: account.active,
+      blocked: account.blocked, archived: account.archived,
     }, hasChildren);
     if (!eligibility.eligible) throw errors.validation(`Line ${line.lineNumber}: ${eligibility.message}`);
     if (!['asset', 'liability', 'equity'].includes(account.account_type.toLowerCase())) {

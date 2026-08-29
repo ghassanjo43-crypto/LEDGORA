@@ -7,6 +7,7 @@
  * workspace and re-reads the durable one.
  */
 import type { AccountStatus } from '@/types/session';
+import { releaseServerBooks } from '@/services/books/booksEngine';
 import {
   clearMemoryWorkspace,
   getWorkspaceStorageMode,
@@ -57,6 +58,9 @@ export function syncWorkspaceStorageMode(status: AccountStatus): boolean {
   const next = storageModeFor(status);
   if (getWorkspaceStorageMode() === next) return false;
   setWorkspaceStorageMode(next);
+  /* Free Preview and Free Demo are memory-only and must not be refused as
+   * browser writes; a durable status re-latches on its own from the session. */
+  if (next === 'memory') releaseServerBooks();
   if (next === 'memory') {
     // The mode is switched FIRST, so these default-writes land in the volatile
     // map and cannot overwrite the durable workspace.
@@ -74,6 +78,14 @@ export function startFreeDemoWorkspace(): void {
   // Order matters: switch to memory FIRST so the reset below cannot overwrite a
   // durable workspace belonging to a real subscriber.
   setWorkspaceStorageMode('memory');
+  /*
+   * And leave the server engine, so the demo's records go to the volatile
+   * workspace rather than being refused as browser writes. This is a genuine
+   * end of the durable session for these stores — the demo is explicitly
+   * ephemeral and calls no persistence API — which is why releasing the latch
+   * here is correct and releasing it on a failed request never is.
+   */
+  releaseServerBooks();
   /*
    * Claim the demo workspace identity here, not just in the shell.
    *
@@ -108,6 +120,7 @@ export function endFreeDemoWorkspace(): void {
  */
 export function clearWorkspaceForSignOut(): void {
   setWorkspaceStorageMode('memory');
+  releaseServerBooks();
   useAccountSessionStore.getState().resetToDefault();
   // Leaving the account also leaves any operator subscriber-view mode, so a
   // later session never resumes viewing a tenant.

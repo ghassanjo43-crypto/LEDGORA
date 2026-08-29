@@ -28,6 +28,7 @@ import {
   type JournalActionResult,
 } from '@/store/journalStore';
 import { useStore } from '@/store/useStore';
+import * as booksJournals from '@/services/books/journalsGateway';
 import { useEntityStore } from '@/store/useEntityStore';
 import { ReadOnlyValue } from '@/components/ui/ReadOnlyValue';
 import { useTransactionCurrency } from '@/lib/transactionCurrency';
@@ -77,11 +78,12 @@ const LINE_GRID =
 
 export function JournalEntryDrawer({ open, mode, onClose }: JournalEntryDrawerProps) {
   const entries = useJournalStore((s) => s.entries);
-  const addEntry = useJournalStore((s) => s.addEntry);
-  const updateEntry = useJournalStore((s) => s.updateEntry);
-  const amendPostedEntry = useJournalStore((s) => s.amendPostedEntry);
-  const reverseAndReplace = useJournalStore((s) => s.reverseAndReplace);
-  const postEntry = useJournalStore((s) => s.postEntry);
+  /*
+   * Every write goes through the journals gateway, which delegates to the
+   * server when the books are kept there. The store's own mutators refuse a
+   * direct call in that case — a browser write would produce an entry that is
+   * on screen and in no set of books.
+   */
   const accounts = useStore((s) => s.accounts);
   const baseCurrency = useStore((s) => s.settings.baseCurrency);
   /** The company's own currency — shown beside the amounts, never chosen. */
@@ -258,7 +260,7 @@ export function JournalEntryDrawer({ open, mode, onClose }: JournalEntryDrawerPr
    * the store re-assesses again on the way in. A drawer that decided for itself
    * could be looking at a dependency snapshot minutes out of date.
    */
-  const persistDraft = (values: JournalFormValues): JournalActionResult => {
+  const persistDraft = async (values: JournalFormValues): Promise<JournalActionResult> => {
     const cleaned = stripBlankLines(values);
 
     let result: JournalActionResult;
@@ -273,12 +275,12 @@ export function JournalEntryDrawer({ open, mode, onClose }: JournalEntryDrawerPr
       const options = { reason: trimmed, expectedVersion: openedVersion };
       result =
         strategy === 'replace'
-          ? reverseAndReplace(editId, cleaned, options)
-          : amendPostedEntry(editId, cleaned, options);
+          ? await booksJournals.reverseAndReplace(editId, cleaned, options)
+          : await booksJournals.amendPostedEntry(editId, cleaned, options);
     } else if (editId) {
-      result = updateEntry(editId, cleaned, { expectedVersion: openedVersion });
+      result = await booksJournals.updateDraft(editId, cleaned, openedVersion);
     } else {
-      result = addEntry(cleaned);
+      result = await booksJournals.createEntry(cleaned);
     }
 
     if (result.ok && result.id && !editId) setSavedId(result.id);
@@ -291,8 +293,8 @@ export function JournalEntryDrawer({ open, mode, onClose }: JournalEntryDrawerPr
     return result;
   };
 
-  const onSaveAndClose = (values: JournalFormValues): void => {
-    if (persistDraft(values).ok) {
+  const onSaveAndClose = async (values: JournalFormValues): Promise<void> => {
+    if ((await persistDraft(values)).ok) {
       notify(
         amending
           ? strategy === 'replace'
@@ -305,16 +307,16 @@ export function JournalEntryDrawer({ open, mode, onClose }: JournalEntryDrawerPr
     }
   };
 
-  const onSaveKeepEditing = (values: JournalFormValues): void => {
-    if (persistDraft(values).ok) {
+  const onSaveKeepEditing = async (values: JournalFormValues): Promise<void> => {
+    if ((await persistDraft(values)).ok) {
       notify('Draft saved.', 'success');
       setPostAttempted(false);
       reset(values); // clear the dirty flag; stay open
     }
   };
 
-  const onSaveAndNew = (values: JournalFormValues): void => {
-    if (persistDraft(values).ok) {
+  const onSaveAndNew = async (values: JournalFormValues): Promise<void> => {
+    if ((await persistDraft(values)).ok) {
       notify('Draft saved. Ready for the next entry.', 'success');
       const fresh = makeDefaultJournalValues(
         nextEntryNumber(useJournalStore.getState().entries),
@@ -326,10 +328,10 @@ export function JournalEntryDrawer({ open, mode, onClose }: JournalEntryDrawerPr
     }
   };
 
-  const onSaveAndPost = (values: JournalFormValues): void => {
-    const result = persistDraft(values);
+  const onSaveAndPost = async (values: JournalFormValues): Promise<void> => {
+    const result = await persistDraft(values);
     if (!result.ok || !result.id) return;
-    const posted = postEntry(result.id);
+    const posted = await booksJournals.postEntry(result.id);
     if (posted.ok) {
       notify('Journal entry posted.', 'success');
       onClose();

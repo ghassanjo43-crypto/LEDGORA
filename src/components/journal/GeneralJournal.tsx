@@ -3,6 +3,7 @@ import { Search, Plus, Upload, Download, Send, Save, Maximize2, Minimize2, Chevr
 import type { Account } from '@/types';
 import type { JournalFilters } from '@/types/journal';
 import { useJournalStore, entryToFormValues } from '@/store/journalStore';
+import * as booksJournals from '@/services/books/journalsGateway';
 import { useStore } from '@/store/useStore';
 import { useEntityStore } from '@/store/useEntityStore';
 import { useJournalView } from '@/store/journalViewStore';
@@ -53,12 +54,12 @@ const FY_OPTIONS = [2027, 2026, 2025, 2024];
 
 export function GeneralJournal() {
   const entries = useJournalStore((s) => s.entries);
-  const deleteEntry = useJournalStore((s) => s.deleteEntry);
-  const duplicateEntry = useJournalStore((s) => s.duplicateEntry);
-  const reverseEntry = useJournalStore((s) => s.reverseEntry);
-  const postEntry = useJournalStore((s) => s.postEntry);
-  const voidEntry = useJournalStore((s) => s.voidEntry);
-  const updateEntry = useJournalStore((s) => s.updateEntry);
+  /*
+   * Every action below goes through the journals gateway. It delegates to the
+   * server when the books are kept there, and the store's own mutators refuse a
+   * direct call in that case — so an action added later cannot quietly write to
+   * a cache the next hydration overwrites.
+   */
   const appendEntries = useJournalStore((s) => s.appendEntries);
   const accounts = useStore((s) => s.accounts);
   const settings = useStore((s) => s.settings);
@@ -167,37 +168,45 @@ export function GeneralJournal() {
   };
 
   /* ── Single-entry actions ── */
-  const handleDuplicate = (id: string): void => {
-    const r = duplicateEntry(id);
+  const handleDuplicate = async (id: string): Promise<void> => {
+    const r = await booksJournals.duplicateEntry(id);
     notify(r.ok ? 'Entry duplicated as a new draft.' : r.error ?? 'Could not duplicate.', r.ok ? 'success' : 'error');
     if (r.ok && r.id) openEntry(r.id);
   };
-  const handleSaveNotes = (id: string, notes: string): void => {
+  const handleSaveNotes = async (id: string, notes: string): Promise<void> => {
     const entry = entries.find((e) => e.id === id);
     if (!entry) return;
-    const r = updateEntry(id, { ...entryToFormValues(entry), notes });
+    const r = await booksJournals.updateDraft(id, { ...entryToFormValues(entry), notes });
     notify(r.ok ? 'Note saved.' : r.error ?? 'Could not save note.', r.ok ? 'success' : 'error');
   };
 
-  const confirmPending = (): void => {
+  const confirmPending = async (): Promise<void> => {
     if (!pending) return;
     if (pending.type === 'bulk-post') {
       let ok = 0;
+      /*
+       * Sequential, not `Promise.all`. Each posting takes the company's journal
+       * number under a lock and the server re-reads the books after every one;
+       * firing them together would race the refreshes against each other and
+       * report a count from a cache that had already moved.
+       */
       for (const e of selectedEntries) {
-        if (isPendingApproval(e, accountsById) && postEntry(e.id).ok) ok += 1;
+        if (isPendingApproval(e, accountsById) && (await booksJournals.postEntry(e.id)).ok) ok += 1;
       }
       notify(`Posted ${ok} entr${ok === 1 ? 'y' : 'ies'}.`, ok > 0 ? 'success' : 'error');
       setSelectedIds(new Set());
     } else if (pending.type === 'bulk-delete') {
       let ok = 0;
       for (const e of selectedEntries) {
-        if (e.status === 'draft' && deleteEntry(e.id).ok) ok += 1;
+        if (e.status === 'draft' && (await booksJournals.deleteEntry(e.id)).ok) ok += 1;
       }
       notify(`Deleted ${ok} draft${ok === 1 ? '' : 's'}.`, ok > 0 ? 'success' : 'error');
       setSelectedIds(new Set());
     } else {
-      const fn = pending.type === 'post' ? postEntry : pending.type === 'void' ? voidEntry : deleteEntry;
-      const r = fn(pending.id);
+      const fn = pending.type === 'post'
+        ? booksJournals.postEntry
+        : pending.type === 'void' ? booksJournals.voidEntry : booksJournals.deleteEntry;
+      const r = await fn(pending.id);
       const verb = pending.type === 'post' ? 'posted' : pending.type === 'void' ? 'voided' : 'deleted';
       notify(r.ok ? `Journal entry ${verb}.` : r.error ?? `Could not ${pending.type}.`, r.ok ? 'success' : 'error');
       if (r.ok && pending.type === 'delete' && focusedId === pending.id) setFocusedId(null);
@@ -310,7 +319,12 @@ export function GeneralJournal() {
                   canDelete={canBulkDelete}
                   onPost={() => setPending({ type: 'bulk-post' })}
                   onExport={() => handleExport('json', selectedEntries)}
-                  onDuplicate={() => { selectedEntries.forEach((e) => duplicateEntry(e.id)); notify(`Duplicated ${selectedEntries.length}.`, 'success'); }}
+                  onDuplicate={() => {
+          void (async () => {
+            for (const e of selectedEntries) await booksJournals.duplicateEntry(e.id);
+            notify(`Duplicated ${selectedEntries.length}.`, 'success');
+          })();
+        }}
                   onDelete={() => setPending({ type: 'bulk-delete' })}
                 />
                 <ColumnVisibilityMenu />
@@ -373,7 +387,7 @@ export function GeneralJournal() {
         message={meta?.message ?? ''}
         confirmLabel={meta?.confirmLabel}
         destructive={meta?.destructive}
-        onConfirm={confirmPending}
+        onConfirm={() => void confirmPending()}
         onCancel={() => setPending(null)}
       />
 
@@ -382,15 +396,19 @@ export function GeneralJournal() {
         entryNumber={entries.find((e) => e.id === protectId)?.entryNumber ?? ''}
         onReverse={() => {
           if (!protectId) return;
-          const r = reverseEntry(protectId);
-          if (r.ok) { notify('Reversing draft created. Review and post it.', 'success'); setProtectId(null); if (r.id) openEntry(r.id); }
-          else notify(r.error ?? 'Could not reverse.', 'error');
+          void (async () => {
+            const r = await booksJournals.reverseEntry(protectId);
+            if (r.ok) { notify('Reversing draft created. Review and post it.', 'success'); setProtectId(null); if (r.id) openEntry(r.id); }
+            else notify(r.error ?? 'Could not reverse.', 'error');
+          })();
         }}
         onDuplicate={() => {
           if (!protectId) return;
-          const r = duplicateEntry(protectId);
-          if (r.ok) { notify('Duplicated as a new draft.', 'success'); setProtectId(null); if (r.id) openEntry(r.id); }
-          else notify(r.error ?? 'Could not duplicate.', 'error');
+          void (async () => {
+            const r = await booksJournals.duplicateEntry(protectId);
+            if (r.ok) { notify('Duplicated as a new draft.', 'success'); setProtectId(null); if (r.id) openEntry(r.id); }
+            else notify(r.error ?? 'Could not duplicate.', 'error');
+          })();
         }}
         onCancel={() => setProtectId(null)}
       />

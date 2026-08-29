@@ -1,5 +1,6 @@
 import { lazy, Suspense } from 'react';
 import { useStore } from '@/store/useStore';
+import { useHydratedBooks } from '@/services/books/useBooks';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { ToastProvider } from '@/components/ui/Toast';
 import { PageSkeleton } from '@/components/ui/Skeleton';
@@ -129,6 +130,12 @@ const ComingSoon = lazy(() =>
 
 export default function App() {
   const activeView = useStore((s) => s.activeView);
+  /*
+   * Mounted once, above the view switch, so every screen reads books that are
+   * either current or visibly loading. A demo workspace's records are the
+   * originals and this does nothing for them.
+   */
+  useHydratedBooks();
 
   const renderView = (): JSX.Element => {
     switch (activeView) {

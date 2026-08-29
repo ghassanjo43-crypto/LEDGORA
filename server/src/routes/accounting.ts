@@ -183,6 +183,30 @@ export async function accountingRoutes(app: FastifyInstance): Promise<void> {
     }),
   );
 
+  /**
+   * Set the order of one parent's children in a single atomic request.
+   *
+   * `parentAccountId: null` means the roots. The whole sequence is sent rather
+   * than "move this one up" so the operation is idempotent — a retry after a
+   * dropped connection reproduces the same chart instead of performing a second
+   * swap. `edit` on the chart of accounts is the right permission: the order is
+   * part of how the chart reads, and nothing about a balance changes.
+   */
+  app.post('/api/accounting/accounts/reorder', { preHandler: onBooks(editAccounts) }, async (request, reply) => {
+    const body = (request.body ?? {}) as { parentAccountId?: string | null; orderedIds?: unknown };
+    if (!Array.isArray(body.orderedIds) || body.orderedIds.some((id) => typeof id !== 'string')) {
+      throw errors.validation('Send the account ids in their intended order.');
+    }
+    return reply.send({
+      accounts: await accounts.reorderAccounts(
+        app.db,
+        actorOf(request),
+        body.parentAccountId ?? null,
+        body.orderedIds as string[],
+      ),
+    });
+  });
+
   /*
    * Refused by the service if the account has ever been posted to. An account
    * carrying history is deactivated, never removed: deleting it would orphan

@@ -830,10 +830,39 @@ export interface AccountsTable {
   /** asset | liability | equity | income | expense */
   account_type: string;
   account_subtype: string | null;
+  /**
+   * none | cash_and_cash_equivalents | restricted_cash | bank_overdraft
+   *
+   * The AUTHORITATIVE answer to "is this account cash", constrained by CHECK
+   * rather than inferred from a name. `restricted_cash` is recorded so it can
+   * be excluded from the cash-flow figure; `bank_overdraft` is a liability that
+   * counts as a negative component of cash under IAS 7.
+   */
+  cash_classification: Generated<string>;
   /** debit | credit */
   normal_balance: string;
   parent_account_id: string | null;
   restricted_currency: string | null;
+  /** Order among SIBLINGS. Ties are broken by account code. */
+  sort_order: Generated<number>;
+  /**
+   * The IFRS presentation classification the chart of accounts screen uses.
+   * Finer than `account_type` — four of its values are all `expense` to the
+   * ledger — and empty when the caller expressed no opinion.
+   */
+  presentation_type: Generated<string>;
+  ifrs_statement: Generated<string>;
+  ifrs_category: Generated<string>;
+  ifrs_subcategory: Generated<string>;
+  /**
+   * Presentation metadata only. NOTHING reads this to prepare a statement: a
+   * classified operating/investing/financing cash flow needs each posting
+   * mapped to an activity, not each account labelled with one.
+   */
+  cash_flow_category: Generated<string>;
+  profit_or_loss_category: Generated<string>;
+  description: Generated<string>;
+  industry_tag: Generated<string>;
   is_postable: Generated<boolean>;
   active: Generated<boolean>;
   blocked: Generated<boolean>;

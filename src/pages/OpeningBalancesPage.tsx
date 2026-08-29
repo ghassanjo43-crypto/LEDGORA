@@ -14,7 +14,6 @@ import { useEffectiveOrganizationSync } from '@/store/effectiveOrganization';
 import { ROUTES } from '@/lib/accessControl';
 import { useMonetaryPrecision } from '@/lib/useMonetaryPrecision';
 import { trimStoredAmount } from '@/lib/monetaryPrecision';
-import { balanceSheetAccounts, importBalanceSheetChart } from '@/lib/chartOfAccountsImport';
 import { accountingApi } from '@/services/api/accountingApi';
 import { ApiError } from '@/services/api/client';
 import { openingBalancesApi, type OpeningBalanceAccount, type OpeningBalanceLine, type OpeningBalanceRecord } from '@/services/api/openingBalancesApi';
@@ -87,27 +86,7 @@ export function OpeningBalancesPage() {
    * have a complete chart on screen while the server has none at all.
    */
   const [serverChartEmpty, setServerChartEmpty] = useState(false);
-  const [importing, setImporting] = useState(false);
-  const localAccounts = useStore((s) => s.accounts);
   const setActiveView = useStore((s) => s.setActiveView);
-  const importable = balanceSheetAccounts(localAccounts);
-
-  const runImport = async (): Promise<void> => {
-    setImporting(true); setError('');
-    try {
-      const existing = await accountingApi.list();
-      const outcome = await importBalanceSheetChart(localAccounts, new Set(existing.map((a) => a.accountCode)));
-      if (outcome.failures.length > 0) {
-        const [first] = outcome.failures;
-        setError(`Imported ${outcome.created} of ${outcome.created + outcome.failures.length} accounts. ${first!.code} ${first!.name}: ${first!.reason}`);
-      }
-      setReloadToken((n) => n + 1);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setImporting(false);
-    }
-  };
 
   useEffect(() => {
     // Nothing to load until a company is selected; the setup surface is shown
@@ -217,24 +196,21 @@ export function OpeningBalancesPage() {
     {error && <Alert variant="error" onClose={() => setError('')}>{error}</Alert>}
     {restrictions.length > 0 && <Alert variant="warning"><strong>Controlled subledgers are protected.</strong><ul className="mt-1 list-disc pl-5">{restrictions.map((item) => <li key={item}>{item}</li>)}</ul></Alert>}
     {/*
-      * The chart on screen lives in this browser; opening balances post through
-      * the server's journal and read the server's chart. When the server holds
-      * none, say so plainly and offer the copy — an empty table with no
-      * explanation reads as a broken page.
+      * There is ONE chart now, and it is the server's — the screen shows a cache
+      * of it. So an empty chart here means the company genuinely has no
+      * accounts yet, and the answer is to create them, not to copy anything
+      * across. The import this banner used to offer copied the browser's
+      * accounts into the server, which was right while the two were separate
+      * and is now exactly the divergence that was removed.
       */}
     {serverChartEmpty && <Alert variant="info">
       <div className="space-y-2">
         <p>
-          <strong>This company’s chart of accounts has not been shared with the accounting service yet.</strong>{' '}
-          Opening balances are posted through Ledgora’s server-side journal, which keeps its own copy of the chart.
-          {importable.length > 0
-            ? ` Import the ${importable.length} asset, liability and equity accounts from this company to continue.`
-            : ' This company has no balance-sheet accounts to import — add them in Chart of Accounts first.'}
+          <strong>This company has no chart of accounts yet.</strong>{' '}
+          Opening balances are posted through Ledgora’s journal, which needs the accounts to exist first.
+          Add the asset, liability and equity accounts this company opens with, then come back.
         </p>
         <div className="flex flex-wrap gap-2">
-          {importable.length > 0 && <Button size="sm" disabled={importing} onClick={() => void runImport()}>
-            {importing ? 'Importing…' : 'Import chart of accounts'}
-          </Button>}
           <Button size="sm" variant="outline" onClick={() => setActiveView('tree')}>Open Chart of Accounts</Button>
         </div>
       </div>

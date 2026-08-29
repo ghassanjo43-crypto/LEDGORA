@@ -22,7 +22,7 @@ import { createTestContext, seedUser, type TestContext } from './helpers/testApp
 import type { AccountingActor } from '../src/services/accounting/audit.js';
 import * as accounts from '../src/services/accounting/accountService.js';
 import * as journals from '../src/services/accounting/journalService.js';
-import { buildReportBundle, CASH_SUBTYPE } from '../src/services/accounting/reportService.js';
+import { buildReportBundle } from '../src/services/accounting/reportService.js';
 
 let ctx: TestContext;
 let organizationId: string;
@@ -347,15 +347,16 @@ describe('cash flow', () => {
     const report = await bundle();
     expect(report.cashFlow.status).toBe('cash_accounts_not_configured');
     if (report.cashFlow.status === 'cash_accounts_not_configured') {
-      expect(report.cashFlow.reason).toMatch(/classified as cash/i);
+      expect(report.cashFlow.reason).toMatch(/cash classification/i);
     }
     /* The other three statements are still returned. */
     expect(report.trialBalance.totalDebit).toBe('100.000');
   });
 
   it('is produced once an account carries the controlled classification', async () => {
-    await ctx.db.updateTable('accounts').set({ account_subtype: CASH_SUBTYPE })
-      .where('id', '=', chart.cash).execute();
+    await accounts.updateAccount(ctx.db, actor, chart.cash, {
+      cashClassification: 'cash_and_cash_equivalents',
+    });
 
     await post(actor, chart.cash, chart.equity, '900.000', '2025-12-31');
     await post(actor, chart.cash, chart.sales, '100.000', '2026-06-01');

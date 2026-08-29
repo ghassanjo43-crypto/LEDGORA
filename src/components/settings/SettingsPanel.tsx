@@ -4,6 +4,7 @@ import type { CompanySettings, PresentationMode } from '@/types';
 import { LOGO_ACCEPT_ATTR, compressImageDataUrl, readFileAsDataUrl, validateLogoFile } from '@/lib/invoiceLogo';
 import { LogoImage } from '@/components/invoices/LogoImage';
 import { useStore } from '@/store/useStore';
+import { booksAreServerAuthoritative } from '@/services/books/booksEngine';
 import { useCompanyStore } from '@/store/companyStore';
 import { saveCompanySettings } from '@/services/companySettingsSync';
 import {
@@ -328,6 +329,22 @@ export function SettingsPanel() {
         confirmLabel="Reset to default"
         destructive
         onConfirm={() => {
+          /*
+           * Seeding a demo chart over a real one is a browser-era action. For
+           * books the server owns it would delete a customer's chart of
+           * accounts on a single click and could not be undone — and the reset
+           * would not even reach the server, so the chart would come back on
+           * the next reload. Refused, with the reason.
+           */
+          if (booksAreServerAuthoritative()) {
+            setConfirmReset(false);
+            notify(
+              'These books are kept on the Ledgora service and cannot be reset to the sample chart. '
+              + 'Deactivate the accounts you do not use instead.',
+              'error',
+            );
+            return;
+          }
           resetToDefault();
           setConfirmReset(false);
           notify('Chart of accounts reset to default.', 'success');

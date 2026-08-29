@@ -73,6 +73,18 @@ export interface Account {
   /** True = leaf account that can receive journal postings. False = header. */
   isPostingAccount: boolean;
   isActive: boolean;
+  /**
+   * The server's controlled answer to "is this account cash".
+   *
+   * `none | cash_and_cash_equivalents | restricted_cash | bank_overdraft`, and
+   * deliberately NOT the same thing as `cashFlowCategory` — that says which
+   * activity a movement belongs to, this says whether the account IS cash. The
+   * cash figures are prepared from this and from nothing else.
+   *
+   * Optional because an account held only in a demo workspace has never been
+   * classified. Absent reads as `none`.
+   */
+  cashClassification?: string;
   /** Optional lifecycle/ownership metadata used by persisted or imported charts. */
   entityId?: string;
   isBlocked?: boolean;

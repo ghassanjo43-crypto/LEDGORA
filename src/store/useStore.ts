@@ -20,6 +20,7 @@ import {
   wouldCreateCycle,
 } from '@/lib/accountTree';
 import { generateId, nowIso } from '@/lib/utils';
+import { booksAreServerAuthoritative, SERVER_BOOKS_MESSAGE } from '@/services/books/booksEngine';
 import { sanitizeStoredLogo } from '@/lib/invoiceLogo';
 
 export type StatusFilter = 'all' | 'active' | 'inactive';
@@ -146,6 +147,31 @@ function accountFromForm(
   };
 }
 
+
+/**
+ * The refusal every local account write passes through first.
+ *
+ * ══ Why the guard is HERE and not in the screens ═════════════════════════════
+ *
+ * For a subscriber the chart of accounts lives on the server, and a write that
+ * lands in this store instead produces an account that exists on their screen,
+ * in this cache, and nowhere in their books. The next hydration deletes it
+ * without a word.
+ *
+ * Putting the check in each screen would work until somebody adds a screen. Put
+ * here, the failure mode of forgetting is a visible refusal rather than a
+ * silent local save — which is the whole difference between an inconvenience
+ * and a lost transaction. `services/books/accountsGateway` is the way through.
+ *
+ * Hydration writes with `setState` and is deliberately unaffected: filling the
+ * cache from the server is the one write that is not a user's edit.
+ */
+const REFUSED: ActionResult = { ok: false, error: SERVER_BOOKS_MESSAGE };
+
+function localWritesRefused(): boolean {
+  return booksAreServerAuthoritative();
+}
+
 export const useStore = create<COAState>()(
   persist(
     (set, get) => ({
@@ -204,6 +230,7 @@ export const useStore = create<COAState>()(
       },
 
       addAccount: (values, parentId) => {
+        if (localWritesRefused()) return REFUSED;
         const { accounts } = get();
 
         if (accounts.some((a) => a.code === values.code.trim())) {
@@ -232,6 +259,7 @@ export const useStore = create<COAState>()(
       },
 
       updateAccount: (id, values) => {
+        if (localWritesRefused()) return REFUSED;
         const { accounts } = get();
         const existing = accounts.find((a) => a.id === id);
         if (!existing) return { ok: false, error: 'Account not found.' };
@@ -283,6 +311,7 @@ export const useStore = create<COAState>()(
       },
 
       quickUpdate: (id, patch) => {
+        if (localWritesRefused()) return REFUSED;
         const { accounts } = get();
         const existing = accounts.find((a) => a.id === id);
         if (!existing) return { ok: false, error: 'Account not found.' };
@@ -307,6 +336,7 @@ export const useStore = create<COAState>()(
       },
 
       deleteAccount: (id, cascade) => {
+        if (localWritesRefused()) return REFUSED;
         const { accounts } = get();
         const descendants = getDescendantIds(accounts, id);
         if (descendants.length > 0 && !cascade) {
@@ -321,6 +351,7 @@ export const useStore = create<COAState>()(
       },
 
       duplicateAccount: (id) => {
+        if (localWritesRefused()) return REFUSED;
         const { accounts } = get();
         const source = accounts.find((a) => a.id === id);
         if (!source) return { ok: false, error: 'Account not found.' };
@@ -354,14 +385,17 @@ export const useStore = create<COAState>()(
         return { ok: true, id: newId };
       },
 
-      setActive: (id, isActive) =>
+      setActive: (id, isActive) => {
+        if (localWritesRefused()) return;
         set((s) => ({
           accounts: s.accounts.map((a) =>
             a.id === id ? { ...a, isActive, updatedAt: nowIso() } : a,
           ),
-        })),
+        }));
+      },
 
-      moveAccount: (id, direction) =>
+      moveAccount: (id, direction) => {
+        if (localWritesRefused()) return;
         set((s) => {
           const target = s.accounts.find((a) => a.id === id);
           if (!target) return {};
@@ -384,9 +418,11 @@ export const useStore = create<COAState>()(
               return acc;
             }),
           };
-        }),
+        });
+      },
 
       reorderSibling: (draggedId, targetId) => {
+        if (localWritesRefused()) return REFUSED;
         const { accounts } = get();
         const dragged = accounts.find((a) => a.id === draggedId);
         const target = accounts.find((a) => a.id === targetId);
@@ -412,8 +448,23 @@ export const useStore = create<COAState>()(
         return { ok: true };
       },
 
-      replaceAll: (accounts) =>
-        set({ accounts: recomputeLevels(accounts), collapsedIds: {} }),
+      /*
+       * A bulk USER write - the chart importer. Guarded like every other edit.
+       * `resetToDefault` below is deliberately NOT guarded: it is the workspace
+       * lifecycle's own primitive (demo seeding, sign-out, preview
+       * transitions), not something a person clicks to change their books.
+       */
+      /*
+       * A bulk USER write — the chart importer — so it is guarded like every
+       * other edit. `resetToDefault` below is deliberately NOT guarded: that is
+       * the workspace lifecycle's own primitive (demo seeding, sign-out,
+       * preview transitions), never something a person clicks to change books
+       * the server owns.
+       */
+      replaceAll: (accounts) => {
+        if (localWritesRefused()) return;
+        set({ accounts: recomputeLevels(accounts), collapsedIds: {} });
+      },
 
       resetToDefault: () =>
         set({

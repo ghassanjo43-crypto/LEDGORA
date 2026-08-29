@@ -28,15 +28,91 @@ type Executor = Kysely<Database> | Transaction<Database>;
 export type AccountType = 'asset' | 'liability' | 'equity' | 'income' | 'expense';
 export type NormalBalance = 'debit' | 'credit';
 
-export interface AccountRecord {
+/**
+ * The controlled cash vocabulary.
+ *
+ * The cash-flow section reads THIS, never a name or a free-text subtype. A
+ * classification that can be changed by renaming a label is not a
+ * classification, and a statement that turns on spelling is not one either.
+ */
+export const CASH_CLASSIFICATIONS = [
+  'none',
+  'cash_and_cash_equivalents',
+  'restricted_cash',
+  'bank_overdraft',
+] as const;
+export type CashClassification = (typeof CASH_CLASSIFICATIONS)[number];
+
+export const PRESENTATION_TYPES = [
+  'ASSET', 'LIABILITY', 'EQUITY', 'INCOME', 'COST_OF_SALES', 'OPERATING_EXPENSE',
+  'OTHER_INCOME_EXPENSE', 'FINANCE', 'TAX', 'DISCONTINUED_OPERATIONS', 'OCI', 'CONTROL',
+] as const;
+
+export const IFRS_STATEMENTS = [
+  'STATEMENT_OF_FINANCIAL_POSITION', 'PROFIT_OR_LOSS', 'OCI',
+  'STATEMENT_OF_CHANGES_IN_EQUITY', 'CASH_FLOW', 'NOTES', 'CONTROL',
+] as const;
+
+export const CASH_FLOW_CATEGORIES = [
+  'OPERATING', 'INVESTING', 'FINANCING', 'NON_CASH', 'NOT_APPLICABLE',
+] as const;
+
+export const PROFIT_OR_LOSS_CATEGORIES = [
+  'OPERATING', 'INVESTING', 'FINANCING', 'INCOME_TAXES', 'DISCONTINUED_OPERATIONS', 'NOT_APPLICABLE',
+] as const;
+
+/**
+ * Which of the ledger's five types each presentation class posts as.
+ *
+ * The pairing is not a preference. `presentation_type` is what the chart of
+ * accounts screen reads back and `account_type` is what every statement is
+ * aggregated by, so an account presented as a finance cost and posted as an
+ * asset would appear in one place on the screen and on the opposite side of the
+ * balance sheet. Storing that combination is refused rather than displayed.
+ *
+ * The three that could fall either way are recorded as `income` because their
+ * normal balance is a credit; a debit against an income-type account is what a
+ * loss IS, and it posts correctly. `CONTROL` is a bookkeeping device with a
+ * debit balance, so `asset`.
+ */
+const PRESENTATION_LEDGER_TYPE: Record<string, AccountType> = {
+  ASSET: 'asset',
+  LIABILITY: 'liability',
+  EQUITY: 'equity',
+  INCOME: 'income',
+  COST_OF_SALES: 'expense',
+  OPERATING_EXPENSE: 'expense',
+  FINANCE: 'expense',
+  TAX: 'expense',
+  OTHER_INCOME_EXPENSE: 'income',
+  OCI: 'income',
+  DISCONTINUED_OPERATIONS: 'income',
+  CONTROL: 'asset',
+};
+
+/** The presentation fields, which travel together and validate together. */
+export interface AccountPresentation {
+  presentationType: string;
+  ifrsStatement: string;
+  ifrsCategory: string;
+  ifrsSubcategory: string;
+  cashFlowCategory: string;
+  profitOrLossCategory: string;
+  description: string;
+  industryTag: string;
+}
+
+export interface AccountRecord extends AccountPresentation {
   id: string;
   accountCode: string;
   accountName: string;
   accountType: AccountType;
   accountSubtype: string | null;
+  cashClassification: CashClassification;
   normalBalance: NormalBalance;
   parentAccountId: string | null;
   restrictedCurrency: string | null;
+  sortOrder: number;
   isPostable: boolean;
   active: boolean;
   blocked: boolean;
@@ -45,14 +121,16 @@ export interface AccountRecord {
   hasChildren?: boolean;
 }
 
-export interface CreateAccountInput {
+export interface CreateAccountInput extends Partial<AccountPresentation> {
   accountCode: string;
   accountName: string;
   accountType: AccountType;
   accountSubtype?: string | null;
+  cashClassification?: string | null;
   normalBalance?: NormalBalance;
   parentAccountId?: string | null;
   restrictedCurrency?: string | null;
+  sortOrder?: number;
   isPostable?: boolean;
   active?: boolean;
   blocked?: boolean;
@@ -64,6 +142,79 @@ export type UpdateAccountInput = Partial<Omit<CreateAccountInput, 'accountCode'>
   accountCode?: string;
   active?: boolean;
 };
+
+/* ══ Controlled vocabularies ═══════════════════════════════════════════════ */
+
+/**
+ * One enumerated field, or a refusal that names what was offered.
+ *
+ * Empty means "no opinion" and is always allowed; a WRONG value is never
+ * silently dropped to empty, because an account stored with no classification
+ * when the caller asked for one is the same lie as storing the wrong one.
+ */
+function enumerated(
+  label: string,
+  allowed: readonly string[],
+  value: string | null | undefined,
+): string | undefined {
+  if (value === undefined) return undefined;
+  const trimmed = (value ?? '').trim();
+  if (trimmed === '') return '';
+  if (!allowed.includes(trimmed)) {
+    throw errors.validation(
+      `"${trimmed}" is not a recognised ${label}. Choose one of: ${allowed.join(', ')}.`,
+    );
+  }
+  return trimmed;
+}
+
+/**
+ * Refuse a presentation class that contradicts the ledger type.
+ *
+ * Checked against the account's FINAL type, so changing the type of a
+ * classified account is caught as readily as classifying it wrongly to begin
+ * with.
+ */
+function assertPresentationFits(presentationType: string, accountType: AccountType): void {
+  if (!presentationType) return;
+  const expected = PRESENTATION_LEDGER_TYPE[presentationType];
+  if (expected && expected !== accountType) {
+    throw errors.validation(
+      `A ${presentationType} account is posted as ${expected} in the ledger, not as ${accountType}. `
+      + 'Change both together, or leave the presentation unset.',
+    );
+  }
+}
+
+/**
+ * Whether a cash classification can be true of this account AT ALL.
+ *
+ * Checked against the account's FINAL state rather than the patch, so changing
+ * a classified cash account into an expense — or into a header — is refused
+ * instead of leaving a row the database would then reject anyway. Producing the
+ * constraint's message would name a constraint; producing this one names the
+ * accounting rule the caller broke.
+ */
+function assertCashClassificationFits(
+  classification: CashClassification,
+  accountType: AccountType,
+  isPostable: boolean,
+): void {
+  if (classification === 'none') return;
+  if (!isPostable) {
+    throw errors.validation(
+      'Only a posting account can be classified as cash. A header account carries no balance of '
+      + 'its own, and classifying both a parent and its child would count the same money twice.',
+    );
+  }
+  const wantsAsset = classification === 'cash_and_cash_equivalents' || classification === 'restricted_cash';
+  if (wantsAsset && accountType !== 'asset') {
+    throw errors.validation(`A ${classification.replace(/_/g, ' ')} account must be an asset.`);
+  }
+  if (classification === 'bank_overdraft' && accountType !== 'liability') {
+    throw errors.validation('A bank overdraft is a liability, so it must be a liability account.');
+  }
+}
 
 /** The side an account normally increases on, when the caller does not say. */
 const DEFAULT_NORMAL_BALANCE: Record<AccountType, NormalBalance> = {
@@ -82,15 +233,43 @@ function toRecord(row: any): AccountRecord {
     accountName: row.account_name,
     accountType: row.account_type,
     accountSubtype: row.account_subtype,
+    cashClassification: (row.cash_classification ?? 'none') as CashClassification,
     normalBalance: row.normal_balance,
     parentAccountId: row.parent_account_id,
     restrictedCurrency: row.restricted_currency,
+    sortOrder: row.sort_order ?? 0,
+    presentationType: row.presentation_type ?? '',
+    ifrsStatement: row.ifrs_statement ?? '',
+    ifrsCategory: row.ifrs_category ?? '',
+    ifrsSubcategory: row.ifrs_subcategory ?? '',
+    cashFlowCategory: row.cash_flow_category ?? '',
+    profitOrLossCategory: row.profit_or_loss_category ?? '',
+    description: row.description ?? '',
+    industryTag: row.industry_tag ?? '',
     isPostable: row.is_postable,
     active: row.active,
     blocked: row.blocked,
     archived: row.archived,
     systemAccount: row.system_account,
   };
+}
+
+/** The enumerated fields of a patch, validated together. */
+function presentationPatch(input: Partial<AccountPresentation>): Record<string, unknown> {
+  const patch: Record<string, unknown> = {};
+  const presentationType = enumerated('account presentation type', PRESENTATION_TYPES, input.presentationType);
+  if (presentationType !== undefined) patch.presentation_type = presentationType;
+  const ifrsStatement = enumerated('IFRS statement', IFRS_STATEMENTS, input.ifrsStatement);
+  if (ifrsStatement !== undefined) patch.ifrs_statement = ifrsStatement;
+  const cashFlowCategory = enumerated('cash-flow category', CASH_FLOW_CATEGORIES, input.cashFlowCategory);
+  if (cashFlowCategory !== undefined) patch.cash_flow_category = cashFlowCategory;
+  const profitOrLoss = enumerated('profit-or-loss category', PROFIT_OR_LOSS_CATEGORIES, input.profitOrLossCategory);
+  if (profitOrLoss !== undefined) patch.profit_or_loss_category = profitOrLoss;
+  if (input.ifrsCategory !== undefined) patch.ifrs_category = (input.ifrsCategory ?? '').trim();
+  if (input.ifrsSubcategory !== undefined) patch.ifrs_subcategory = (input.ifrsSubcategory ?? '').trim();
+  if (input.description !== undefined) patch.description = (input.description ?? '').trim();
+  if (input.industryTag !== undefined) patch.industry_tag = (input.industryTag ?? '').trim();
+  return patch;
 }
 
 export async function listAccounts(
@@ -104,7 +283,14 @@ export async function listAccounts(
     .where('organization_id', '=', actor.organizationId)
     .where('company_id', '=', actor.companyId);
   if (!options.includeInactive) query = query.where('active', '=', true);
-  const rows = await query.orderBy('account_code').execute();
+  /*
+   * Sibling order first, code second. The code alone was a stable order but not
+   * the CHOSEN one, and a chart of accounts is arranged deliberately. Ties fall
+   * back to the code so the result is total either way — two accounts sharing a
+   * sort order still come back in the same sequence on every request, which is
+   * what a hydrating client compares against.
+   */
+  const rows = await query.orderBy('sort_order').orderBy('account_code').execute();
   return rows.map(toRecord);
 }
 
@@ -163,6 +349,24 @@ export async function loadAccountsForPosting(
     .execute();
   const parentIds = new Set(children.map((row) => row.parent_account_id).filter(Boolean));
   return new Map(rows.map((row) => [row.id, { ...toRecord(row), hasChildren: parentIds.has(row.id) }]));
+}
+
+/** One past the last sibling, so a new account lands at the end of its group. */
+async function nextSortOrder(
+  db: Executor,
+  actor: AccountingActor,
+  parentAccountId: string | null,
+): Promise<number> {
+  let query = db
+    .selectFrom('accounts')
+    .select('sort_order')
+    .where('organization_id', '=', actor.organizationId)
+    .where('company_id', '=', actor.companyId);
+  query = parentAccountId
+    ? query.where('parent_account_id', '=', parentAccountId)
+    : query.where('parent_account_id', 'is', null);
+  const siblings = await query.execute();
+  return siblings.reduce((max, row) => Math.max(max, row.sort_order ?? 0), -1) + 1;
 }
 
 async function assertParentIsUsable(
@@ -229,6 +433,13 @@ export async function createAccount(
   const archived = input.archived ?? false;
   if (active && archived) throw errors.validation('An archived account cannot be active.');
 
+  const isPostable = input.isPostable ?? true;
+  const cashClassification = (enumerated(
+    'cash classification', CASH_CLASSIFICATIONS, input.cashClassification,
+  ) || 'none') as CashClassification;
+  assertCashClassificationFits(cashClassification, input.accountType, isPostable);
+  assertPresentationFits((input.presentationType ?? '').trim(), input.accountType);
+
   return db.transaction().execute(async (trx) => {
     await assertParentIsUsable(trx, actor.organizationId, actor.companyId, input.parentAccountId);
 
@@ -241,6 +452,13 @@ export async function createAccount(
       .executeTakeFirst();
     if (duplicate) throw errors.conflict(`Account code "${code}" already exists in this organization.`);
 
+    /*
+     * Append to the parent's siblings when the caller does not choose a
+     * position. Defaulting to 0 would put every new account first, which is the
+     * opposite of what "add an account" means.
+     */
+    const sortOrder = input.sortOrder ?? (await nextSortOrder(trx, actor, input.parentAccountId ?? null));
+
     const row = await trx
       .insertInto('accounts')
       .values({
@@ -250,14 +468,17 @@ export async function createAccount(
         account_name: name,
         account_type: input.accountType,
         account_subtype: input.accountSubtype ?? null,
+        cash_classification: cashClassification,
         normal_balance: input.normalBalance ?? DEFAULT_NORMAL_BALANCE[input.accountType],
         parent_account_id: input.parentAccountId ?? null,
         restricted_currency: input.restrictedCurrency ?? null,
-        is_postable: input.isPostable ?? true,
+        sort_order: sortOrder,
+        is_postable: isPostable,
         active,
         blocked: input.blocked ?? false,
         archived,
         system_account: input.systemAccount ?? false,
+        ...presentationPatch(input),
       })
       .returningAll()
       .executeTakeFirstOrThrow();
@@ -327,7 +548,34 @@ export async function updateAccount(
       if (child) throw errors.validation('This account has children and cannot be made postable.');
     }
 
-    const patch: Record<string, unknown> = { updated_at: new Date() };
+    /*
+     * The cash rules are checked against what the account WILL BE, not against
+     * the patch. Changing a classified bank account's type to `expense` while
+     * leaving the classification alone is exactly as wrong as classifying an
+     * expense account as cash, and only the merged state can see it.
+     */
+    const nextType = (input.accountType ?? existing.account_type) as AccountType;
+    const nextPostable = input.isPostable ?? existing.is_postable;
+    const nextCash = (enumerated('cash classification', CASH_CLASSIFICATIONS, input.cashClassification)
+      ?? existing.cash_classification ?? 'none') as CashClassification;
+    assertCashClassificationFits(nextCash, nextType, nextPostable);
+
+    const patch: Record<string, unknown> = { updated_at: new Date(), ...presentationPatch(input) };
+
+    /*
+     * A type change with NO presentation alongside it leaves the old class
+     * behind — an account that becomes an expense while still presented as an
+     * asset. Rather than refuse an otherwise reasonable request, the stale
+     * class is cleared: the account then presents as whatever its ledger type
+     * implies, which is true, instead of as something that is not.
+     */
+    if (input.accountType !== undefined && input.presentationType === undefined) {
+      const current = existing.presentation_type ?? '';
+      if (current && PRESENTATION_LEDGER_TYPE[current] !== nextType) patch.presentation_type = '';
+    }
+    assertPresentationFits(String(patch.presentation_type ?? existing.presentation_type ?? ''), nextType);
+    if (input.cashClassification !== undefined) patch.cash_classification = nextCash;
+    if (input.sortOrder !== undefined) patch.sort_order = input.sortOrder;
     if (input.accountCode !== undefined) patch.account_code = input.accountCode.trim();
     if (input.accountName !== undefined) patch.account_name = input.accountName.trim();
     if (input.accountType !== undefined) patch.account_type = input.accountType;
@@ -423,5 +671,78 @@ export async function deleteAccount(
       recordId: accountId,
       detail: { deleted: true, accountCode: existing.account_code },
     });
+  });
+}
+
+/**
+ * Set the order of one parent's children, atomically.
+ *
+ * ══ Why a whole list and not "move this one up" ══════════════════════════════
+ *
+ * A swap is two updates, and two updates are two chances to end up with a chart
+ * that is half reordered — the browser did this in a single synchronous
+ * `set()`, where it could not be observed half-done, and the network cannot
+ * offer that. Sending the intended sequence instead makes the operation
+ * idempotent: replaying it produces the same chart, and a retry after a dropped
+ * connection is safe rather than a second swap.
+ *
+ * ══ What it refuses ══════════════════════════════════════════════════════════
+ *
+ * The list must name exactly the children of that parent — no more, no fewer,
+ * no duplicates. A partial list would leave the unnamed accounts holding stale
+ * positions that collide with the new ones, and an order with collisions is not
+ * an order. Naming an account from another parent (or another company) is
+ * refused for the same reason it is refused everywhere else: it is not in these
+ * books.
+ */
+export async function reorderAccounts(
+  db: Kysely<Database>,
+  actor: AccountingActor,
+  parentAccountId: string | null,
+  orderedIds: readonly string[],
+): Promise<AccountRecord[]> {
+  return db.transaction().execute(async (trx) => {
+    let query = trx
+      .selectFrom('accounts')
+      .select('id')
+      .where('organization_id', '=', actor.organizationId)
+      .where('company_id', '=', actor.companyId);
+    query = parentAccountId
+      ? query.where('parent_account_id', '=', parentAccountId)
+      : query.where('parent_account_id', 'is', null);
+    const siblings = await query.execute();
+
+    const present = new Set(siblings.map((row) => row.id));
+    const requested = new Set(orderedIds);
+    if (requested.size !== orderedIds.length) {
+      throw errors.validation('The same account appears twice in the requested order.');
+    }
+    if (requested.size !== present.size || [...requested].some((id) => !present.has(id))) {
+      throw errors.validation(
+        'The requested order must list every account under this parent exactly once. '
+        + 'Reload the chart of accounts and try again.',
+      );
+    }
+
+    for (const [index, id] of orderedIds.entries()) {
+      await trx
+        .updateTable('accounts')
+        .set({ sort_order: index, updated_at: new Date() })
+        .where('organization_id', '=', actor.organizationId)
+        .where('company_id', '=', actor.companyId)
+        .where('id', '=', id)
+        .execute();
+    }
+
+    await writeAccountingAudit(trx, actor, {
+      action: 'ACCOUNT_UPDATED',
+      recordType: 'account',
+      /* Null for the roots: `record_id` is a uuid column, and there is no
+       * account whose children these are. */
+      recordId: parentAccountId,
+      detail: { reordered: orderedIds.length, parentAccountId },
+    });
+
+    return listAccounts(trx, actor, { includeInactive: true });
   });
 }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import type { Account, AccountType } from '@/types';
@@ -28,6 +28,27 @@ import { Field, Input, Textarea } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { Toggle } from '@/components/ui/Toggle';
 import { useToast } from '@/components/ui/Toast';
+import * as booksAccounts from '@/services/books/accountsGateway';
+import { booksAreServerAuthoritative } from '@/services/books/booksEngine';
+
+/**
+ * The classifications an ASSET account may carry, and the one a LIABILITY may.
+ *
+ * Split because the pairing is an accounting fact rather than a preference: an
+ * overdraft is a liability, cash and restricted cash are assets, and the
+ * database refuses any other combination. Offering all four against both would
+ * be offering three choices that cannot be saved.
+ */
+const CASH_ASSET_OPTIONS = [
+  { value: 'none', label: 'Not a cash account' },
+  { value: 'cash_and_cash_equivalents', label: 'Cash and cash equivalents' },
+  { value: 'restricted_cash', label: 'Restricted cash (excluded from cash figures)' },
+];
+
+const CASH_LIABILITY_OPTIONS = [
+  { value: 'none', label: 'Not a cash account' },
+  { value: 'bank_overdraft', label: 'Bank overdraft (negative cash)' },
+];
 
 export type FormMode =
   | { kind: 'create'; parentId: string | null }
@@ -41,10 +62,17 @@ export interface AccountFormDrawerProps {
 
 export function AccountFormDrawer({ open, mode, onClose }: AccountFormDrawerProps) {
   const accounts = useStore((s) => s.accounts);
-  const addAccount = useStore((s) => s.addAccount);
-  const updateAccount = useStore((s) => s.updateAccount);
   const presentationMode = useStore((s) => s.settings.presentationMode);
   const { notify } = useToast();
+
+  /*
+   * Held outside the form because it is not part of `AccountFormValues` — that
+   * schema describes the browser's account, and the cash classification belongs
+   * to the server's. Kept here rather than added to the schema so the browser
+   * never becomes a second place the classification is decided.
+   */
+  const [cashClassification, setCashClassification] = useState<string>('none');
+  const [saving, setSaving] = useState(false);
 
   const editingAccount: Account | undefined =
     mode?.kind === 'edit' ? accounts.find((a) => a.id === mode.accountId) : undefined;
@@ -76,11 +104,23 @@ export function AccountFormDrawer({ open, mode, onClose }: AccountFormDrawerProp
   });
 
   useEffect(() => {
-    if (open) reset(defaultValues);
-  }, [open, defaultValues, reset]);
+    if (open) {
+      reset(defaultValues);
+      /*
+       * Seeded from the account being edited, NOT reset to `none`.
+       *
+       * Resetting would send `none` on every save and silently unclassify a
+       * bank account the moment somebody corrected its name — the change would
+       * look like a rename and would remove it from the cash figures.
+       */
+      setCashClassification(editingAccount?.cashClassification ?? 'none');
+    }
+  }, [open, defaultValues, reset, editingAccount?.cashClassification]);
 
   const watchType = watch('type');
   const watchStatement = watch('ifrsStatement');
+  const watchPosting = watch('isPostingAccount');
+  const serverBooks = booksAreServerAuthoritative();
 
   // Parent options: header accounts only, excluding self + descendants when editing.
   const parentOptions = useMemo(() => {
@@ -107,7 +147,13 @@ export function AccountFormDrawer({ open, mode, onClose }: AccountFormDrawerProp
     }
   };
 
-  const onSubmit = (values: AccountFormValues): void => {
+  /*
+   * Async because the write may travel. Both branches go through the gateway,
+   * which delegates to the server when the books are kept there and to the
+   * store when they are not — the form does not need to know which, and must
+   * not decide it, or the two paths would drift.
+   */
+  const onSubmit = async (values: AccountFormValues): Promise<void> => {
     const payload: AccountFormValues = {
       ...values,
       profitOrLossCategory:
@@ -116,10 +162,16 @@ export function AccountFormDrawer({ open, mode, onClose }: AccountFormDrawerProp
           : 'NOT_APPLICABLE',
     };
 
+    setSaving(true);
     const result =
       mode?.kind === 'edit'
-        ? updateAccount(mode.accountId, payload)
-        : addAccount(payload, mode?.kind === 'create' ? mode.parentId : null);
+        ? await booksAccounts.updateAccount(mode.accountId, payload, { cashClassification })
+        : await booksAccounts.createAccount(
+            payload,
+            mode?.kind === 'create' ? mode.parentId : null,
+            { cashClassification },
+          );
+    setSaving(false);
 
     if (result.ok) {
       notify(
@@ -151,7 +203,7 @@ export function AccountFormDrawer({ open, mode, onClose }: AccountFormDrawerProp
           <Button variant="outline" onClick={onClose} disabled={isSubmitting}>
             Cancel
           </Button>
-          <Button onClick={handleSubmit(onSubmit)} disabled={isSubmitting}>
+          <Button onClick={handleSubmit(onSubmit)} disabled={isSubmitting || saving}>
             {mode?.kind === 'edit' ? 'Save changes' : 'Create account'}
           </Button>
         </>
@@ -217,6 +269,28 @@ export function AccountFormDrawer({ open, mode, onClose }: AccountFormDrawerProp
             )}
           />
         </Field>
+
+        {/*
+          * Offered only where it can be true. A cash classification on an
+          * income account is refused by the server and by the database, so
+          * showing the control there would be offering a choice that cannot be
+          * saved. Posting accounts only, for the same reason: classifying a
+          * header and its child would count the same money twice.
+          */}
+        {serverBooks && watchPosting && (watchType === 'ASSET' || watchType === 'LIABILITY') && (
+          <Field
+            label="Cash classification"
+            htmlFor="cash-classification"
+            hint="Decides whether this account is counted as cash. Restricted cash is recorded but deliberately excluded from the cash figures."
+          >
+            <Select
+              id="cash-classification"
+              options={watchType === 'ASSET' ? CASH_ASSET_OPTIONS : CASH_LIABILITY_OPTIONS}
+              value={cashClassification}
+              onChange={(e) => setCashClassification(e.target.value)}
+            />
+          </Field>
+        )}
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label="IFRS statement" required error={errors.ifrsStatement?.message} htmlFor="stmt">
