@@ -3,7 +3,6 @@ import { Send, Save, Eye, X, Printer, CheckCircle2, Info, Wand2, Eraser } from '
 import type { BusinessEntity } from '@/types';
 import type { Receipt, ReceiptAllocation, ReceiptMethod, ReceiptType } from '@/types/receipt';
 import { useStore } from '@/store/useStore';
-import { useEntityStore } from '@/store/useEntityStore';
 import { useInvoiceStore } from '@/store/invoiceStore';
 import { useReceiptStore } from '@/store/receiptStore';
 import { calculateReceiptTotals } from '@/lib/receiptCalculations';
@@ -29,6 +28,7 @@ import { eligiblePostingAccounts } from '@/lib/accountEligibility';
 import { ReceiptRenderer } from './ReceiptRenderer';
 import { roundToCompanyPrecision } from '@/lib/monetaryPrecision';
 import { useMonetaryStep } from '@/lib/useMonetaryPrecision';
+import { useCustomers } from '@/services/parties/useCustomers';
 
 interface Props {
   open: boolean;
@@ -47,7 +47,6 @@ export function ReceiptEditorDrawer({ open, receiptId, onClose }: Props) {
   const moneyStep = useMonetaryStep();
 
   const accounts = useStore((s) => s.accounts);
-  const entities = useEntityStore((s) => s.entities);
   const invoices = useInvoiceStore((s) => s.invoices);
   const receipt = useReceiptStore((s) => (receiptId ? s.receipts.find((r) => r.id === receiptId) : undefined));
   const updateDraft = useReceiptStore((s) => s.updateDraft);
@@ -59,7 +58,9 @@ export function ReceiptEditorDrawer({ open, receiptId, onClose }: Props) {
   const companyCurrency = useTransactionCurrency();
   const [showPreview, setShowPreview] = useState(false);
 
-  const customers = useMemo(() => entities.filter((e) => e.entityType === 'customer' || e.entityType === 'both'), [entities]);
+  /* The customer directory: the server's for a durable subscriber, the local
+   * store for Free Demo. One seam, so no screen decides for itself. */
+  const { customers } = useCustomers();
   const cashAccounts = useMemo(() => eligiblePostingAccounts({ accounts, purpose: 'bank-cash' }), [accounts]);
 
   const [receiptType, setReceiptType] = useState<ReceiptType>(receipt?.receiptType ?? 'customer-payment');

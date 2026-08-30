@@ -34,6 +34,7 @@ import { PaymentSummary } from './PaymentSummary';
 import { PaymentRenderer } from './PaymentRenderer';
 import { roundToCompanyPrecision } from '@/lib/monetaryPrecision';
 import { useMonetaryStep } from '@/lib/useMonetaryPrecision';
+import { useCustomers } from '@/services/parties/useCustomers';
 
 interface Props {
   open: boolean;
@@ -66,7 +67,9 @@ export function PaymentEditorDrawer({ open, paymentId, onClose }: Props) {
   const [showPreview, setShowPreview] = useState(false);
 
   const suppliers = useMemo(() => entities.filter((e) => e.entityType === 'supplier' || e.entityType === 'both'), [entities]);
-  const customers = useMemo(() => entities.filter((e) => e.entityType === 'customer' || e.entityType === 'both'), [entities]);
+  /* The customer directory: the server's for a durable subscriber, the local
+   * store for Free Demo. One seam, so no screen decides for itself. */
+  const { customers } = useCustomers();
   const cashAccounts = useMemo(() => eligiblePostingAccounts({ accounts, purpose: 'bank-cash' }), [accounts]);
 
   const [paymentType, setPaymentType] = useState<PaymentType>(payment?.paymentType ?? 'supplier-payment');

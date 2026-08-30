@@ -33,9 +33,18 @@ import {
  * Stand-ins for the durable business endpoints the lifecycle rule names. Each
  * one simply reports success, so a 403 can only have come from the guard.
  */
+/*
+ * Deliberately paths the application does NOT serve.
+ *
+ * The point of these is that an UNKNOWN mutating path is classified as a
+ * durable business write — fail-closed — so a path that has since become real
+ * would test the route instead of the classifier, and would collide with it
+ * when registered here. `/api/customers` was such a placeholder until the
+ * business-party directory shipped; `/api/counterparties` replaces it.
+ */
 const BUSINESS_PATHS = [
   '/api/journal-entries',
-  '/api/customers',
+  '/api/counterparties',
   '/api/suppliers',
   '/api/bills',
   '/api/payments',
@@ -55,7 +64,7 @@ function businessRoutes(app: FastifyInstance): void {
       reply.send({ records: [] }),
     );
   }
-  app.patch('/api/customers/:id', { preHandler: requireAuthenticatedUser }, async (_request, reply) =>
+  app.patch('/api/counterparties/:id', { preHandler: requireAuthenticatedUser }, async (_request, reply) =>
     reply.send({ saved: true }),
   );
   app.delete('/api/invoices-business/:id', { preHandler: requireAuthenticatedUser }, async (_request, reply) =>
@@ -129,7 +138,7 @@ describe('write classification', () => {
     // The property that matters: a business endpoint written next year is
     // protected without anyone remembering to register it here.
     expect(isDurableBusinessWrite('POST', '/api/journal-entries')).toBe(true);
-    expect(isDurableBusinessWrite('PATCH', '/api/customers/abc')).toBe(true);
+    expect(isDurableBusinessWrite('PATCH', '/api/counterparties/abc')).toBe(true);
     expect(isDurableBusinessWrite('DELETE', '/api/anything-new')).toBe(true);
     expect(isDurableBusinessWrite('PUT', '/api/some/deep/path')).toBe(true);
   });
@@ -191,7 +200,7 @@ describe('a Free Preview customer', () => {
 
     const patched = await ctx.app.inject({
       method: 'PATCH',
-      url: '/api/customers/abc',
+      url: '/api/counterparties/abc',
       headers: authHeaders(cookies),
       payload: { name: 'x' },
     });

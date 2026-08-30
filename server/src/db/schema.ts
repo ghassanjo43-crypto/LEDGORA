@@ -779,6 +779,10 @@ export interface Database {
   journal_entry_versions: JournalEntryVersionsTable;
   accounting_audit_events: AccountingAuditEventsTable;
   opening_balance_sets: OpeningBalanceSetsTable;
+  business_parties: BusinessPartiesTable;
+  business_party_addresses: BusinessPartyAddressesTable;
+  business_party_customer_profiles: BusinessPartyCustomerProfilesTable;
+  business_party_audit_events: BusinessPartyAuditEventsTable;
   invoices: InvoicesTable;
   invoice_lines: InvoiceLinesTable;
   invoice_payments: InvoicePaymentsTable;
@@ -1046,6 +1050,107 @@ export type SalesInvoiceStatus =
 export type InvoiceDiscountType = 'percentage' | 'amount';
 
 export type InventoryFulfillmentMode = 'none' | 'issue-on-invoice' | 'delivered-separately';
+
+
+/* ══ Business parties ═════════════════════════════════════════════════════ */
+
+/**
+ * One legal party, holding one or more ROLES.
+ *
+ * Not a customers table: the product models a party that may be a customer, a
+ * supplier or both, sharing one code, one tax number and one address book. See
+ * `030_business_parties` for why splitting that duplicates real entities.
+ */
+export interface BusinessPartiesTable {
+  id: Generated<string>;
+  organization_id: string;
+  /** Scoped WITH `organization_id`, never instead of it. */
+  company_id: string;
+  party_code: string;
+  legal_name: string;
+  trading_name: Generated<string>;
+  /** Roles, not a kind: dropping one leaves the party and the other intact. */
+  is_customer: Generated<boolean>;
+  is_supplier: Generated<boolean>;
+  contact_person: Generated<string>;
+  job_title: Generated<string>;
+  email: Generated<string>;
+  phone: Generated<string>;
+  mobile: Generated<string>;
+  website: Generated<string>;
+  tax_registration_number: Generated<string>;
+  commercial_registration_number: Generated<string>;
+  payment_terms: Generated<string>;
+  default_currency: Generated<string>;
+  bank_name: Generated<string>;
+  bank_account_name: Generated<string>;
+  iban: Generated<string>;
+  swift_code: Generated<string>;
+  notes: Generated<string>;
+  /** active | archived. There is no deleted state. */
+  status: Generated<string>;
+  archived_at: Timestamp | null;
+  version: Generated<number>;
+  created_by: string | null;
+  updated_by: string | null;
+  created_at: Generated<Timestamp>;
+  updated_at: Generated<Timestamp>;
+}
+
+export interface BusinessPartyAddressesTable {
+  id: Generated<string>;
+  organization_id: string;
+  company_id: string;
+  party_id: string;
+  /** billing | shipping | registered */
+  purpose: Generated<string>;
+  is_primary: Generated<boolean>;
+  address_line1: Generated<string>;
+  address_line2: Generated<string>;
+  city: Generated<string>;
+  postal_code: Generated<string>;
+  country: Generated<string>;
+  created_at: Generated<Timestamp>;
+  updated_at: Generated<Timestamp>;
+}
+
+/**
+ * The customer role's own fields.
+ *
+ * Separate from the party so the customer route can be handed this table plus
+ * the shared one and be structurally unable to write a supplier field.
+ */
+export interface BusinessPartyCustomerProfilesTable {
+  organization_id: string;
+  company_id: string;
+  party_id: string;
+  customer_category: Generated<string>;
+  /** numeric, not a float: it is compared against a receivable balance. */
+  credit_limit: Generated<string>;
+  default_revenue_account_id: string | null;
+  default_receivable_account_id: string | null;
+  default_invoice_template_id: string | null;
+  invoice_delivery_method: Generated<string>;
+  customer_payment_terms: Generated<string>;
+  created_at: Generated<Timestamp>;
+  updated_at: Generated<Timestamp>;
+}
+
+export interface BusinessPartyAuditEventsTable {
+  id: Generated<string>;
+  organization_id: string;
+  company_id: string;
+  party_id: string;
+  action: string;
+  actor_user_id: string | null;
+  actor_name: Generated<string>;
+  reason: Generated<string>;
+  previous_version: number | null;
+  resulting_version: number | null;
+  detail: ColumnType<Record<string, unknown>, string | undefined, string>;
+  request_id: string | null;
+  at: Generated<Timestamp>;
+}
 
 export interface InvoicesTable {
   id: Generated<string>;

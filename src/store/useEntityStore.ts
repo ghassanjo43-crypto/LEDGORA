@@ -9,6 +9,7 @@ import type { OrganizationRole } from '@/types/roles';
 import { assertEntityPermission, type EntityPermission } from '@/lib/entityPermissions';
 import { getCurrentUser } from '@/store/authStore';
 import { isPlatformAdminFullAccess } from '@/store/platformFullAccess';
+import { customersAreServerAuthoritative } from '@/services/parties/customerDirectory';
 
 export interface EntityActionResult {
   ok: boolean;
@@ -59,6 +60,29 @@ function entityFromForm(
   };
   // Ensure role fields stay consistent with the chosen type.
   return reconcileRoleFields(normalized, values.entityType);
+}
+
+
+/**
+ * The refusal that keeps a durable subscriber's customers out of this store.
+ *
+ * A local write here APPEARS to save, and the next hydration replaces the cache
+ * without a word — so the record is gone with nothing to retry. "Could not save"
+ * is recoverable; "saved somewhere that does not count" is not.
+ *
+ * It applies to the CUSTOMER role only. Suppliers have not migrated: their
+ * records are still browser-resident and the purchasing screens still write
+ * them here, exactly as before. Refusing those too would break Bills and
+ * Payments for a domain this slice does not touch.
+ */
+const SERVER_CUSTOMERS_MESSAGE =
+  'Customers are saved on the server for this workspace. Use the customer directory, '
+  + 'which writes through the server rather than this browser.';
+
+function refusesCustomerWrite(type: EntityType): EntityActionResult | null {
+  if (!customersAreServerAuthoritative()) return null;
+  if (type !== 'customer' && type !== 'both') return null;
+  return { ok: false, error: SERVER_CUSTOMERS_MESSAGE };
 }
 
 interface EntityState {
@@ -140,6 +164,8 @@ export const useEntityStore = create<EntityState>()(
       entities: SEED_ENTITIES,
 
       addEntity: (values) => {
+        const refused = refusesCustomerWrite(values.entityType);
+        if (refused) return refused;
         const denied = guard('entity.create');
         if (denied) return denied;
         const { entities } = get();
@@ -156,6 +182,11 @@ export const useEntityStore = create<EntityState>()(
         const { entities } = get();
         const existing = entities.find((e) => e.id === id);
         if (!existing) return { ok: false, error: 'Entity not found.' };
+        /* Refused if EITHER the current record or the requested shape is a
+         * customer: an edit that drops the role is still an edit to a durable
+         * record. */
+        const refused = refusesCustomerWrite(values.entityType) ?? refusesCustomerWrite(existing.entityType);
+        if (refused) return refused;
 
         const conflict = checkUniqueness(entities, values, id);
         if (conflict) return { ok: false, error: conflict };
@@ -167,7 +198,11 @@ export const useEntityStore = create<EntityState>()(
 
       deleteEntity: (id) => {
         const { entities } = get();
-        if (!entities.some((e) => e.id === id)) return { ok: false, error: 'Entity not found.' };
+        const existing = entities.find((e) => e.id === id);
+        if (!existing) return { ok: false, error: 'Entity not found.' };
+        /* Durable parties are archived, never deleted, and never from here. */
+        const refused = refusesCustomerWrite(existing.entityType);
+        if (refused) return refused;
         set({ entities: entities.filter((e) => e.id !== id) });
         return { ok: true };
       },
@@ -176,6 +211,8 @@ export const useEntityStore = create<EntityState>()(
         const { entities } = get();
         const source = entities.find((e) => e.id === id);
         if (!source) return { ok: false, error: 'Entity not found.' };
+        const refused = refusesCustomerWrite(source.entityType);
+        if (refused) return refused;
 
         const used = new Set(entities.map((e) => e.entityCode.toLowerCase()));
         let candidate = `${source.entityCode}-COPY`;

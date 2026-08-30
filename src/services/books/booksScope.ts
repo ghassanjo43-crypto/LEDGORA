@@ -27,6 +27,7 @@
  */
 import { useStore } from '@/store/useStore';
 import { useJournalStore } from '@/store/journalStore';
+import { clearCustomerCache } from '@/services/parties/customerDirectory';
 import { useCompanyStore } from '@/store/companyStore';
 import { clearMemoryWorkspace } from '@/lib/workspaceStorage';
 import { resetCompanySettings } from '@/services/companySettingsSync';
@@ -93,6 +94,16 @@ export function enterCompanyScope(reference: string | null): void {
   /* Only the server engine holds a CACHE. A demo workspace's records are the
    * originals, and clearing them would destroy the user's work. */
   if (booksEngine() === 'server') clearBooksCache();
+
+  /*
+   * The customer directory is cleared UNCONDITIONALLY, unlike the books.
+   *
+   * It is only ever a cache: a demo workspace's customers live in
+   * `useEntityStore` and are not touched by this, so there is no user work to
+   * destroy and no engine verdict worth depending on. Clearing it always is the
+   * behaviour that cannot leave the previous company's customers in a picker.
+   */
+  clearCustomerCache();
 
   /* Both are per-company verdicts, and both are stale for the same reason. */
   resetCompanySettings();

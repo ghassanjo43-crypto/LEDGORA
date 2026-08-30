@@ -134,7 +134,12 @@ describe('migration 027', () => {
      * silently rolling back something else — which is exactly what it did when
      * 028 arrived.
      */
-    for (const expected of ['029_source_posting_identity', '028_account_classification', '027_company_settings']) {
+    for (const expected of [
+      '030_business_parties',
+      '029_source_posting_identity',
+      '028_account_classification',
+      '027_company_settings',
+    ]) {
       const down = await migrator.migrateDown();
       expect(down.error).toBeUndefined();
       expect(down.results?.[0]?.migrationName).toBe(expected);

@@ -31,6 +31,7 @@ import { booksEngine } from './booksEngine';
 import { beginHydration, isCurrentGeneration } from './booksScope';
 import { toAccount } from './accountMapping';
 import { toJournalEntry } from './journalMapping';
+import { loadCustomers } from '@/services/parties/customerDirectory';
 
 export type BooksLoadState = 'idle' | 'loading' | 'ready' | 'unavailable';
 
@@ -115,6 +116,18 @@ export async function hydrateBooks(): Promise<{ ok: boolean; error?: string }> {
 
     useStore.setState({ accounts });
     useJournalStore.setState({ entries });
+
+    /*
+     * The customer directory, loaded with the books it belongs to.
+     *
+     * Deliberately AFTER the chart and the journal, and deliberately not
+     * awaited into the books verdict: a directory that fails to load leaves the
+     * ledger perfectly usable and reports itself on the screens that need
+     * customers, whereas failing the whole hydration would blank a bookkeeper's
+     * accounts because a picker could not be filled.
+     */
+    void loadCustomers();
+
     setStatus({ state: 'ready', error: null });
     return { ok: true };
   } catch (error) {

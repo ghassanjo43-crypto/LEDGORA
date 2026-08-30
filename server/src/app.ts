@@ -33,6 +33,7 @@ import { adminClosureRoutes } from './routes/adminClosure.js';
 import { orgAdminUserRoutes } from './routes/orgAdminUsers.js';
 import { accountingRoutes } from './routes/accounting.js';
 import { invoiceRoutes } from './routes/invoices.js';
+import { customerRoutes } from './routes/customers.js';
 import { joFotaraMockRoutes } from './services/joFotara/index.js';
 import { decoratePermissions } from './guards/permissions.js';
 import { decorateCompany, COMPANY_REFERENCE_HEADER } from './guards/companyScope.js';
@@ -267,6 +268,7 @@ export async function buildApp({
   await app.register(orgAdminUserRoutes);
   await app.register(accountingRoutes);
   await app.register(invoiceRoutes);
+  await app.register(customerRoutes);
 
   /*
    * The JoFotara clearance mock, when explicitly enabled.

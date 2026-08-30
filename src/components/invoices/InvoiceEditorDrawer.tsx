@@ -34,6 +34,7 @@ import { salesItemDefaults } from '@/lib/itemCatalogue';
 import { useInventoryStore } from '@/store/inventoryStore';
 import { useTaxCodeStore } from '@/store/taxCodeStore';
 import { useMonetaryStep } from '@/lib/useMonetaryPrecision';
+import { useCustomers } from '@/services/parties/useCustomers';
 
 interface Props {
   open: boolean;
@@ -63,7 +64,6 @@ export function InvoiceEditorDrawer({ open, invoiceId, onClose }: Props) {
   const catalogueItems = useInventoryStore((s) => s.items);
   const taxCodes = useTaxCodeStore((s) => s.taxCodes);
   const setActiveView = useStore((s) => s.setActiveView);
-  const entities = useEntityStore((s) => s.entities);
   const invoice = useInvoiceStore((s) => (invoiceId ? s.invoices.find((i) => i.id === invoiceId) : undefined));
   const updateDraft = useInvoiceStore((s) => s.updateDraft);
   const issueInvoice = useInvoiceStore((s) => s.issueInvoice);
@@ -74,7 +74,9 @@ export function InvoiceEditorDrawer({ open, invoiceId, onClose }: Props) {
   const companyCurrency = useTransactionCurrency();
   const [showPreview, setShowPreview] = useState(false);
 
-  const customers = useMemo(() => entities.filter((e) => e.entityType === 'customer' || e.entityType === 'both'), [entities]);
+  /* The customer directory: the server's for a durable subscriber, the local
+   * store for Free Demo. One seam, so no screen decides for itself. */
+  const { customers } = useCustomers();
 
   // Local editable copy of the draft.
   const [lines, setLines] = useState<InvoiceLine[]>(invoice?.lines ?? [makeEmptyInvoiceLine(1)]);

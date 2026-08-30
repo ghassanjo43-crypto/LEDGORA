@@ -40,6 +40,7 @@ import * as companyAdoptionState from './migrations/026_company_adoption_state.j
 import * as companySettings from './migrations/027_company_settings.js';
 import * as accountClassification from './migrations/028_account_classification.js';
 import * as sourcePostingIdentity from './migrations/029_source_posting_identity.js';
+import * as businessParties from './migrations/030_business_parties.js';
 
 const MIGRATIONS: Record<string, Migration> = {
   '001_initial_schema': initialSchema,
@@ -71,6 +72,7 @@ const MIGRATIONS: Record<string, Migration> = {
   '027_company_settings': companySettings,
   '028_account_classification': accountClassification,
   '029_source_posting_identity': sourcePostingIdentity,
+  '030_business_parties': businessParties,
 };
 
 class StaticMigrationProvider implements MigrationProvider {

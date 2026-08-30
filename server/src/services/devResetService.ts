@@ -306,6 +306,39 @@ const RESET_PLAN: readonly PlanEntry[] = [
     label: 'Organization language changes',
     why: 'Why a tenant changed its document language. Meaningless once the tenant is gone.',
   },
+  /* ── Business parties (Sales S1) ───────────────────────────────────────
+   * Children first: the audit trail and the role profile, then the addresses,
+   * then the party itself. The customer profile carries foreign keys to
+   * `accounts`, so it must go before them.
+   */
+  {
+    table: 'business_party_audit_events',
+    action: 'scoped_delete',
+    order: 30.02,
+    label: 'Business party audit events',
+    why: 'The history of a tenant counterparty record; meaningless once the party is gone.',
+  },
+  {
+    table: 'business_party_customer_profiles',
+    action: 'scoped_delete',
+    order: 30.04,
+    label: 'Customer profiles',
+    why: 'The customer role of a business party. References accounts, so it goes before them.',
+  },
+  {
+    table: 'business_party_addresses',
+    action: 'scoped_delete',
+    order: 30.06,
+    label: 'Business party addresses',
+    why: 'Owned through its party; deleted before it.',
+  },
+  {
+    table: 'business_parties',
+    action: 'scoped_delete',
+    order: 30.08,
+    label: 'Business parties',
+    why: 'The tenant counterparty directory. Meaningless once the tenant is gone.',
+  },
   {
     table: 'invoice_audit_events',
     action: 'scoped_delete',

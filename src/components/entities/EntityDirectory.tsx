@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
 import { useEntityStore } from '@/store/useEntityStore';
+import { useCustomers } from '@/services/parties/useCustomers';
 import {
   computeEntityStats,
   distinctValues,
@@ -39,7 +40,19 @@ const SCOPE_DEFAULT_TYPE = {
 } as const;
 
 export function EntityDirectory({ scope, title, description }: EntityDirectoryProps) {
-  const entities = useEntityStore((s) => s.entities);
+  const localEntities = useEntityStore((s) => s.entities);
+  /*
+   * The customer scope reads the DIRECTORY, which is the server's for a durable
+   * subscriber and the local store for Free Demo. The supplier and combined
+   * scopes stay on the local store: suppliers have not migrated, and showing a
+   * durable subscriber a server-backed customer list beside a browser-backed
+   * supplier list is the honest picture of where this migration has reached.
+   */
+  const { customers, serverBacked } = useCustomers();
+  const entities = useMemo(
+    () => (scope === 'customer' && serverBacked ? customers : localEntities),
+    [scope, serverBacked, customers, localEntities],
+  );
   const deleteEntity = useEntityStore((s) => s.deleteEntity);
   const replaceAll = useEntityStore((s) => s.replaceAll);
   const { notify } = useToast();

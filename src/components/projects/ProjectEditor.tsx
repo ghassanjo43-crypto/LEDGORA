@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { Save, CheckCircle2, Info } from 'lucide-react';
 import type { Project, ProjectStatus } from '@/types/project';
 import { useProjectStore } from '@/store/projectStore';
-import { useEntityStore } from '@/store/useEntityStore';
 import { validateProjectForActivation } from '@/lib/projectValidation';
 import { Drawer } from '@/components/ui/Drawer';
 import { Button } from '@/components/ui/Button';
@@ -10,6 +9,7 @@ import { Field, Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { useToast } from '@/components/ui/Toast';
 import { EntityPicker } from '@/components/shared/EntityPicker';
+import { useCustomers } from '@/services/parties/useCustomers';
 
 const STATUSES: ProjectStatus[] = ['planning', 'active', 'on-hold', 'completed', 'cancelled', 'archived'];
 
@@ -18,8 +18,9 @@ export function ProjectEditor({ projectId, onClose }: { projectId: string; onClo
   const source = projects.find((p) => p.id === projectId);
   const updateProject = useProjectStore((s) => s.updateProject);
   const activateProject = useProjectStore((s) => s.activateProject);
-  const entities = useEntityStore((s) => s.entities);
-  const customers = entities.filter((e) => e.entityType === 'customer' || e.entityType === 'both');
+  /* The customer directory: the server's for a durable subscriber, the local
+   * store for Free Demo. One seam, so no screen decides for itself. */
+  const { customers } = useCustomers();
   const { notify } = useToast();
 
   const [draft, setDraft] = useState<Project | undefined>(source);
