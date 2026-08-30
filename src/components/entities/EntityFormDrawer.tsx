@@ -28,6 +28,8 @@ import { Select } from '@/components/ui/Select';
 import { Toggle } from '@/components/ui/Toggle';
 import { useToast } from '@/components/ui/Toast';
 import { useInvoiceTemplateStore } from '@/store/invoiceTemplateStore';
+import { customerActions } from '@/services/parties/customerActions';
+import { isCustomer } from '@/lib/entitySelectors';
 
 export type EntityFormMode =
   | { kind: 'create'; type: EntityType }
@@ -49,8 +51,7 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
 
 export function EntityFormDrawer({ open, mode, onClose }: EntityFormDrawerProps) {
   const entities = useEntityStore((s) => s.entities);
-  const addEntity = useEntityStore((s) => s.addEntity);
-  const updateEntity = useEntityStore((s) => s.updateEntity);
+  const actions = customerActions();
   const accounts = useStore((s) => s.accounts);
   const { notify } = useToast();
 
@@ -112,17 +113,32 @@ export function EntityFormDrawer({ open, mode, onClose }: EntityFormDrawerProps)
     };
   }, [accounts]);
 
-  const onSubmit = (values: EntityFormValues): void => {
-    const result =
-      mode?.kind === 'edit'
-        ? updateEntity(mode.entityId, values)
-        : addEntity(values);
+  const onSubmit = async (values: EntityFormValues): Promise<void> => {
+    /*
+     * A customer goes through the customer seam; a supplier-only party still
+     * goes to the local store, because suppliers have not migrated. Deciding on
+     * the ROLE rather than on the screen keeps a party that holds both from
+     * being written in two places.
+     */
+    const editingId = mode?.kind === 'edit' ? mode.entityId : undefined;
+    const result = isCustomer({ entityType: values.entityType } as never)
+      ? await actions.save(values, editingId)
+      : (editingId
+          ? useEntityStore.getState().updateEntity(editingId, values)
+          : useEntityStore.getState().addEntity(values));
+
     if (result.ok) {
-      notify(mode?.kind === 'edit' ? 'Entity updated.' : 'Entity created.', 'success');
+      notify(editingId ? 'Entity updated.' : 'Entity created.', 'success');
       onClose();
-    } else {
-      notify(result.error ?? 'Could not save the entity.', 'error');
+      return;
     }
+
+    /*
+     * A version conflict is not a failed save to try again — somebody else's
+     * edit is already in the directory, and re-submitting would overwrite work
+     * the person has not seen. The drawer stays open so they can look.
+     */
+    notify(result.error ?? 'Could not save the entity.', 'error');
   };
 
   return (

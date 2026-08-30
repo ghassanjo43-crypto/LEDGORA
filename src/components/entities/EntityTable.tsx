@@ -10,6 +10,8 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { ENTITY_TYPE_OPTIONS, paymentTermsLabel } from '@/data/entityOptions';
 import { EntityStatusBadge, EntityTypeBadge } from './EntityBadges';
 import { cn } from '@/lib/utils';
+import { customerActions, ROLE_CHANGE_UNSUPPORTED } from '@/services/parties/customerActions';
+import { isCustomer } from '@/lib/entitySelectors';
 
 interface EntityTableProps {
   entities: BusinessEntity[];
@@ -29,6 +31,7 @@ export function EntityTable({
   const setEntityType = useEntityStore((s) => s.setEntityType);
   const setActive = useEntityStore((s) => s.setActive);
   const duplicateEntity = useEntityStore((s) => s.duplicateEntity);
+  const actions = customerActions();
   const { notify } = useToast();
 
   if (entities.length === 0) {
@@ -52,9 +55,45 @@ export function EntityTable({
     );
   }
 
-  const handleDuplicate = (id: string): void => {
-    const result = duplicateEntity(id);
+  const handleDuplicate = async (id: string, entity: BusinessEntity): Promise<void> => {
+    /* A duplicate is a CREATE of a new party, so it goes through the same door
+     * and gets the same uniqueness enforcement. */
+    const result = isCustomer(entity) && actions.serverBacked
+      ? await actions.duplicate(id)
+      : duplicateEntity(id);
     notify(result.ok ? 'Entity duplicated.' : result.error ?? 'Could not duplicate.', result.ok ? 'success' : 'error');
+  };
+
+  /**
+   * Active/inactive is ARCHIVED/ACTIVE on the server.
+   *
+   * The durable directory has no separate "inactive" state: a party is either
+   * in the pickers or archived out of them, which is what this toggle has
+   * always meant to a user.
+   */
+  const handleSetActive = async (entity: BusinessEntity, active: boolean): Promise<void> => {
+    if (!isCustomer(entity) || !actions.serverBacked) {
+      setActive(entity.id, active);
+      return;
+    }
+    const result = await actions.setArchived(entity.id, !active);
+    if (!result.ok) notify(result.error ?? 'Could not change this customer.', 'error');
+  };
+
+  /**
+   * Changing which roles a party holds has no server operation in S1.
+   *
+   * Refused with the reason rather than falling back to the local store, which
+   * would write a durable subscriber's directory into the browser. It is
+   * refused only for parties the server holds; a supplier-only party still
+   * changes locally, because suppliers have not migrated.
+   */
+  const handleSetType = (entity: BusinessEntity, type: EntityType): void => {
+    if (actions.canChangeRoles || !isCustomer(entity)) {
+      setEntityType(entity.id, type);
+      return;
+    }
+    notify(ROLE_CHANGE_UNSUPPORTED, 'error');
   };
 
   return (
@@ -124,7 +163,7 @@ export function EntityTable({
                   <Select
                     options={ENTITY_TYPE_OPTIONS}
                     value={e.entityType}
-                    onChange={(ev) => setEntityType(e.id, ev.target.value as EntityType)}
+                    onChange={(ev) => handleSetType(e, ev.target.value as EntityType)}
                     className="h-8 w-[9.5rem] text-xs opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100"
                     aria-label={`Change role for ${e.legalName}`}
                     title="Convert role (customer / supplier / both)"
@@ -132,12 +171,12 @@ export function EntityTable({
                   <RowAction label="Edit entity" onClick={() => onEdit(e.id)}>
                     <Icon.Edit className="h-4 w-4" />
                   </RowAction>
-                  <RowAction label="Duplicate entity" onClick={() => handleDuplicate(e.id)}>
+                  <RowAction label="Duplicate entity" onClick={() => void handleDuplicate(e.id, e)}>
                     <Icon.Copy className="h-4 w-4" />
                   </RowAction>
                   <RowAction
                     label={e.isActive ? 'Deactivate' : 'Activate'}
-                    onClick={() => setActive(e.id, !e.isActive)}
+                    onClick={() => void handleSetActive(e, !e.isActive)}
                   >
                     {e.isActive ? <Icon.Moon className="h-4 w-4" /> : <Icon.Sun className="h-4 w-4" />}
                   </RowAction>

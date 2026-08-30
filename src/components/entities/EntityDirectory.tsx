@@ -26,6 +26,7 @@ import { EntityDashboardCards } from './EntityDashboardCards';
 import { EntitySearchFilterBar } from './EntitySearchFilterBar';
 import { EntityTable } from './EntityTable';
 import { EntityFormDrawer, type EntityFormMode } from './EntityFormDrawer';
+import { customerActions, IMPORT_UNSUPPORTED } from '@/services/parties/customerActions';
 
 interface EntityDirectoryProps {
   scope: EntityScope;
@@ -49,6 +50,7 @@ export function EntityDirectory({ scope, title, description }: EntityDirectoryPr
    * supplier list is the honest picture of where this migration has reached.
    */
   const { customers, serverBacked } = useCustomers();
+  const actions = customerActions();
   const entities = useMemo(
     () => (scope === 'customer' && serverBacked ? customers : localEntities),
     [scope, serverBacked, customers, localEntities],
@@ -84,10 +86,26 @@ export function EntityDirectory({ scope, title, description }: EntityDirectoryPr
     ? entities.find((e) => e.id === pendingDeleteId)
     : undefined;
 
-  const confirmDelete = (): void => {
+  /*
+   * Removal is ARCHIVING when the server holds the party.
+   *
+   * A party named on an issued invoice must stay identifiable for as long as
+   * the invoice does, so the durable directory offers no delete at all — the
+   * server has no such route. Archiving takes it out of every picker and leaves
+   * every reference intact.
+   */
+  const confirmDelete = async (): Promise<void> => {
     if (!pendingDeleteId) return;
-    const result = deleteEntity(pendingDeleteId);
-    notify(result.ok ? 'Entity deleted.' : result.error ?? 'Could not delete.', result.ok ? 'success' : 'error');
+    if (actions.serverBacked) {
+      const result = await actions.setArchived(pendingDeleteId, true);
+      notify(
+        result.ok ? 'Customer archived.' : result.error ?? 'Could not archive.',
+        result.ok ? 'success' : 'error',
+      );
+    } else {
+      const result = deleteEntity(pendingDeleteId);
+      notify(result.ok ? 'Entity deleted.' : result.error ?? 'Could not delete.', result.ok ? 'success' : 'error');
+    }
     setPendingDeleteId(null);
   };
 
@@ -117,6 +135,15 @@ export function EntityDirectory({ scope, title, description }: EntityDirectoryPr
     if (!result.ok) {
       const errors = result.issues.filter((i) => i.severity === 'error').length;
       notify(`Import blocked — ${errors} validation error(s). Fix the file and retry.`, 'error');
+      return;
+    }
+    /*
+     * Refused rather than quietly written locally. An import into the browser
+     * store for a durable subscriber would create parties the server has never
+     * heard of, which is the failure this slice removed.
+     */
+    if (!actions.canImport) {
+      notify(IMPORT_UNSUPPORTED, 'error');
       return;
     }
     replaceAll(result.entities);

@@ -10,9 +10,11 @@
  *
  * ── What it is NOT ───────────────────────────────────────────────────────────
  * It is not a second entity model. It writes an ordinary `EntityFormValues`
- * through `useEntityStore.addEntity` — the same canonical service the directory
- * uses, with the same uniqueness rules and the same permission gate — and the
- * fields it collects are `.pick`ed from `entityFormSchema` rather than restated.
+ * through the same door the directory uses — the customer seam when the party
+ * holds the customer role, `useEntityStore` for a supplier-only party — so it
+ * inherits the same uniqueness rules and the same permission gate rather than
+ * being a quicker way past them. The fields it collects are `.pick`ed from
+ * `entityFormSchema` rather than restated.
  * Anything it does not ask for comes from `makeDefaultEntityValues`, so the
  * record can be opened and completed in the directory afterwards.
  *
@@ -40,6 +42,10 @@ import {
 import { Button } from '@/components/ui/Button';
 import { Field, Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
+import { customerActions } from '@/services/parties/customerActions';
+import { useCustomerDirectory } from '@/services/parties/customerDirectory';
+import { partyToEntity } from '@/services/parties/useCustomers';
+import { isCustomer } from '@/lib/entitySelectors';
 
 /** Only the entity types Ledgora's model actually has. Nothing is invented. */
 const ENTITY_TYPE_OPTIONS: Array<{ value: EntityType; label: string }> = [
@@ -60,6 +66,7 @@ export interface QuickEntityDialogProps {
 export function QuickEntityDialog({ open, initialName = '', onCancel, onCreated }: QuickEntityDialogProps) {
   const entities = useEntityStore((s) => s.entities);
   const addEntity = useEntityStore((s) => s.addEntity);
+  const actions = customerActions();
   const [storeError, setStoreError] = useState<string | null>(null);
   const nameRef = useRef<HTMLInputElement | null>(null);
 
@@ -115,24 +122,35 @@ export function QuickEntityDialog({ open, initialName = '', onCancel, onCreated 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, legalName]);
 
-  const submit = (values: QuickEntityFormValues): void => {
+  const submit = async (values: QuickEntityFormValues): Promise<void> => {
     /*
      * The full canonical record: defaults for everything quick-create does not
-     * ask about, overlaid with what it does. `addEntity` re-checks uniqueness
-     * and the create permission, so this is not a privileged path.
+     * ask about, overlaid with what it does. Uniqueness and the create
+     * permission are re-checked wherever it lands, so this is not a privileged
+     * path — it is the same door with fewer questions.
      */
-    const result = addEntity({
+    const full = {
       ...makeDefaultEntityValues(values.entityType),
       ...values,
       legalName: values.legalName.trim(),
       entityCode: values.entityCode.trim(),
-    });
+    };
+
+    const customerRole = isCustomer({ entityType: values.entityType } as never);
+    const result = customerRole ? await actions.save(full) : addEntity(full);
 
     if (!result.ok || !result.id) {
       setStoreError(result.error ?? 'Could not create the entity.');
       return;
     }
-    const created = useEntityStore.getState().entities.find((e) => e.id === result.id);
+
+    /* Read back from whichever directory now owns it, so the picker receives
+     * the server's record rather than the payload that was sent. */
+    const created = customerRole && actions.serverBacked
+      ? useCustomerDirectory.getState().customers
+          .filter((p) => p.id === result.id)
+          .map(partyToEntity)[0]
+      : useEntityStore.getState().entities.find((e) => e.id === result.id);
     if (created) onCreated(created);
   };
 
