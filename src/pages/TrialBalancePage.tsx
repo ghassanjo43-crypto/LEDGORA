@@ -26,6 +26,8 @@ import { TrialBalanceTable, type TrialBalanceSection } from '@/components/trial-
 import { ReconciliationBanner } from '@/components/trial-balance/ReconciliationBanner';
 import { ExceptionPanel } from '@/components/trial-balance/ExceptionPanel';
 import { tbAmountAlways } from '@/components/trial-balance/tbFormat';
+import { useReportBundle } from '@/services/books/useReportBundle';
+import { ServerReportFrame, ServerTrialBalance } from '@/components/reports/ServerStatements';
 import type { ViewKey } from '@/types';
 
 function isoDate(d: Date): string {
@@ -59,14 +61,37 @@ export function TrialBalancePage() {
 
   const filters: TrialBalanceFilters = { search, type, includeZero: prefs.includeZero, active: prefs.active };
 
-  // Full trial balance (all posting accounts) — the source for reconciliation.
+  /*
+   * A durable subscriber's trial balance is READ, not computed.
+   *
+   * The browser holds a cache of the chart and the journal filled by two
+   * separate requests, and a statement built from it would be built from two
+   * snapshots. This asks the server for the figures it aggregated inside one.
+   */
+  const report = useReportBundle({ asOf: period.to, from: period.from, to: period.to });
+  const { serverBacked } = report;
+
+  /*
+   * The local calculators do not run at all for a durable subscriber — not as a
+   * discarded fallback, not "just for the reconciliation banner". A figure
+   * computed here from cached rows is a second opinion about the books, and a
+   * second opinion is exactly what this phase removes.
+   */
+  const localAccounts = serverBacked ? [] : accounts;
+  const localEntries = serverBacked ? [] : entries;
+
   const allRows = useMemo(
-    () => buildTrialBalanceRows(accounts, entries, period, base),
+    () => buildTrialBalanceRows(localAccounts, localEntries, period, base),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [accounts, entries, period, base, refreshKey],
+    [localAccounts, localEntries, period, base, refreshKey],
   );
   const reconciliation = useMemo(() => trialBalanceReconciliation(allRows), [allRows]);
-  const exceptions = useMemo(() => buildTrialBalanceExceptions(allRows, entries, accounts, base), [allRows, entries, accounts, base]);
+  /* The exception scan reads the journal too, so it is withheld for the same
+   * reason the rows are: it is a local opinion about the same books. */
+  const exceptions = useMemo(
+    () => buildTrialBalanceExceptions(allRows, localEntries, localAccounts, base),
+    [allRows, localEntries, localAccounts, base],
+  );
 
   // Rows actually shown (after filters) + their visible totals. Depend on the
   // primitive filter fields so the memo actually caches between renders.
@@ -105,7 +130,51 @@ export function TrialBalancePage() {
   };
 
   /* ── Export ── */
+  /**
+   * A durable subscriber's export carries the SERVER's figures.
+   *
+   * Exporting locally computed rows would put a second set of numbers into a
+   * file that leaves the building, and a spreadsheet disagreeing with the
+   * statement it was exported from is the hardest kind of discrepancy to trace
+   * — the screen and the file each look internally consistent. The decimal
+   * strings are written through unparsed, so the file carries the precision
+   * PostgreSQL produced.
+   */
+  const exportServerCsv = (): void => {
+    const bundle = report.bundle;
+    if (!bundle) return;
+    const rows: string[][] = [
+      [settings.companyName],
+      ['Trial Balance (server figures)'],
+      [`Period: ${bundle.parameters.from} to ${bundle.parameters.to}`, `As of: ${bundle.parameters.asOf}`,
+        `Base currency: ${bundle.snapshot.currency}`, `Snapshot: ${bundle.snapshot.at}`],
+      [],
+      ['Code', 'Account', 'Debit', 'Credit'],
+      ...bundle.trialBalance.rows.map((r) => [r.accountCode, r.accountName, r.debit, r.credit]),
+      ['', 'Total', bundle.trialBalance.totalDebit, bundle.trialBalance.totalCredit],
+    ];
+    const csv = rows.map((r) => r.map((c) => escapeCsv(c)).join(',')).join('\r\n');
+    downloadFile(`trial-balance-${isoDate(new Date())}.csv`, csv, 'text/csv');
+  };
+
+  const exportServerJson = (): void => {
+    if (!report.bundle) return;
+    downloadFile(
+      `trial-balance-${isoDate(new Date())}.json`,
+      JSON.stringify({
+        company: settings.companyName,
+        report: 'Trial Balance',
+        source: 'server',
+        snapshot: report.bundle.snapshot,
+        parameters: report.bundle.parameters,
+        trialBalance: report.bundle.trialBalance,
+      }, null, 2),
+      'application/json',
+    );
+  };
+
   const exportCsv = (): void => {
+    if (serverBacked) return exportServerCsv();
     const rows: string[][] = [];
     rows.push([settings.companyName]);
     rows.push([`Trial Balance (${prefs.viewMode === 'movement' ? 'Movement' : 'Standard'})`]);
@@ -139,6 +208,7 @@ export function TrialBalancePage() {
     downloadFile(`trial-balance-${isoDate(new Date())}.csv`, csv, 'text/csv');
   };
   const exportJson = (): void => {
+    if (serverBacked) return exportServerJson();
     downloadFile(
       `trial-balance-${isoDate(new Date())}.json`,
       JSON.stringify(
@@ -188,7 +258,11 @@ export function TrialBalancePage() {
       </div>
 
       <div className="space-y-4">
-        <ReconciliationBanner reconciliation={reconciliation} base={base} exceptionCount={exceptions.length} onReviewDifference={() => setShowExceptions(true)} />
+        {/* The server states its own balance verdict inside the statement; a
+            second banner computed here would be the local opinion again. */}
+        {!serverBacked && (
+          <ReconciliationBanner reconciliation={reconciliation} base={base} exceptionCount={exceptions.length} onReviewDifference={() => setShowExceptions(true)} />
+        )}
 
         <TrialBalanceToolbar
           viewMode={prefs.viewMode}
@@ -210,7 +284,13 @@ export function TrialBalancePage() {
           onCollapseAll={() => setCollapsed(new Set(groupIds))}
         />
 
-        {displayRows.length === 0 ? (
+        {serverBacked ? (
+          <Card><CardBody>
+            <ServerReportFrame state={report.state} error={report.error} bundle={report.bundle} onReload={report.reload}>
+              {report.bundle ? <ServerTrialBalance bundle={report.bundle} /> : null}
+            </ServerReportFrame>
+          </CardBody></Card>
+        ) : displayRows.length === 0 ? (
           <Card><CardBody><EmptyState icon={Scale} title="No accounts to display" description="No posting accounts match the current filters. Enable “Zero-balance” or widen the period to see more." /></CardBody></Card>
         ) : (
           <Card className="overflow-hidden">

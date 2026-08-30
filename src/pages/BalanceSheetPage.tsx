@@ -5,7 +5,9 @@ import { useJournalStore } from '@/store/journalStore';
 import { useEntityStore } from '@/store/useEntityStore';
 import { useLedgerFocus } from '@/store/ledgerFocusStore';
 import { useBalanceSheetPreferences } from '@/store/balanceSheetPreferencesStore';
-import { buildBalanceSheet } from '@/lib/balanceSheetCalculations';
+import { buildBalanceSheet, fiscalYearStartDate } from '@/lib/balanceSheetCalculations';
+import { useReportBundle } from '@/services/books/useReportBundle';
+import { ServerReportFrame, ServerBalanceSheet } from '@/components/reports/ServerStatements';
 import { escapeCsv } from '@/lib/csv';
 import { downloadFile, cn } from '@/lib/utils';
 import { Card } from '@/components/ui/Card';
@@ -46,8 +48,20 @@ export function BalanceSheetPage() {
   const [entityId, setEntityId] = useState<string>('');
   const [generatedAt, setGeneratedAt] = useState<Date>(() => new Date());
 
+  /* Read from the server for a durable subscriber; see `useReportBundle`. */
+  const serverReport = useReportBundle({
+    asOf: asOfDate,
+    from: fiscalYearStartDate(asOfDate, settings.fiscalYearStart),
+    to: asOfDate,
+  });
+  const { serverBacked } = serverReport;
+
+  /* Withheld from the local calculator when the server owns the books. */
+  const localAccounts = serverBacked ? [] : accounts;
+  const localEntries = serverBacked ? [] : entries;
+
   const report = useMemo(
-    () => buildBalanceSheet(accounts, entries, {
+    () => buildBalanceSheet(localAccounts, localEntries, {
       asOfDate,
       comparativeDate: comparativeDate || undefined,
       entityId,
@@ -57,7 +71,7 @@ export function BalanceSheetPage() {
       includeZero: prefs.includeZero,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [accounts, entries, asOfDate, comparativeDate, entityId, base, settings.fiscalYearStart, prefs.detail, prefs.includeZero, generatedAt],
+    [localAccounts, localEntries, asOfDate, comparativeDate, entityId, base, settings.fiscalYearStart, prefs.detail, prefs.includeZero, generatedAt],
   );
 
   const entityName = entityId ? entities.find((e) => e.id === entityId)?.legalName ?? settings.companyName : settings.companyName;
@@ -132,6 +146,7 @@ export function BalanceSheetPage() {
       </div>
 
       <div className="space-y-4">
+        {!serverBacked && (
         <BalanceCheckPanel
           totalAssets={report.totalAssets}
           totalEquityAndLiabilities={report.totalEquityAndLiabilities}
@@ -140,6 +155,7 @@ export function BalanceSheetPage() {
           base={base}
           negativeFormat={prefs.negativeFormat}
         />
+        )}
 
         <BalanceSheetToolbar
           entityOptions={entityOptions}
@@ -168,7 +184,15 @@ export function BalanceSheetPage() {
         )}
 
         <Card className="overflow-hidden">
-          <BalanceSheetTable lines={report.lines} hasComparative={report.hasComparative} negativeFormat={prefs.negativeFormat} onDrill={drill} />
+          {serverBacked ? (
+            <div className="p-4">
+              <ServerReportFrame state={serverReport.state} error={serverReport.error} bundle={serverReport.bundle} onReload={serverReport.reload}>
+                {serverReport.bundle ? <ServerBalanceSheet bundle={serverReport.bundle} /> : null}
+              </ServerReportFrame>
+            </div>
+          ) : (
+            <BalanceSheetTable lines={report.lines} hasComparative={report.hasComparative} negativeFormat={prefs.negativeFormat} onDrill={drill} />
+          )}
         </Card>
       </div>
     </>

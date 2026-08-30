@@ -18,7 +18,7 @@ import { errors } from '../lib/errors.js';
 import { requireOwnOrganizationPermission } from '../guards/permissions.js';
 import { requireCompanyScope, companyOf } from '../guards/companyScope.js';
 import { buildReportBundle } from '../services/accounting/reportService.js';
-import { readLedgerPage } from '../services/accounting/ledgerService.js';
+import { readLedgerPage, exportGroupedLedger } from '../services/accounting/ledgerService.js';
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -35,6 +35,14 @@ const querySchema = z.object({
 const EXPORT_PAGE = 500;
 /** The most an export may return before the caller is asked to narrow it. */
 const EXPORT_MAX = 20000;
+
+const groupedExportSchema = z.object({
+  from: z.string().regex(DATE),
+  to: z.string().regex(DATE),
+  /* A string, because it arrives in a query string. Anything but `true` is
+   * false, so a typo cannot silently enlarge the export. */
+  includeZero: z.enum(['true', 'false']).optional(),
+});
 
 const ledgerQuerySchema = z.object({
   accountId: z.string().min(1),
@@ -211,5 +219,36 @@ export async function reportRoutes(app: FastifyInstance): Promise<void> {
 
     /* The totals come from the aggregate, not from the rows gathered above. */
     return { ...first, lines, nextCursor: null, complete: true };
+  });
+
+  /**
+   * The bound ledger: every posting account and its lines, in one operation.
+   *
+   * ══ One request, not one per account ══════════════════════════════════════
+   *
+   * A client looping over the chart would issue hundreds of requests, each with
+   * its own snapshot, and assemble a book whose accounts were never
+   * simultaneously true. This reads them all inside one read-only REPEATABLE
+   * READ transaction and returns the instant it read them at.
+   *
+   * ══ `export`, not `view` ══════════════════════════════════════════════════
+   *
+   * This is the whole ledger leaving the building, so it takes the export
+   * permission — the same distinction the single-account export makes, for the
+   * same reason.
+   */
+  app.get('/api/accounting/ledger/export/grouped', {
+    preHandler: [
+      requireOwnOrganizationPermission('general_ledger', 'export'),
+      requireCompanyScope,
+    ],
+  }, async (request) => {
+    const query = parse(groupedExportSchema, request.query, LEDGER_PARAMETERS);
+    const { organizationId, companyId } = scopeOf(request);
+    return exportGroupedLedger(request.server.db, { organizationId, companyId }, {
+      from: query.from,
+      to: query.to,
+      includeZero: query.includeZero === 'true',
+    });
   });
 }

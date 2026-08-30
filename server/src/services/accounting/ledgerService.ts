@@ -42,12 +42,15 @@
  * from the pages a browser happened to load would change as somebody scrolled,
  * which is the most quietly wrong thing a ledger could do.
  */
-import { sql, type Kysely } from 'kysely';
+import { sql, type Kysely, type Transaction } from 'kysely';
 import type { Database } from '../../db/schema.js';
 import { errors } from '../../lib/errors.js';
 import { monetaryDecimalsFor } from './currencyPrecision.js';
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** A database handle or a transaction: both execute the same statements. */
+type Executor = Kysely<Database> | Transaction<Database>;
 
 /** The most rows one page may carry, whatever the caller asks for. */
 const MAX_PAGE = 500;
@@ -353,7 +356,7 @@ export async function readLedgerPage(
  * is one extra round trip to keep the promise.
  */
 async function scaledDifference(
-  db: Kysely<Database>, a: string, b: string, decimals: number,
+  db: Executor, a: string, b: string, decimals: number,
 ): Promise<string> {
   const { rows } = await sql<{ value: string }>`
     SELECT ROUND(${a}::numeric - ${b}::numeric, ${sql.lit(decimals)})::text AS value
@@ -362,10 +365,292 @@ async function scaledDifference(
 }
 
 async function scaledSum(
-  db: Kysely<Database>, a: string, b: string, decimals: number,
+  db: Executor, a: string, b: string, decimals: number,
 ): Promise<string> {
   const { rows } = await sql<{ value: string }>`
     SELECT ROUND(${a}::numeric + ${b}::numeric, ${sql.lit(decimals)})::text AS value
   `.execute(db);
   return rows[0]!.value;
+}
+
+/* ══ The bound ledger: every account, one operation ═══════════════════════ */
+
+/**
+ * The whole bound ledger for a period, in ONE server operation.
+ *
+ * ══ Why not a loop over accounts ═════════════════════════════════════════════
+ *
+ * The obvious implementation is to call `readLedgerPage` once per account. On a
+ * real chart that is hundreds of requests, each with its own snapshot, so the
+ * "book" they assemble into is a set of pages that were never simultaneously
+ * true — an audit export whose accounts disagree about when they were read is
+ * not an audit export. This reads every account inside ONE read-only
+ * REPEATABLE READ transaction, so the whole file describes one instant, and it
+ * returns that instant so the file can say which one.
+ *
+ * ══ Ordering is the server's, and it is total ════════════════════════════════
+ *
+ * Accounts by code, then lines by `(posting_date, journal_number, line_number,
+ * id)` — the same ordering the paged ledger walks. Every component is needed: a
+ * date is not unique, one entry can touch an account on several lines, and the
+ * id is the tie-break that makes two exports of unchanged books identical. A
+ * bound ledger that reshuffled between exports could not be diffed, which is
+ * most of what anybody does with one.
+ *
+ * ══ Bounded, and honest about it ═════════════════════════════════════════════
+ *
+ * The size is measured BEFORE any line is materialised, and a period too large
+ * is refused with the figure that was measured. Truncating silently would
+ * produce a file that looks complete and is not, which is the worst possible
+ * outcome for a document whose whole purpose is completeness.
+ */
+export interface GroupedLedgerAccount {
+  accountId: string;
+  accountCode: string;
+  accountName: string;
+  accountType: string;
+  normalBalance: string;
+  openingBalance: string;
+  totals: { debit: string; credit: string; movement: string; closingBalance: string; lineCount: number };
+  lines: LedgerLine[];
+}
+
+export interface GroupedLedgerExport {
+  /** The single instant every account below was read at. */
+  snapshot: { at: string; currency: string; decimals: number };
+  parameters: { from: string; to: string; includeZero: boolean };
+  accounts: GroupedLedgerAccount[];
+  totals: { accountCount: number; lineCount: number };
+  /** Always true: a partial export is refused rather than returned. */
+  complete: true;
+}
+
+/**
+ * The most lines one bound-ledger export may carry.
+ *
+ * Sized for an ordinary full-chart audit export rather than for the server's
+ * comfort: a small company posts a few thousand lines a year and an active one
+ * tens of thousands, so a year that cannot be exported in one file is a year
+ * that cannot be audited from this screen. Past this the caller is told the
+ * measured count and asked to narrow the period — never handed a short book.
+ */
+export const GROUPED_EXPORT_MAX_LINES = 250_000;
+
+export async function exportGroupedLedger(
+  db: Kysely<Database>,
+  scope: { organizationId: string; companyId: string },
+  query: { from: string; to: string; includeZero?: boolean },
+): Promise<GroupedLedgerExport> {
+  if (!ISO_DATE.test(query.from) || !ISO_DATE.test(query.to)) {
+    throw errors.validation('Ledger dates must be calendar dates (yyyy-mm-dd).');
+  }
+  if (query.to < query.from) throw errors.validation('A ledger period cannot end before it starts.');
+  const includeZero = query.includeZero ?? false;
+
+  return db.transaction().setIsolationLevel('repeatable read').execute(async (trx) => {
+    /* Reading only. A reporting transaction that cannot write is one that
+     * cannot be made to write by a later mistake. */
+    await sql`SET TRANSACTION READ ONLY`.execute(trx);
+
+    const organization = await trx
+      .selectFrom('organizations')
+      .select('base_currency')
+      .where('id', '=', scope.organizationId)
+      .executeTakeFirst();
+    const currency = organization?.base_currency ?? 'USD';
+    const decimals = monetaryDecimalsFor(currency);
+
+    /* ── Measure first, materialise second ───────────────────────────────── */
+    const { rows: measured } = await sql<{ n: string }>`
+      SELECT COUNT(*)::text AS n
+        FROM journal_lines jl
+        JOIN journal_entries je
+          ON je.id = jl.journal_entry_id
+         AND je.organization_id = jl.organization_id
+         AND je.company_id = jl.company_id
+       WHERE jl.organization_id = ${scope.organizationId}
+         AND jl.company_id = ${scope.companyId}
+         AND ${COUNTED}
+         AND je.posting_date BETWEEN ${query.from} AND ${query.to}
+    `.execute(trx);
+
+    const lineCount = Number(measured[0]!.n);
+    if (lineCount > GROUPED_EXPORT_MAX_LINES) {
+      throw errors.validation(
+        `This period holds ${lineCount} ledger lines, more than the `
+        + `${GROUPED_EXPORT_MAX_LINES} a single bound-ledger export carries. `
+        + 'Export a shorter period. Nothing has been truncated.',
+      );
+    }
+
+    const accounts = await trx
+      .selectFrom('accounts')
+      .select(['id', 'account_code', 'account_name', 'account_type', 'normal_balance'])
+      .where('organization_id', '=', scope.organizationId)
+      .where('company_id', '=', scope.companyId)
+      .where('is_postable', '=', true)
+      .orderBy('account_code')
+      .execute();
+
+    /* Opening balance and whole-period totals for every account, in one pass. */
+    const { rows: sums } = await sql<{
+      account_id: string; opening: string; debit: string; credit: string; n: string;
+    }>`
+      SELECT jl.account_id,
+             ROUND(COALESCE(SUM(CASE WHEN je.posting_date < ${query.from}
+                     THEN jl.debit_functional - jl.credit_functional ELSE 0 END), 0), ${sql.lit(decimals)})::text AS opening,
+             ROUND(COALESCE(SUM(CASE WHEN je.posting_date BETWEEN ${query.from} AND ${query.to}
+                     THEN jl.debit_functional ELSE 0 END), 0), ${sql.lit(decimals)})::text AS debit,
+             ROUND(COALESCE(SUM(CASE WHEN je.posting_date BETWEEN ${query.from} AND ${query.to}
+                     THEN jl.credit_functional ELSE 0 END), 0), ${sql.lit(decimals)})::text AS credit,
+             COUNT(*) FILTER (WHERE je.posting_date BETWEEN ${query.from} AND ${query.to})::text AS n
+        FROM journal_lines jl
+        JOIN journal_entries je
+          ON je.id = jl.journal_entry_id
+         AND je.organization_id = jl.organization_id
+         AND je.company_id = jl.company_id
+       WHERE jl.organization_id = ${scope.organizationId}
+         AND jl.company_id = ${scope.companyId}
+         AND ${COUNTED}
+       GROUP BY jl.account_id
+    `.execute(trx);
+
+    const sumOf = new Map(sums.map((row) => [row.account_id, row]));
+
+    /*
+     * Every line, in the total ordering, with each account's running balance
+     * carried from its own opening.
+     *
+     * The window is PARTITIONed by account: a running balance that continued
+     * across an account boundary would be an arithmetic accident rather than a
+     * ledger.
+     */
+    const { rows: lineRows } = await sql<RawLine & { account_id: string }>`
+      WITH openings AS (
+        SELECT jl.account_id,
+               COALESCE(SUM(jl.debit_functional - jl.credit_functional), 0) AS opening
+          FROM journal_lines jl
+          JOIN journal_entries je
+            ON je.id = jl.journal_entry_id
+           AND je.organization_id = jl.organization_id
+           AND je.company_id = jl.company_id
+         WHERE jl.organization_id = ${scope.organizationId}
+           AND jl.company_id = ${scope.companyId}
+           AND ${COUNTED}
+           AND je.posting_date < ${query.from}
+         GROUP BY jl.account_id
+      )
+      SELECT
+        jl.account_id,
+        jl.id                AS line_id,
+        je.id                AS journal_id,
+        je.journal_number,
+        je.posting_date::text,
+        je.transaction_date::text,
+        je.status,
+        je.reference,
+        je.description,
+        jl.memo,
+        je.source_type,
+        je.source_id,
+        je.source_event,
+        jl.line_number,
+        ROUND(jl.debit_functional, ${sql.lit(decimals)})::text  AS debit,
+        ROUND(jl.credit_functional, ${sql.lit(decimals)})::text AS credit,
+        ROUND(COALESCE(o.opening, 0) + SUM(jl.debit_functional - jl.credit_functional) OVER (
+          PARTITION BY jl.account_id
+          ORDER BY je.posting_date, je.journal_number, jl.line_number, jl.id
+          ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ), ${sql.lit(decimals)})::text AS running
+      FROM journal_lines jl
+      JOIN journal_entries je
+        ON je.id = jl.journal_entry_id
+       AND je.organization_id = jl.organization_id
+       AND je.company_id = jl.company_id
+      JOIN accounts a
+        ON a.id = jl.account_id
+       AND a.organization_id = jl.organization_id
+       AND a.company_id = jl.company_id
+      LEFT JOIN openings o ON o.account_id = jl.account_id
+      WHERE jl.organization_id = ${scope.organizationId}
+        AND jl.company_id = ${scope.companyId}
+        AND ${COUNTED}
+        AND je.posting_date BETWEEN ${query.from} AND ${query.to}
+      ORDER BY a.account_code, je.posting_date, je.journal_number, jl.line_number, jl.id
+    `.execute(trx);
+
+    const byAccount = new Map<string, LedgerLine[]>();
+    for (const row of lineRows) {
+      const list = byAccount.get(row.account_id) ?? [];
+      list.push({
+        lineId: row.line_id,
+        journalId: row.journal_id,
+        journalNumber: row.journal_number,
+        postingDate: row.posting_date,
+        transactionDate: row.transaction_date,
+        status: row.status,
+        reference: row.reference,
+        description: row.description,
+        memo: row.memo,
+        sourceType: row.source_type,
+        sourceId: row.source_id,
+        sourceEvent: row.source_event,
+        debit: row.debit,
+        credit: row.credit,
+        runningBalance: row.running,
+        cursor: encodeCursor({
+          postingDate: row.posting_date,
+          journalNumber: row.journal_number,
+          lineNumber: row.line_number,
+          lineId: row.line_id,
+        }),
+      });
+      byAccount.set(row.account_id, list);
+    }
+
+    const noSums = { opening: '0', debit: '0', credit: '0', n: '0' };
+    const grouped: GroupedLedgerAccount[] = [];
+    for (const account of accounts) {
+      const sum = sumOf.get(account.id) ?? noSums;
+      const lines = byAccount.get(account.id) ?? [];
+
+      /*
+       * An account with no activity and no opening balance is omitted unless
+       * asked for. A bound ledger that lists every unused account in the chart
+       * buries the ones that were actually posted to.
+       */
+      const dormant = lines.length === 0 && !/[1-9]/.test(sum.opening);
+      if (dormant && !includeZero) continue;
+
+      const movement = await scaledDifference(trx, sum.debit, sum.credit, decimals);
+      const closing = await scaledSum(trx, sum.opening, movement, decimals);
+
+      grouped.push({
+        accountId: account.id,
+        accountCode: account.account_code,
+        accountName: account.account_name,
+        accountType: account.account_type,
+        normalBalance: account.normal_balance,
+        openingBalance: sum.opening,
+        totals: {
+          debit: sum.debit,
+          credit: sum.credit,
+          movement,
+          closingBalance: closing,
+          lineCount: Number(sum.n),
+        },
+        lines,
+      });
+    }
+
+    const { rows: stamp } = await sql<{ at: string }>`SELECT now()::text AS at`.execute(trx);
+
+    return {
+      snapshot: { at: stamp[0]!.at, currency, decimals },
+      parameters: { from: query.from, to: query.to, includeZero },
+      accounts: grouped,
+      totals: { accountCount: grouped.length, lineCount },
+      complete: true as const,
+    };
+  });
 }

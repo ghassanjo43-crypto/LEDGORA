@@ -103,6 +103,40 @@ export interface AccountAmount {
   rollup: string;
 }
 
+/**
+ * One posting account's ledger summary, computed by PostgreSQL.
+ *
+ * These are the figures the multi-account ledger shows on a COLLAPSED row, and
+ * they are here — in the bundle — for a specific reason: the alternative is the
+ * browser summing the lines it happens to hold, which makes an opening balance
+ * a function of what has been loaded. They are defined identically to
+ * `ledgerService`, over the same scoping and the same `posted`/`reversed`
+ * filter, so a collapsed row and the detailed ledger opened from it cannot
+ * disagree.
+ *
+ * `periodDebit` and `periodCredit` are GROSS turnover, not the netted pair a
+ * trial balance shows: a ledger reports both sides of what happened, and its
+ * columns are what these must tie to.
+ */
+export interface AccountLedgerSummary {
+  accountId: string;
+  accountCode: string;
+  accountName: string;
+  accountType: string;
+  /** debit | credit — which way this account's balance is read. */
+  normalBalance: string;
+  /** Net of everything posted strictly BEFORE the period. */
+  openingBalance: string;
+  periodDebit: string;
+  periodCredit: string;
+  /** `periodDebit - periodCredit`. */
+  netMovement: string;
+  /** `openingBalance + netMovement`. */
+  closingBalance: string;
+  /** Lines in the period, for the row badge. */
+  lineCount: number;
+}
+
 export interface TrialBalanceRow extends AccountAmount {
   debit: string;
   credit: string;
@@ -114,6 +148,8 @@ export interface ReportBundle {
   snapshot: { at: string; currency: string; decimals: number };
   parameters: ReportParameters;
   trialBalance: { rows: TrialBalanceRow[]; totalDebit: string; totalCredit: string };
+  /** Every POSTING account, ordered by account code. See the interface above. */
+  accountLedgers: AccountLedgerSummary[];
   incomeStatement: { rows: AccountAmount[]; income: string; expense: string; netIncome: string };
   balanceSheet: {
     rows: AccountAmount[];
@@ -161,10 +197,14 @@ interface RawAmount {
   account_id: string;
   debit: string;
   credit: string;
+  /** How many lines made up these sums, for the ledger's row badge. */
+  line_count: string;
 }
 
 /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
 type Trx = any;
+
+interface AccountSums { debit: string; credit: string; lineCount: number }
 
 /** Per-account debit and credit sums over a date filter, in numeric. */
 async function sumLines(
@@ -173,18 +213,21 @@ async function sumLines(
   companyId: string,
   dateFilter: ReturnType<typeof sql>,
   decimals: number,
-): Promise<Map<string, { debit: string; credit: string }>> {
+): Promise<Map<string, AccountSums>> {
   const { rows } = await sql<RawAmount>`
     SELECT jl.account_id,
            ROUND(COALESCE(SUM(jl.debit_functional), 0), ${sql.lit(decimals)})::text  AS debit,
-           ROUND(COALESCE(SUM(jl.credit_functional), 0), ${sql.lit(decimals)})::text AS credit
+           ROUND(COALESCE(SUM(jl.credit_functional), 0), ${sql.lit(decimals)})::text AS credit,
+           COUNT(*)::text AS line_count
     ${scopedLines(organizationId, companyId)}
     ${dateFilter}
     GROUP BY jl.account_id
   `.execute(trx);
 
-  const map = new Map<string, { debit: string; credit: string }>();
-  for (const row of rows) map.set(row.account_id, { debit: row.debit, credit: row.credit });
+  const map = new Map<string, AccountSums>();
+  for (const row of rows) {
+    map.set(row.account_id, { debit: row.debit, credit: row.credit, lineCount: Number(row.line_count) });
+  }
   return map;
 }
 
@@ -194,6 +237,7 @@ interface AccountRow {
   account_name: string;
   account_type: string;
   account_subtype: string | null;
+  normal_balance: string;
   cash_classification: string | null;
   presentation_type: string | null;
   ifrs_statement: string | null;
@@ -333,6 +377,7 @@ export async function buildReportBundle(
         .select([
           'id', 'account_code', 'account_name', 'account_type',
           'account_subtype', 'cash_classification', 'parent_account_id', 'is_postable',
+          'normal_balance',
           'presentation_type', 'ifrs_statement', 'ifrs_category', 'ifrs_subcategory',
           'cash_flow_category',
         ])
@@ -379,9 +424,24 @@ async function buildSection(
     sql`AND je.posting_date >= ${window.from} AND je.posting_date <= ${window.to}`,
     decimals,
   );
+  /*
+   * Everything before the period: every account's opening balance, and the cash
+   * statement's.
+   *
+   * Deriving it by subtracting the period from a cumulative figure is only right
+   * when the as-of date happens to equal the period end. A balance sheet struck
+   * later than the period — which the parameters permit — would then report an
+   * opening balance that never existed. One more aggregate is cheaper than that
+   * class of bug.
+   */
+  const beforePeriod = await sumLines(
+    trx, organizationId, companyId,
+    sql`AND je.posting_date < ${window.from}`,
+    decimals,
+  );
 
-  const zero = { debit: '0', credit: '0' };
-  const netOf = (map: Map<string, { debit: string; credit: string }>, id: string): bigint => {
+  const zero: AccountSums = { debit: '0', credit: '0', lineCount: 0 };
+  const netOf = (map: Map<string, AccountSums>, id: string): bigint => {
     const value = map.get(id) ?? zero;
     return toScaled(value.debit, decimals) - toScaled(value.credit, decimals);
   };
@@ -454,6 +514,48 @@ async function buildSection(
       + 'until that is investigated.',
     );
   }
+
+  /* ── Ledger summaries, one per POSTING account ─────────────────────────── */
+
+  /*
+   * Defined to tie to `ledgerService` exactly: opening is the net of everything
+   * before the period, the period columns are GROSS turnover, movement is their
+   * difference and closing is opening plus movement. Same scoping, same
+   * `posted`/`reversed` filter, same window boundaries.
+   *
+   * Only postable accounts appear. A parent carries no lines of its own, and
+   * listing one beside its children in a ledger would show the same money
+   * twice.
+   *
+   * Ordered by account code, because `accounts` was selected that way — the
+   * order is the server's, so two readers of the same books see the same
+   * sequence.
+   */
+  const accountLedgers: AccountLedgerSummary[] = accounts
+    .filter((account) => account.is_postable)
+    .map((account) => {
+      const before = beforePeriod.get(account.id) ?? zero;
+      const inPeriod = period.get(account.id) ?? zero;
+
+      const opening = toScaled(before.debit, decimals) - toScaled(before.credit, decimals);
+      const debit = toScaled(inPeriod.debit, decimals);
+      const credit = toScaled(inPeriod.credit, decimals);
+      const movement = debit - credit;
+
+      return {
+        accountId: account.id,
+        accountCode: account.account_code,
+        accountName: account.account_name,
+        accountType: account.account_type,
+        normalBalance: account.normal_balance,
+        openingBalance: toDecimal(opening, decimals),
+        periodDebit: toDecimal(debit, decimals),
+        periodCredit: toDecimal(credit, decimals),
+        netMovement: toDecimal(movement, decimals),
+        closingBalance: toDecimal(opening + movement, decimals),
+        lineCount: inPeriod.lineCount,
+      };
+    });
 
   /* ── Income statement ──────────────────────────────────────────────────── */
   const isIncome = (t: string) => t === 'income';
@@ -577,11 +679,6 @@ async function buildSection(
      * balance that never existed, and the movement would not tie to the
      * statement. One more aggregate is cheaper than that class of bug.
      */
-    const beforePeriod = await sumLines(
-      trx, organizationId, companyId,
-      sql`AND je.posting_date < ${window.from}`,
-      decimals,
-    );
     const opening = cashAccounts.reduce((sum, a) => sum + netOf(beforePeriod, a.id), 0n);
     const movement = cashAccounts.reduce((sum, a) => sum + (periodOwn.get(a.id) ?? 0n), 0n);
     cashFlow = {
@@ -594,6 +691,7 @@ async function buildSection(
   }
 
   return {
+    accountLedgers,
     trialBalance: {
       rows: trialRows,
       totalDebit: toDecimal(totalDebit, decimals),

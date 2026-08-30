@@ -6,6 +6,8 @@ import { useEntityStore } from '@/store/useEntityStore';
 import { useLedgerFocus } from '@/store/ledgerFocusStore';
 import { useCashFlowPreferences } from '@/store/cashFlowPreferencesStore';
 import { buildCashFlowStatement } from '@/lib/cashFlowCalculations';
+import { useReportBundle } from '@/services/books/useReportBundle';
+import { ServerReportFrame, ServerCashSummary } from '@/components/reports/ServerStatements';
 import { fiscalYearStartDate } from '@/lib/balanceSheetCalculations';
 import { escapeCsv } from '@/lib/csv';
 import { downloadFile, cn } from '@/lib/utils';
@@ -50,10 +52,26 @@ export function CashFlowStatementPage() {
 
   const comparativePeriod = comparativeStart && comparativeEnd ? { start: comparativeStart, end: comparativeEnd } : undefined;
 
+  /*
+   * The server's cash figures, for a durable subscriber.
+   *
+   * It answers with opening cash, closing cash and the movement between them,
+   * or says plainly that no cash accounts are configured. It does NOT return a
+   * classified operating/investing/financing statement, and this screen does not
+   * synthesise one: the local version decided an account was cash with a regular
+   * expression over its free-text subcategory, so renaming a subcategory changed
+   * the statement without anybody touching a figure.
+   */
+  const serverReport = useReportBundle({ asOf: periodEnd, from: periodStart, to: periodEnd });
+  const { serverBacked } = serverReport;
+
+  const localAccounts = serverBacked ? [] : accounts;
+  const localEntries = serverBacked ? [] : entries;
+
   const statement = useMemo(
-    () => buildCashFlowStatement(accounts, entries, { periodStart, periodEnd, comparativePeriod, entityId, base, policy: prefs.policy }),
+    () => buildCashFlowStatement(localAccounts, localEntries, { periodStart, periodEnd, comparativePeriod, entityId, base, policy: prefs.policy }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [accounts, entries, periodStart, periodEnd, comparativeStart, comparativeEnd, entityId, base, prefs.policy, generatedAt],
+    [localAccounts, localEntries, periodStart, periodEnd, comparativeStart, comparativeEnd, entityId, base, prefs.policy, generatedAt],
   );
 
   const entityName = entityId ? entities.find((e) => e.id === entityId)?.legalName ?? settings.companyName : settings.companyName;
@@ -130,6 +148,7 @@ export function CashFlowStatementPage() {
       </div>
 
       <div className="space-y-4">
+        {!serverBacked && (
         <CashReconciliationPanel
           netChangeInCash={statement.netChangeInCash}
           openingCash={statement.openingCash}
@@ -140,6 +159,7 @@ export function CashFlowStatementPage() {
           base={base}
           negativeFormat={prefs.negativeFormat}
         />
+        )}
 
         <CashFlowToolbar
           entityOptions={entityOptions}
@@ -169,9 +189,19 @@ export function CashFlowStatementPage() {
           </div>
         )}
 
-        <Card className="overflow-hidden">
-          <CashFlowTable statement={statement} detail={prefs.detail} negativeFormat={prefs.negativeFormat} onDrill={drill} />
-        </Card>
+        {serverBacked ? (
+          <Card className="overflow-hidden">
+            <div className="p-4">
+              <ServerReportFrame state={serverReport.state} error={serverReport.error} bundle={serverReport.bundle} onReload={serverReport.reload}>
+                {serverReport.bundle ? <ServerCashSummary bundle={serverReport.bundle} /> : null}
+              </ServerReportFrame>
+            </div>
+          </Card>
+        ) : (
+          <Card className="overflow-hidden">
+            <CashFlowTable statement={statement} detail={prefs.detail} negativeFormat={prefs.negativeFormat} onDrill={drill} />
+          </Card>
+        )}
       </div>
     </>
   );

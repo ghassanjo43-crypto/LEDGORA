@@ -16,6 +16,8 @@ import { IncomeStatementToolbar } from '@/components/income-statement/IncomeStat
 import { IncomeStatementTable } from '@/components/income-statement/IncomeStatementTable';
 import { IncomeStatementExceptions } from '@/components/income-statement/IncomeStatementExceptions';
 import { isAmount } from '@/components/income-statement/isFormat';
+import { useReportBundle } from '@/services/books/useReportBundle';
+import { ServerReportFrame, ServerIncomeStatement } from '@/components/reports/ServerStatements';
 
 function isoDate(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -46,13 +48,28 @@ export function IncomeStatementPage() {
   const [showExceptions, setShowExceptions] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
 
+  /* Read from the server for a durable subscriber; see `useReportBundle`. */
+  const report = useReportBundle({ asOf: period.to, from: period.from, to: period.to });
+  const { serverBacked } = report;
+
+  /*
+   * The cached chart and journal are withheld from the local calculators when
+   * the server owns the books. Not a fallback that happens to be hidden — the
+   * browser must not derive a profit figure it could then disagree about.
+   */
+  const localAccounts = serverBacked ? [] : accounts;
+  const localEntries = serverBacked ? [] : entries;
+
   const result = useMemo(
-    () => buildIncomeStatement(accounts, entries, period, base, { presentation: prefs.presentation, detail: prefs.detail, comparison: prefs.comparison, includeZero: prefs.includeZero }),
+    () => buildIncomeStatement(localAccounts, localEntries, period, base, { presentation: prefs.presentation, detail: prefs.detail, comparison: prefs.comparison, includeZero: prefs.includeZero }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [accounts, entries, period, base, prefs.presentation, prefs.detail, prefs.comparison, prefs.includeZero, refreshKey],
+    [localAccounts, localEntries, period, base, prefs.presentation, prefs.detail, prefs.comparison, prefs.includeZero, refreshKey],
   );
 
-  const reconciliation = useMemo(() => reconcileIncomeStatement(accounts, entries, period, base), [accounts, entries, period, base]);
+  const reconciliation = useMemo(
+    () => reconcileIncomeStatement(localAccounts, localEntries, period, base),
+    [localAccounts, localEntries, period, base],
+  );
   useEffect(() => {
     if (!reconciliation.ok) console.warn('[IncomeStatement] reconciliation failed:', reconciliation);
   }, [reconciliation]);
@@ -149,7 +166,9 @@ export function IncomeStatementPage() {
           </p>
         </div>
 
-        <MetricCards totals={result.totals} margins={result.margins} comparativeTotals={result.comparativeTotals} hasComparative={result.hasComparative} base={base} />
+        {!serverBacked && (
+          <MetricCards totals={result.totals} margins={result.margins} comparativeTotals={result.comparativeTotals} hasComparative={result.hasComparative} base={base} />
+        )}
 
         <IncomeStatementToolbar
           presentation={prefs.presentation}
@@ -168,8 +187,8 @@ export function IncomeStatementPage() {
           onNegativeFormat={prefs.setNegativeFormat}
         />
 
-        {/* Status strip */}
-        <div className="flex flex-wrap items-center gap-2 text-xs print:hidden">
+        {/* Status strip — local reconciliation only; the server states its own. */}
+        <div className={cn('flex flex-wrap items-center gap-2 text-xs print:hidden', serverBacked && 'hidden')}>
           {!reconciliation.ok && (
             <span className="inline-flex items-center gap-1 rounded-full bg-red-50 px-2.5 py-1 font-medium text-red-700 dark:bg-red-500/10 dark:text-red-300">
               <AlertTriangle className="h-3.5 w-3.5" /> Reconciliation difference {isAmount(reconciliation.difference)}
@@ -187,15 +206,23 @@ export function IncomeStatementPage() {
           )}
         </div>
 
-        <Card className="overflow-hidden">
-          <IncomeStatementTable
-            lines={result.lines}
-            hasComparative={result.hasComparative}
-            showPercent={prefs.showPercentOfRevenue}
-            negativeFormat={prefs.negativeFormat}
-            onDrill={drill}
-          />
-        </Card>
+        {serverBacked ? (
+          <Card className="overflow-hidden p-4">
+            <ServerReportFrame state={report.state} error={report.error} bundle={report.bundle} onReload={report.reload}>
+              {report.bundle ? <ServerIncomeStatement bundle={report.bundle} /> : null}
+            </ServerReportFrame>
+          </Card>
+        ) : (
+          <Card className="overflow-hidden">
+            <IncomeStatementTable
+              lines={result.lines}
+              hasComparative={result.hasComparative}
+              showPercent={prefs.showPercentOfRevenue}
+              negativeFormat={prefs.negativeFormat}
+              onDrill={drill}
+            />
+          </Card>
+        )}
       </div>
 
       {showExceptions && (

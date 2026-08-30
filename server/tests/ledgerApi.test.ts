@@ -36,6 +36,7 @@ let admin: SessionCookies;
 const PASSWORD = 'Copper-Lantern-64-Wm';
 const LEDGER = '/api/accounting/ledger';
 const EXPORT = '/api/accounting/ledger/export';
+const GROUPED = '/api/accounting/ledger/export/grouped';
 const RANGE = 'from=2026-01-01&to=2026-12-31';
 
 interface PermissionOverride {
@@ -290,5 +291,79 @@ describe('the ledger export endpoint', () => {
   it('rejects an unauthenticated export before any query', async () => {
     const response = await ctx.app.inject({ method: 'GET', url: `${EXPORT}?accountId=x&${RANGE}` });
     expect(response.statusCode).toBe(401);
+  });
+});
+
+/* ══ The bound ledger over HTTP ════════════════════════════════════════════ */
+
+describe('the grouped (bound ledger) export endpoint', () => {
+  it('returns every posting account in one answer, with one snapshot', async () => {
+    const acme = await books('Acme', days(4));
+
+    const response = await get(`${GROUPED}?${RANGE}`, acme.cookies);
+    expect(response.statusCode).toBe(200);
+
+    const body = response.json();
+    expect(body.complete).toBe(true);
+    /* One instant for the whole book, not one per account. */
+    expect(body.snapshot.at).toBeTruthy();
+    expect(body.accounts.length).toBeGreaterThan(0);
+
+    const cash = body.accounts.find((a: { accountCode: string }) => a.accountCode === '1000');
+    expect(cash.lines).toHaveLength(4);
+    /* Accounts arrive in code order, decided by the server. */
+    const codes = body.accounts.map((a: { accountCode: string }) => a.accountCode);
+    expect(codes).toEqual([...codes].sort());
+  });
+
+  it('REFUSES a caller who may view the ledger but not export it', async () => {
+    const organizationId = await tenant('Acme');
+    const reader = await member(organizationId, 'reader@acme.test', 'viewer',
+      [{ subject: 'general_ledger', action: 'export', effect: 'deny' }]);
+    const chart = await chartFor(organizationId, reader.userId, 'Reader');
+
+    /* Reading one account on screen: allowed. */
+    const viewed = await get(`${LEDGER}?accountId=${chart.cash}&${RANGE}`, reader.cookies);
+    expect(viewed.statusCode).toBe(200);
+
+    /* Carrying the WHOLE bound ledger away: a different act, and refused. */
+    const exported = await get(`${GROUPED}?${RANGE}`, reader.cookies);
+    expect(exported.statusCode).toBe(403);
+  });
+
+  it('rejects an unauthenticated caller before any query', async () => {
+    const response = await ctx.app.inject({ method: 'GET', url: `${GROUPED}?${RANGE}` });
+    expect(response.statusCode).toBe(401);
+  });
+
+  it('carries only the company in scope', async () => {
+    const acme = await books('Acme', days(3));
+    const globex = await books('Globex', days(2));
+
+    const mine = (await get(`${GROUPED}?${RANGE}`, acme.cookies)).json();
+    const theirs = (await get(`${GROUPED}?${RANGE}`, globex.cookies)).json();
+
+    const lineIdsOf = (body: { accounts: Array<{ lines: Array<{ lineId: string }> }> }) =>
+      body.accounts.flatMap((a) => a.lines.map((l) => l.lineId));
+
+    const mineIds = new Set(lineIdsOf(mine));
+    expect(lineIdsOf(theirs).some((id) => mineIds.has(id))).toBe(false);
+    expect(mine.totals.lineCount).toBe(6);
+    expect(theirs.totals.lineCount).toBe(4);
+  });
+
+  it('answers another tenant’s company reference as not found', async () => {
+    const acme = await books('Acme', days(1));
+    const globex = await books('Globex', days(1));
+
+    const response = await get(`${GROUPED}?${RANGE}`, acme.cookies, globex.company.clientReference);
+    expect(response.statusCode).toBe(404);
+  });
+
+  it('refuses a malformed period, and says what a ledger needs', async () => {
+    const acme = await books('Acme', []);
+    const response = await get(`${GROUPED}?from=not-a-date&to=2026-12-31`, acme.cookies);
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error.message).toMatch(/ledger/i);
   });
 });

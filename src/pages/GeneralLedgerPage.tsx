@@ -30,6 +30,12 @@ import { AccountSummaryCard } from '@/components/general-ledger/AccountSummaryCa
 import { LedgerTable } from '@/components/general-ledger/LedgerTable';
 import { MultiAccountLedger } from '@/components/general-ledger/MultiAccountLedger';
 import { LedgerDetailsPanel } from '@/components/general-ledger/LedgerDetailsPanel';
+import { useServerLedger } from '@/services/books/useServerLedger';
+import { ServerLedger } from '@/components/reports/ServerLedger';
+import { ServerMultiAccountLedger } from '@/components/reports/ServerMultiAccountLedger';
+import { ServerReportFrame } from '@/components/reports/ServerStatements';
+import { useReportBundle } from '@/services/books/useReportBundle';
+import { reportsApi } from '@/services/api/reportsApi';
 
 function isoDate(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -82,9 +88,28 @@ export function GeneralLedgerPage() {
 
   const account = accountId ? accounts.find((a) => a.id === accountId) : undefined;
 
+  /*
+   * A durable subscriber's ledger is READ from the server, page by page, with
+   * the opening balance and the period totals aggregated there over the whole
+   * range. Building it here from the cached journal would make the closing
+   * balance a function of how much the browser happened to have loaded.
+   */
+  const serverLedger = useServerLedger({ accountId, from: period.from, to: period.to });
+  const { serverBacked } = serverLedger;
+
+  /*
+   * Every posting account's opening balance, turnover and closing balance, in
+   * the SAME request the statements use. Listing the whole chart is therefore
+   * one request, and collapsing or expanding costs nothing extra.
+   */
+  const summaryBundle = useReportBundle({ asOf: period.to, from: period.from, to: period.to });
+
+  const localEntries = serverBacked ? [] : entries;
+
   const detailLedger = useMemo(
-    () => (account ? buildAccountLedger(account, entries, period, base, sort) : null),
-    [account, entries, period, base, sort, refreshKey],
+    () => (account && !serverBacked ? buildAccountLedger(account, localEntries, period, base, sort) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [account, serverBacked, localEntries, period, base, sort, refreshKey],
   );
   const detailFiltered = useMemo(
     () => (detailLedger ? filterLedgerLines(detailLedger.lines, { entityId, search, reference: '', journalNumber: '', project: '', costCenter: '' }) : []),
@@ -98,9 +123,9 @@ export function GeneralLedgerPage() {
     const filtered = q
       ? postingAccounts.filter((a) => `${a.code} ${a.name} ${a.ifrsCategory}`.toLowerCase().includes(q))
       : postingAccounts;
-    return groupLedgerLinesByAccount(filtered, entries, period, base, { includeZero, sort });
+    return groupLedgerLinesByAccount(filtered, localEntries, period, base, { includeZero, sort });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, postingAccounts, entries, period, base, includeZero, sort, search, refreshKey]);
+  }, [mode, postingAccounts, localEntries, period, base, includeZero, sort, search, refreshKey]);
 
   const openJournal = (entryId: string): void => {
     requestFocusEntry(entryId);
@@ -109,7 +134,67 @@ export function GeneralLedgerPage() {
   const detailAccount = focusedLine ? accounts.find((a) => a.id === focusedLine.accountId) : undefined;
 
   /* ── Export ── */
+
+  /**
+   * The bound ledger, from ONE server operation.
+   *
+   * Not a loop over accounts: that is a request per account, each with its own
+   * snapshot, assembling a file whose accounts were never simultaneously true.
+   * The server reads them all in one read-only transaction and returns the
+   * instant it read them at, which the file records.
+   *
+   * Amounts are written through as the decimal strings the server produced.
+   * Parsing them to format them would put every figure in the audit file through
+   * a binary float on the way out.
+   */
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+
+  const exportBoundLedger = async (): Promise<void> => {
+    setExporting(true);
+    setExportError(null);
+    try {
+      const book = await reportsApi.groupedExport({
+        from: period.from, to: period.to, includeZero,
+      });
+      const rows: string[][] = [
+        [settings.companyName],
+        ['General Ledger (server figures)'],
+        [`Period: ${book.parameters.from} to ${book.parameters.to}`,
+          `Currency: ${book.snapshot.currency}`,
+          `Snapshot: ${book.snapshot.at}`,
+          `Accounts: ${book.totals.accountCount}`,
+          `Lines: ${book.totals.lineCount}`],
+        [],
+      ];
+      for (const account of book.accounts) {
+        rows.push([`${account.accountCode} — ${account.accountName}`]);
+        rows.push(['Date', 'Journal No.', 'Reference', 'Description', 'Debit', 'Credit', 'Balance']);
+        rows.push(['', '', '', 'Opening balance', '', '', account.openingBalance]);
+        for (const line of account.lines) {
+          rows.push([
+            line.postingDate, line.journalNumber, line.reference,
+            line.memo || line.description, line.debit, line.credit, line.runningBalance,
+          ]);
+        }
+        rows.push(['', '', '', 'Closing balance',
+          account.totals.debit, account.totals.credit, account.totals.closingBalance]);
+        rows.push([]);
+      }
+      const csv = rows.map((r) => r.map((c) => escapeCsv(c)).join(',')).join('\r\n');
+      downloadFile(`general-ledger-${book.parameters.from}-to-${book.parameters.to}.csv`, csv, 'text/csv');
+    } catch (cause) {
+      /* The server's own words. A refusal names the measured line count and asks
+       * for a shorter period; replacing it with "export failed" would hide the
+       * one number that tells the reader what to do next. */
+      setExportError(cause instanceof Error ? cause.message : 'Could not export this ledger.');
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const exportCsv = (): void => {
+    if (serverBacked) { void exportBoundLedger(); return; }
     const rows: string[][] = [];
     rows.push([settings.companyName]);
     rows.push([`General Ledger${account ? ` — ${account.code} ${account.name}` : ''}`]);
@@ -129,6 +214,7 @@ export function GeneralLedgerPage() {
     downloadFile(`general-ledger-${isoDate(new Date())}.csv`, csv, 'text/csv');
   };
   const exportJson = (): void => {
+    if (serverBacked) { void exportBoundLedger(); return; }
     const payload = {
       company: settings.companyName,
       report: 'General Ledger',
@@ -217,15 +303,45 @@ export function GeneralLedgerPage() {
           )}
           {mode === 'multi' && (
             <div className="ml-auto flex gap-1">
-              <Button variant="ghost" size="sm" onClick={() => setExpanded(new Set(multiLedgers.map((l) => l.account.id)))}><ChevronsUpDown className="h-4 w-4" /> Expand all</Button>
+              {/*
+                * No "Expand all" on server books, deliberately.
+                *
+                * Locally it was free: every account's lines were already in
+                * memory, so it only unhid tables. Against the server the same
+                * button would issue one request per account — hundreds on a real
+                * chart — and what a reader wants from it is the whole book,
+                * which the export delivers in ONE server operation.
+                */}
+              {!serverBacked && (
+                <Button variant="ghost" size="sm" onClick={() => setExpanded(new Set(multiLedgers.map((l) => l.account.id)))}><ChevronsUpDown className="h-4 w-4" /> Expand all</Button>
+              )}
+              {serverBacked && (
+                <Button variant="ghost" size="sm" onClick={exportBoundLedger} disabled={exporting}>
+                  <ChevronsUpDown className="h-4 w-4" /> {exporting ? 'Preparing…' : 'Export full ledger'}
+                </Button>
+              )}
               <Button variant="ghost" size="sm" onClick={() => setExpanded(new Set())}><ChevronsDownUp className="h-4 w-4" /> Collapse all</Button>
             </div>
           )}
         </div>
       </div>
 
+      {exportError && (
+        <div role="alert" className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-700/60 dark:bg-amber-900/20 dark:text-amber-200">
+          {exportError}
+        </div>
+      )}
+
       {/* Content */}
-      {mode === 'detail' ? (
+      {mode === 'detail' && serverBacked ? (
+        !accountId ? (
+          <Card><CardBody><EmptyState icon={ListTree} title="Select an account" description="Choose a posting account above to view its ledger, opening balance and running balances." /></CardBody></Card>
+        ) : (
+          <Card className="overflow-hidden">
+            <ServerLedger ledger={serverLedger} />
+          </Card>
+        )
+      ) : mode === 'detail' ? (
         !detailLedger ? (
           <Card><CardBody><EmptyState icon={ListTree} title="Select an account" description="Choose a posting account above to view its ledger, opening balance and running balances." /></CardBody></Card>
         ) : (
@@ -248,6 +364,30 @@ export function GeneralLedgerPage() {
             </Card>
           </div>
         )
+      ) : serverBacked ? (
+        <ServerReportFrame
+          state={summaryBundle.state}
+          error={summaryBundle.error}
+          bundle={summaryBundle.bundle}
+          onReload={summaryBundle.reload}
+        >
+          {summaryBundle.bundle ? (
+            <ServerMultiAccountLedger
+              summaries={summaryBundle.bundle.accountLedgers}
+              decimals={summaryBundle.bundle.snapshot.decimals}
+              period={period}
+              search={search}
+              includeZero={includeZero}
+              sort={sort}
+              expanded={expanded}
+              onToggle={(id) => setExpanded((prev) => {
+                const next = new Set(prev);
+                if (next.has(id)) next.delete(id); else next.add(id);
+                return next;
+              })}
+            />
+          ) : null}
+        </ServerReportFrame>
       ) : multiLedgers.length === 0 ? (
         <Card><CardBody><EmptyState icon={ListTree} title="No account activity" description="No posting accounts have transactions in the selected period. Enable “Include zero-balance” to list all." /></CardBody></Card>
       ) : (
