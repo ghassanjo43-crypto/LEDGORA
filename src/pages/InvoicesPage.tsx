@@ -4,7 +4,6 @@ import type { Invoice, InvoiceStatus } from '@/types/invoice';
 import { useStore } from '@/store/useStore';
 import { useEntityStore } from '@/store/useEntityStore';
 import { useInvoiceStore } from '@/store/invoiceStore';
-import { useInvoiceBackendSync } from '@/services/invoices/useInvoiceBackendSync';
 import { useCreditNoteStore } from '@/store/creditNoteStore';
 import { useCreditNoteEditor } from '@/store/creditNoteEditorStore';
 import { useReceiptStore } from '@/store/receiptStore';
@@ -42,13 +41,12 @@ export function InvoicesPage() {
   const setActiveView = useStore((s) => s.setActiveView);
   const entities = useEntityStore((s) => s.entities);
   /*
-   * Point the store at this company's actual backend before anything reads it.
-   * For a company still on browser storage this is a no-op; for a migrated one
-   * it loads from the API. Either way the rest of this page is unchanged — the
-   * whole purpose of hydrating the store rather than branching per screen.
+   * Nothing is hydrated from here any more. On server books the invoices are
+   * loaded by `hydrateBooks`, alongside the chart and the customers, and
+   * cleared by `enterCompanyScope` — so this page reads the store and stays
+   * unaware of which backend filled it, which is the whole point of hydrating
+   * a store rather than branching per screen.
    */
-  useInvoiceBackendSync();
-
   const invoices = useInvoiceStore((s) => s.invoices);
   const createDraft = useInvoiceStore((s) => s.createDraft);
   const syncing = useInvoiceStore((s) => s.syncing);

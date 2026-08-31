@@ -86,10 +86,27 @@ async function postedLines(organizationId: string, journalEntryId: string) {
   }));
 }
 
-/** An ISSUED invoice for 116 (100 net + 16 tax), with every account it used. */
+/**
+ * An ISSUED invoice for 116, with every account it used.
+ *
+ * Formerly 100 net plus 16 tax. Tax is refused inside the zero-tax boundary and
+ * was never what this file is about — receipts settle a balance whatever made
+ * it — so the same 116 is raised as a single net line and every expectation
+ * below is unchanged.
+ */
 async function issued(name: string) {
   const { user, organizationId } = await tenantUser(name);
   const receivable = await account(user, '1200', 'Trade receivables', 'asset');
+  /* Issuing derives the debit account from the customer, not the request. */
+  await ctx.db.insertInto('business_party_customer_profiles').values({
+    organization_id: organizationId,
+    company_id: (await ctx.db.selectFrom('companies').select('id')
+      .where('organization_id', '=', organizationId).executeTakeFirstOrThrow()).id,
+    party_id: customerId,
+    default_receivable_account_id: receivable,
+  } as never).onConflict((oc) => oc
+    .columns(['organization_id', 'company_id', 'party_id'])
+    .doUpdateSet({ default_receivable_account_id: receivable })).execute();
   const sales = await account(user, '4000', 'Sales', 'income');
   const taxPayable = await account(user, '2300', 'Sales tax payable', 'liability');
   const bank = await account(user, '1000', 'Bank', 'asset');
@@ -98,13 +115,12 @@ async function issued(name: string) {
     issuingEntityId: '11111111-1111-1111-1111-111111111111',
     customerId,
     issueDate: '2026-03-01', dueDate: '2026-03-31',
-    lines: [{ accountId: sales, description: 'Consulting', quantity: '1', unitPrice: '100.000', taxAmount: '16.000', taxRate: '16' }],
+    lines: [{ accountId: sales, description: 'Consulting', quantity: '1', unitPrice: '116.000' }],
   });
   expect(created.statusCode, created.body).toBe(201);
 
   const response = await call('POST', `/api/invoices/${created.json().invoice.id}/issue`, user, {
     expectedVersion: created.json().invoice.version,
-    receivableAccountId: receivable, taxAccountId: taxPayable,
   });
   expect(response.statusCode, response.body).toBe(200);
   return { user, organizationId, invoice: response.json().invoice, receivable, sales, taxPayable, bank };
@@ -255,12 +271,25 @@ describe('reversing a receipt', () => {
   });
 });
 
-describe('additional charges', () => {
-  it('adds them to the grand total and credits them to their own account', async () => {
-    const { user, organizationId } = await tenantUser('Oscar');
-    const receivable = await account(user, '1200', 'Trade receivables', 'asset');
+describe('additional charges, while they have no controlled account', () => {
+  /*
+   * ══ What this block used to assert ═════════════════════════════════════════
+   *
+   * Charges were once dropped on the floor, so a migrated invoice's total
+   * silently disagreed with the document the customer already held. The tests
+   * here proved the fix: the charge reaches the total (107.500 on a 100 sale),
+   * the receivable is debited the full amount, and the charge is credited to
+   * its own account rather than smuggled into revenue.
+   *
+   * The server has no CONTROLLED account for charges — nothing in company
+   * settings says where delivery or handling posts — so the caller used to name
+   * one, which let a request decide where a sale landed. Rather than keep that,
+   * charges are refused until the account model exists, and the reasoning above
+   * is what a later slice has to restore.
+   */
+  it('is REFUSED, rather than posting to an account the caller named', async () => {
+    const { user } = await tenantUser('Oscar');
     const sales = await account(user, '4000', 'Sales', 'income');
-    const delivery = await account(user, '4100', 'Delivery income', 'income');
 
     const created = await call('POST', '/api/invoices', user, {
       issuingEntityId: '11111111-1111-1111-1111-111111111111',
@@ -269,43 +298,9 @@ describe('additional charges', () => {
       additionalChargesTotal: '7.500',
       lines: [{ accountId: sales, quantity: '1', unitPrice: '100.000' }],
     });
-    expect(created.statusCode, created.body).toBe(201);
-    /*
-     * These were previously dropped on the floor, so a migrated invoice's total
-     * silently disagreed with the document the customer already holds.
-     */
-    expect(created.json().invoice).toMatchObject({
-      additionalChargesTotal: '7.500', grandTotal: '107.500',
-    });
 
-    const response = await call('POST', `/api/invoices/${created.json().invoice.id}/issue`, user, {
-      expectedVersion: created.json().invoice.version,
-      receivableAccountId: receivable, chargesAccountId: delivery,
-    });
-    expect(response.statusCode, response.body).toBe(200);
-
-    const lines = await postedLines(organizationId, response.json().invoice.journalEntryId);
-    expect(lines.find((l) => l.accountId === receivable)!.debit).toBe(107.5);
-    expect(lines.find((l) => l.accountId === delivery)!.credit).toBe(7.5);
-  });
-
-  it('refuses to post charges with nowhere to credit them', async () => {
-    const { user } = await tenantUser('Papa');
-    const receivable = await account(user, '1200', 'Trade receivables', 'asset');
-    const sales = await account(user, '4000', 'Sales', 'income');
-    const created = await call('POST', '/api/invoices', user, {
-      issuingEntityId: '11111111-1111-1111-1111-111111111111',
-      customerId,
-      issueDate: '2026-03-01', dueDate: '2026-03-31',
-      additionalChargesTotal: '7.500',
-      lines: [{ accountId: sales, quantity: '1', unitPrice: '100.000' }],
-    });
-    const response = await call('POST', `/api/invoices/${created.json().invoice.id}/issue`, user, {
-      expectedVersion: created.json().invoice.version, receivableAccountId: receivable,
-    });
-    // Without a credit account the entry is out of balance by exactly the charges.
-    expect(response.statusCode, response.body).toBe(400);
-    expect(response.json().error.message).toMatch(/additional charges/i);
+    expect(created.statusCode).toBe(400);
+    expect(created.json().error.message).toMatch(/no controlled account for them/i);
   });
 });
 

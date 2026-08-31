@@ -68,6 +68,29 @@ export function toDecimalString(amount: Amount): string {
 
 export const ZERO: Amount = 0n;
 
+/**
+ * Round to a CURRENCY's minor units, half away from zero.
+ *
+ * The internal scale is ten digits so a rate-converted amount has headroom, but
+ * a figure a customer pays has to exist in their currency: 89.9991 JOD is not a
+ * payable amount, and an invoice line carrying it can never be settled to zero.
+ * Percentage discounts are where this bites — 10% of 99.999 is 9.9999, and the
+ * remainder has to go somewhere.
+ *
+ * Half away from zero rather than banker's rounding, because that is what an
+ * invoice line does everywhere else in this product and a document that
+ * disagreed with the customer's own arithmetic by a fils invites a dispute
+ * nobody can settle.
+ */
+export function roundTo(amount: Amount, decimals: number): Amount {
+  if (decimals >= SCALE) return amount;
+  const factor = 10n ** BigInt(SCALE - decimals);
+  const negative = amount < 0n;
+  const abs = negative ? -amount : amount;
+  const rounded = ((abs + factor / 2n) / factor) * factor;
+  return negative ? -rounded : rounded;
+}
+
 export function add(a: Amount, b: Amount): Amount {
   return a + b;
 }

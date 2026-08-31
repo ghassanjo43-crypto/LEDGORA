@@ -157,7 +157,13 @@ export async function login(ctx: TestContext, email: string, password = TEST_PAS
 export async function seedCustomerParty(
   ctx: TestContext,
   organizationId: string,
-  options: { id?: string; code?: string; companyId?: string } = {},
+  options: {
+    id?: string;
+    code?: string;
+    companyId?: string;
+    /** The account an invoice to this customer debits. Required to issue. */
+    receivableAccountId?: string;
+  } = {},
 ): Promise<string> {
   const company = options.companyId
     ? { id: options.companyId }
@@ -194,5 +200,29 @@ export async function seedCustomerParty(
     .returning('id')
     .executeTakeFirst();
 
-  return row?.id ?? options.id ?? '';
+  const partyId = row?.id ?? options.id ?? '';
+
+  /*
+   * The customer PROFILE, which is where the receivable account lives.
+   *
+   * Issuing derives the account it debits from here rather than from the
+   * request, so a customer without one cannot be invoiced — which is the
+   * behaviour, not an oversight.
+   */
+  if (partyId && options.receivableAccountId) {
+    await ctx.db
+      .insertInto('business_party_customer_profiles')
+      .values({
+        organization_id: organizationId,
+        company_id: companyId,
+        party_id: partyId,
+        default_receivable_account_id: options.receivableAccountId,
+      } as never)
+      .onConflict((oc) => oc
+        .columns(['organization_id', 'company_id', 'party_id'])
+        .doUpdateSet({ default_receivable_account_id: options.receivableAccountId }))
+      .execute();
+  }
+
+  return partyId;
 }

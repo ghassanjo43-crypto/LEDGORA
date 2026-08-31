@@ -28,6 +28,7 @@
 import { useStore } from '@/store/useStore';
 import { useJournalStore } from '@/store/journalStore';
 import { clearCustomerCache } from '@/services/parties/customerDirectory';
+import { useInvoiceStore } from '@/store/invoiceStore';
 import { useCompanyStore } from '@/store/companyStore';
 import { clearMemoryWorkspace } from '@/lib/workspaceStorage';
 import { resetCompanySettings } from '@/services/companySettingsSync';
@@ -104,6 +105,14 @@ export function enterCompanyScope(reference: string | null): void {
    * behaviour that cannot leave the previous company's customers in a picker.
    */
   clearCustomerCache();
+
+  /*
+   * And the invoices, for the same reason: on server books they are a cache of
+   * the previous company's documents, and leaving them puts another company's
+   * receivables on screen for as long as the next fetch takes. A demo
+   * workspace's invoices are the originals, so they are left alone.
+   */
+  if (booksEngine() === 'server') useInvoiceStore.setState({ invoices: [] });
 
   /* Both are per-company verdicts, and both are stale for the same reason. */
   resetCompanySettings();

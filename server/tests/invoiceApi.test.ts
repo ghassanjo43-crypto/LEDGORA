@@ -63,10 +63,14 @@ async function account(user: SessionCookies, code: string, name: string, type: s
  * longer name an invented uuid — which is the point of it. Each tenant gets its
  * own, because a party belongs to exactly one set of books.
  */
-async function customer(user: SessionCookies): Promise<string> {
+async function customer(user: SessionCookies, receivableAccountId?: string): Promise<string> {
   const response = await call('POST', '/api/customers', user, {
     partyCode: `CUST-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
     legalName: 'Invoice Customer LLC',
+    /* The account an invoice to this customer debits. Issuing derives it from
+     * here rather than from the request, so a customer without one cannot be
+     * invoiced. */
+    ...(receivableAccountId ? { customer: { defaultReceivableAccountId: receivableAccountId } } : {}),
   });
   expect(response.statusCode, response.body).toBe(201);
   return response.json().customer.id;
@@ -78,7 +82,7 @@ async function draft(user: SessionCookies, overrides: Record<string, unknown> = 
   const sales = await account(user, '4000', 'Sales', 'income');
   const response = await call('POST', '/api/invoices', user, {
     issuingEntityId: '11111111-1111-1111-1111-111111111111',
-    customerId: await customer(user),
+    customerId: await customer(user, receivable),
     issueDate: '2026-03-01', dueDate: '2026-03-31',
     lines: [{ accountId: sales, description: 'Consulting', quantity: '1', unitPrice: '100.000' }],
     ...overrides,
@@ -196,10 +200,10 @@ describe('issuing', () => {
   it('posts to the ledger and links both directions', async () => {
     const org = await tenant('Hotel');
     const user = await member(org, 'admin', 'hotel@invoices.test');
-    const { invoice, receivable } = await draft(user);
+    const { invoice } = await draft(user);
 
     const issued = await call('POST', `/api/invoices/${invoice.id}/issue`, user, {
-      expectedVersion: invoice.version, receivableAccountId: receivable,
+      expectedVersion: invoice.version,
     });
     expect(issued.statusCode, issued.body).toBe(200);
     expect(issued.json().invoice.status).toBe('issued');
@@ -219,10 +223,10 @@ describe('issuing', () => {
   it('refuses a stale version rather than overwriting a concurrent change', async () => {
     const org = await tenant('India');
     const user = await member(org, 'admin', 'india@invoices.test');
-    const { invoice, receivable } = await draft(user);
+    const { invoice } = await draft(user);
 
     const response = await call('POST', `/api/invoices/${invoice.id}/issue`, user, {
-      expectedVersion: invoice.version + 5, receivableAccountId: receivable,
+      expectedVersion: invoice.version + 5,
     });
     expect(response.statusCode).toBe(409);
   });
@@ -230,15 +234,15 @@ describe('issuing', () => {
   it('will not issue the same invoice twice', async () => {
     const org = await tenant('Juliet');
     const user = await member(org, 'admin', 'juliet@invoices.test');
-    const { invoice, receivable } = await draft(user);
+    const { invoice } = await draft(user);
 
     const first = await call('POST', `/api/invoices/${invoice.id}/issue`, user, {
-      expectedVersion: invoice.version, receivableAccountId: receivable,
+      expectedVersion: invoice.version,
     });
     expect(first.statusCode).toBe(200);
 
     const again = await call('POST', `/api/invoices/${invoice.id}/issue`, user, {
-      expectedVersion: first.json().invoice.version, receivableAccountId: receivable,
+      expectedVersion: first.json().invoice.version,
     });
     expect(again.statusCode).toBe(409);
   });
@@ -248,9 +252,9 @@ describe('voiding', () => {
   it('reverses the ledger entry and keeps both documents', async () => {
     const org = await tenant('Kilo');
     const user = await member(org, 'admin', 'kilo@invoices.test');
-    const { invoice, receivable } = await draft(user);
+    const { invoice } = await draft(user);
     const issued = (await call('POST', `/api/invoices/${invoice.id}/issue`, user, {
-      expectedVersion: invoice.version, receivableAccountId: receivable,
+      expectedVersion: invoice.version,
     })).json().invoice;
 
     const voided = await call('POST', `/api/invoices/${invoice.id}/void`, user, {
@@ -267,9 +271,9 @@ describe('voiding', () => {
   it('requires a reason', async () => {
     const org = await tenant('Lima');
     const user = await member(org, 'admin', 'lima@invoices.test');
-    const { invoice, receivable } = await draft(user);
+    const { invoice } = await draft(user);
     const issued = (await call('POST', `/api/invoices/${invoice.id}/issue`, user, {
-      expectedVersion: invoice.version, receivableAccountId: receivable,
+      expectedVersion: invoice.version,
     })).json().invoice;
 
     const response = await call('POST', `/api/invoices/${invoice.id}/void`, user, {
@@ -281,9 +285,9 @@ describe('voiding', () => {
   it('refuses to delete an issued invoice — the number has been used', async () => {
     const org = await tenant('Mike');
     const user = await member(org, 'admin', 'mike@invoices.test');
-    const { invoice, receivable } = await draft(user);
+    const { invoice } = await draft(user);
     const issued = (await call('POST', `/api/invoices/${invoice.id}/issue`, user, {
-      expectedVersion: invoice.version, receivableAccountId: receivable,
+      expectedVersion: invoice.version,
     })).json().invoice;
 
     const response = await call('DELETE', `/api/invoices/${invoice.id}`, user, {
@@ -325,11 +329,11 @@ describe('tenant isolation and permissions', () => {
     const org = await tenant('Quebec');
     const owner = await member(org, 'admin', 'quebec@invoices.test');
     const author = await member(org, 'member', 'author@quebec.test');
-    const { invoice, receivable } = await draft(owner);
+    const { invoice } = await draft(owner);
 
     // Authoring is `create`/`edit`; issuing changes the LEDGER and needs `post`.
     const response = await call('POST', `/api/invoices/${invoice.id}/issue`, author, {
-      expectedVersion: invoice.version, receivableAccountId: receivable,
+      expectedVersion: invoice.version,
     });
     expect(response.statusCode).toBe(403);
   });

@@ -83,7 +83,7 @@ const draft = (over: Record<string, unknown> = {}) =>
   } as never);
 
 const issue = (id: string, version: number) =>
-  invoices.issueInvoice(ctx.db, actor, id, { expectedVersion: version }, chart.receivable);
+  invoices.issueInvoice(ctx.db, actor, id, { expectedVersion: version });
 
 const journalCount = async (): Promise<number> => {
   const { rows } = await sql<{ n: string }>`
@@ -102,7 +102,6 @@ beforeEach(async () => {
     userId: await person('issuer@issue.test'),
     name: 'Issuer',
   };
-  customerId = await seedCustomerParty(ctx, organizationId, { companyId: actor.companyId, code: 'ACME' });
   chart = {
     receivable: (await accounts.createAccount(ctx.db, actor, {
       accountCode: '1200', accountName: 'Trade receivables', accountType: 'asset',
@@ -111,6 +110,10 @@ beforeEach(async () => {
       accountCode: '4000', accountName: 'Sales', accountType: 'income',
     })).id,
   };
+  /* The receivable lives on the customer now, not in the issue request. */
+  customerId = await seedCustomerParty(ctx, organizationId, {
+    companyId: actor.companyId, code: 'ACME', receivableAccountId: chart.receivable,
+  });
 });
 afterEach(async () => { vi.restoreAllMocks(); await ctx.close(); });
 
@@ -215,13 +218,16 @@ describe('when posting fails', () => {
     }
   });
 
-  it('refuses an invalid receivable account without partial state', async () => {
-    const created = await draft();
+  it('refuses to issue when the customer has NO receivable account', async () => {
+    /* The account is derived from the customer, so a customer without one has
+     * nothing for the invoice to debit — refused, with the reason, and nothing
+     * written. */
+    const bare = await seedCustomerParty(ctx, actor.organizationId, {
+      companyId: actor.companyId, code: 'NORECV',
+    });
+    const created = await draft({ customerId: bare });
 
-    await expect(
-      invoices.issueInvoice(ctx.db, actor, created.id, { expectedVersion: created.version },
-        '00000000-0000-0000-0000-000000000000'),
-    ).rejects.toThrow();
+    await expect(issue(created.id, created.version)).rejects.toThrow(/no receivable account/i);
 
     const after = await invoices.getInvoice(ctx.db, actor, created.id);
     expect(after.status).toBe('draft');

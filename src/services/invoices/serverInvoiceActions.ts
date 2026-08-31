@@ -14,15 +14,16 @@
  * screen can show.
  *
  * ── What is deliberately NOT here ────────────────────────────────────────────
- * Anything that would need to guess. Issuing needs a receivable and, when tax
- * is due, a tax account; if the server's chart has neither, this reports that
- * rather than posting somewhere plausible. An invoice posted to the wrong
- * receivable reconciles to nothing.
+ * Account resolution. Issuing used to read the server's chart by CODE and hand
+ * the ids back to the server, which meant the browser chose where a sale
+ * posted. The receivable now comes from the customer's own profile, server
+ * side, and there is no tax or charges leg within the current boundary — so
+ * there is nothing left here to resolve, and no second answer to drift from
+ * the first. An invoice posted to the wrong receivable reconciles to nothing.
  */
 import type { Invoice } from '@/types/invoice';
 import { invoicesApi, type ServerInvoiceInput, type ServerInvoiceLineInput } from '@/services/api/invoicesApi';
 import { toBrowserInvoice, numberToDecimal } from './serverInvoiceMapping';
-import { resolveServerPostingAccounts } from './serverPostingAccounts';
 
 export interface InvoiceActionResult {
   ok: boolean;
@@ -146,44 +147,25 @@ export async function deleteDraft(ctx: ServerActionContext, id: string): Promise
 /**
  * Issue and post.
  *
- * The posting accounts are resolved from the SERVER's chart by code before the
- * call, so a missing receivable is reported as a missing account rather than as
- * a failed post.
+ * ── Why nothing is checked here first ────────────────────────────────────────
+ * This used to pre-flight the posting accounts and refuse tax and charges
+ * itself, with its own wording. Every one of those is now decided by the
+ * server: the receivable comes from the customer's profile, and a tax-bearing
+ * or charge-bearing invoice is refused at the boundary with a message that
+ * says why. Repeating the checks here would put a second, drifting answer in
+ * front of the authoritative one — and the browser's copy of a total is
+ * exactly the number that should not be deciding whether a post is allowed.
  */
 export async function issueInvoice(
   ctx: ServerActionContext,
   id: string,
-  options: { preferredReceivableCode?: string; chargesCode?: string } = {},
 ): Promise<InvoiceActionResult> {
   const existing = ctx.find(id);
   const version = existing && versionOf(existing);
   if (!existing || version === undefined) return { ok: false, error: STALE };
 
-  const resolved = await resolveServerPostingAccounts(options);
-  if (!resolved.accounts) return { ok: false, error: resolved.error };
-
-  if (existing.taxTotal > 0 && !resolved.accounts.taxAccountId) {
-    return {
-      ok: false,
-      error:
-        'This invoice carries tax but the server chart has no output-tax account (2270). '
-        + 'Add one before issuing — tax collected is a liability, not revenue.',
-    };
-  }
-  if ((existing.additionalChargesTotal ?? 0) > 0 && !resolved.accounts.chargesAccountId) {
-    return {
-      ok: false,
-      error: 'This invoice carries additional charges but no account was found to credit them to.',
-    };
-  }
-
   try {
-    const issued = await invoicesApi.issue(
-      id, version,
-      resolved.accounts.receivableAccountId,
-      resolved.accounts.taxAccountId,
-      resolved.accounts.chargesAccountId,
-    );
+    const issued = await invoicesApi.issue(id, version);
     ctx.upsert(toBrowserInvoice(issued));
     return { ok: true, id };
   } catch (cause) {

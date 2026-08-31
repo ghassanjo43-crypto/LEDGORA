@@ -32,6 +32,7 @@ import { beginHydration, isCurrentGeneration } from './booksScope';
 import { toAccount } from './accountMapping';
 import { toJournalEntry } from './journalMapping';
 import { loadCustomers } from '@/services/parties/customerDirectory';
+import { useInvoiceStore } from '@/store/invoiceStore';
 
 export type BooksLoadState = 'idle' | 'loading' | 'ready' | 'unavailable';
 
@@ -127,6 +128,15 @@ export async function hydrateBooks(): Promise<{ ok: boolean; error?: string }> {
      * accounts because a picker could not be filled.
      */
     void loadCustomers();
+
+    /*
+     * And the invoices, from the same books. Not awaited into the verdict for
+     * the same reason as the customers: a sales list that fails to load leaves
+     * the ledger perfectly usable and reports itself on the screen that needs
+     * it, whereas failing the whole hydration would blank a bookkeeper's
+     * accounts because a receivables list could not be filled.
+     */
+    void useInvoiceStore.getState().syncFromServer();
 
     setStatus({ state: 'ready', error: null });
     return { ok: true };

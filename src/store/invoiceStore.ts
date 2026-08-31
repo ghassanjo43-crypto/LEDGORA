@@ -40,7 +40,8 @@ import {
 import { roundToCompanyPrecision } from '@/lib/monetaryPrecision';
 import { invoicesApi } from '@/services/api/invoicesApi';
 import { toBrowserInvoice } from '@/services/invoices/serverInvoiceMapping';
-import { backendFor, type InvoiceBackend, type InvoiceBackendState } from '@/services/invoices/invoiceBackend';
+import { invoiceBackend, type InvoiceBackend } from '@/services/invoices/invoiceBackend';
+import { booksGeneration, isCurrentGeneration } from '@/services/books/booksScope';
 import * as serverActions from '@/services/invoices/serverInvoiceActions';
 
 const ACTOR = 'Finance Manager';
@@ -156,7 +157,8 @@ interface InvoiceState {
    * migrated company, and a merge would resurrect a locally-cached invoice that
    * was voided elsewhere.
    */
-  syncFromServer: (company: InvoiceBackendState | undefined) => Promise<void>;
+  /** Reload from the server when this workspace's books live there. */
+  syncFromServer: () => Promise<void>;
 
   getInvoice: (id: string) => Invoice | undefined;
   usedNumbers: () => Set<string>;
@@ -242,21 +244,29 @@ export const useInvoiceStore = create<InvoiceState>()(
       backend: 'browser',
       syncing: false,
 
-      syncFromServer: async (company) => {
-        const backend = backendFor(company);
+      syncFromServer: async () => {
+        const backend = invoiceBackend();
         if (backend !== 'server') {
           set({ backend: 'browser', syncing: false, syncError: undefined });
           return;
         }
+        /*
+         * The company can change at the await below. Applying a late answer
+         * would list one company's invoices under another company's name, which
+         * is how somebody chases a debt that belongs to different books.
+         */
+        const generation = booksGeneration();
         set({ syncing: true, syncError: undefined });
         try {
           const records = await invoicesApi.list();
+          if (!isCurrentGeneration(generation)) return;
           set({
             invoices: records.map(toBrowserInvoice),
             backend: 'server',
             syncing: false,
           });
         } catch (cause) {
+          if (!isCurrentGeneration(generation)) return;
           /*
            * The previously-held invoices are LEFT IN PLACE on failure. Emptying
            * the list would present "you have no invoices" as though it were a
@@ -422,9 +432,9 @@ export const useInvoiceStore = create<InvoiceState>()(
            * The browser path posts inventory movements before the revenue
            * journal so insufficient stock blocks the issue atomically; the
            * server has no equivalent yet. Rather than issue and silently leave
-           * stock overstated, `assessEligibility` refuses to migrate a company
-           * whose invoices carry inventory lines at all — so reaching this point
-           * with one means the invoice changed after the cutover.
+           * stock overstated, the server refuses a line that names a stock
+           * item at all — so an invoice carrying one never reaches issuing
+           * there, and this refusal is what the user sees instead.
            */
           const stocked = existing.lines.some((line) => line.inventoryItemId);
           if (stocked && inventoryEnabled()) {
@@ -435,14 +445,12 @@ export const useInvoiceStore = create<InvoiceState>()(
             };
           }
           /*
-           * The customer's default receivable is a BROWSER account id, and the
-           * server needs its own. The account CODE is the only identifier the
-           * two charts share, so it is what crosses the boundary.
+           * No receivable is sent. The browser's idea of the customer's default
+           * account is a BROWSER id whose code may or may not exist in the
+           * server's chart; the server reads the account from the customer's
+           * own profile, where S1 put it behind a real foreign key.
            */
-          const preferred = customerById(existing.customerId)?.defaultReceivableAccount;
-          return serverActions.issueInvoice(serverContext(set, get), id, {
-            preferredReceivableCode: preferred ? accountsMap().get(preferred)?.code : undefined,
-          });
+          return serverActions.issueInvoice(serverContext(set, get), id);
         }
 
         const templatesStore = useInvoiceTemplateStore.getState();

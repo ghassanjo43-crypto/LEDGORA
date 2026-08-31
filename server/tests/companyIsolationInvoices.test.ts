@@ -24,6 +24,8 @@ import * as invoices from '../src/services/invoicing/invoiceService.js';
 let ctx: TestContext;
 let organizationId: string;
 let northCustomer: string;
+let northChart: { receivable: string; sales: string };
+let southChart: { receivable: string; sales: string };
 let southCustomer: string;
 let north: AccountingActor;
 let south: AccountingActor;
@@ -79,8 +81,18 @@ beforeEach(async () => {
    * 031's composite foreign key enforces — so these two companies cannot name
    * the same customer, which is itself the isolation this file is about.
    */
-  northCustomer = await seedCustomerParty(ctx, organizationId, { companyId: north.companyId, code: 'NORTH-CUST' });
-  southCustomer = await seedCustomerParty(ctx, organizationId, { companyId: south.companyId, code: 'SOUTH-CUST' });
+  /*
+   * Each company's chart first, because the customer carries the receivable the
+   * invoice will debit — issuing derives it from there, not from the request.
+   */
+  northChart = await chart(north);
+  southChart = await chart(south);
+  northCustomer = await seedCustomerParty(ctx, organizationId, {
+    companyId: north.companyId, code: 'NORTH-CUST', receivableAccountId: northChart.receivable,
+  });
+  southCustomer = await seedCustomerParty(ctx, organizationId, {
+    companyId: south.companyId, code: 'SOUTH-CUST', receivableAccountId: southChart.receivable,
+  });
 });
 afterEach(async () => { await ctx.close(); });
 
@@ -96,7 +108,7 @@ async function chart(actor: AccountingActor) {
 
 /** A draft invoice in NORTH's books. */
 async function northsInvoice() {
-  const a = await chart(north);
+  const a = northChart;
   const draft = await invoices.createDraft(ctx.db, north, {
     issuingEntityId: '11111111-1111-1111-1111-111111111111',
     customerId: northCustomer,
@@ -136,7 +148,7 @@ describe('another company’s invoice', () => {
 describe('another company’s invoice, written to', () => {
   it('cannot be updated', async () => {
     const { draft } = await northsInvoice();
-    const b = await chart(south);
+    const b = southChart;
     await expect(invoices.updateDraft(ctx.db, south, draft.id, {
       issuingEntityId: '11111111-1111-1111-1111-111111111111',
       customerId: '33333333-3333-3333-3333-333333333333',
@@ -157,18 +169,16 @@ describe('another company’s invoice, written to', () => {
   });
 
   it('cannot be issued', async () => {
-    const { draft, chart: a } = await northsInvoice();
+    const { draft } = await northsInvoice();
     await expect(invoices.issueInvoice(
-      ctx.db, south, draft.id, { expectedVersion: draft.version }, a.receivable,
-    )).rejects.toMatchObject({ code: 'not_found' });
+      ctx.db, south, draft.id, { expectedVersion: draft.version })).rejects.toMatchObject({ code: 'not_found' });
     expect((await invoices.getInvoice(ctx.db, north, draft.id)).status).toBe('draft');
   });
 
   it('cannot be voided, and DISCLOSES NOTHING in the attempt', async () => {
-    const { draft, chart: a } = await northsInvoice();
+    const { draft } = await northsInvoice();
     const issued = await invoices.issueInvoice(
-      ctx.db, north, draft.id, { expectedVersion: draft.version }, a.receivable,
-    );
+      ctx.db, north, draft.id, { expectedVersion: draft.version });
 
     /*
      * The regression this file was written for. The pre-flight read ran before
@@ -188,10 +198,9 @@ describe('another company’s invoice, written to', () => {
   });
 
   it('does not reveal that a foreign invoice is ALREADY void', async () => {
-    const { draft, chart: a } = await northsInvoice();
+    const { draft } = await northsInvoice();
     const issued = await invoices.issueInvoice(
-      ctx.db, north, draft.id, { expectedVersion: draft.version }, a.receivable,
-    );
+      ctx.db, north, draft.id, { expectedVersion: draft.version });
     const voided = await invoices.voidInvoice(
       ctx.db, north, draft.id, { expectedVersion: issued.version, reason: 'Cancelled' },
     );
@@ -232,8 +241,8 @@ describe('another company’s invoice, written to', () => {
 
 describe('invoice numbering', () => {
   it('gives both companies the same first number', async () => {
-    const a = await chart(north);
-    const b = await chart(south);
+    const a = northChart;
+    const b = southChart;
 
     const issue = async (actor: AccountingActor, ch: { receivable: string; sales: string }) => {
       const draft = await invoices.createDraft(ctx.db, actor, {
@@ -243,8 +252,7 @@ describe('invoice numbering', () => {
         lines: [{ accountId: ch.sales, quantity: '1', unitPrice: '100.000' }],
       });
       return invoices.issueInvoice(
-        ctx.db, actor, draft.id, { expectedVersion: draft.version }, ch.receivable,
-      );
+        ctx.db, actor, draft.id, { expectedVersion: draft.version });
     };
 
     const first = await issue(north, a);

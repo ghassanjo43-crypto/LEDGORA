@@ -79,6 +79,17 @@ export interface InvoiceLineInput {
 
 export interface InvoiceInput {
   issuingEntityId: string;
+  /*
+   * Fields the client may SEND but never decides.
+   *
+   * They are typed here so they can be refused explicitly. Leaving them off the
+   * type would let them arrive, be read by nothing, and be discarded in
+   * silence — a client asking for a USD invoice would get a JOD one and never
+   * be told. Refusing is the honest answer; ignoring is not.
+   */
+  currency?: string;
+  status?: string;
+  invoiceNumber?: string;
   /**
    * Delivery, handling and the like, as a single total.
    *
@@ -379,6 +390,157 @@ interface ComputedLine {
   lineTotal: Money.Amount;
 }
 
+/* ══ The durable-invoice boundary ═════════════════════════════════════════ */
+
+/**
+ * What a durable sales invoice may contain, and what it may not — yet.
+ *
+ * ══ Everything here is REFUSED, never dropped ════════════════════════════════
+ *
+ * Each of these fields names a record the server cannot verify or an amount it
+ * cannot derive. The tempting alternative is to ignore them: accept the invoice
+ * and silently store nothing for the project, the tax, the warehouse. That is
+ * the worse failure by a wide margin — the user sees a document they believe
+ * carries a cost centre and a tax charge, the books carry neither, and nothing
+ * anywhere says so. A refusal is recoverable; a silently different invoice is
+ * discovered at an audit.
+ *
+ * ══ Tax, specifically ════════════════════════════════════════════════════════
+ *
+ * The product's tax model is per LINE and rich — ten categories including
+ * zero-rated, exempt, out-of-scope and reverse-charge, seven scopes, inclusive
+ * and exclusive methods, effective-dated rates, and a frozen snapshot per posted
+ * line. All of it is browser-resident. The server controls exactly two facts:
+ * whether the company is registered, and a default rate that nothing applies.
+ *
+ * So the server cannot answer "does this line attract tax, at what rate, under
+ * which category". It could apply the company default to everything — which
+ * taxes exempt supplies and zero-rated exports, a real filing error — or trust
+ * the rate the browser sent, which is an arbitrary client number wearing the
+ * costume of a tax code. Both are worse than refusing.
+ *
+ * A tax-bearing invoice is therefore REFUSED rather than quietly issued at zero.
+ * Converting it would understate output tax on a document the customer receives
+ * and the authority may clear. Server-authoritative tax is its own slice.
+ */
+const UNSUPPORTED_TAX =
+  'This invoice charges tax, and tax is not yet calculated on the server. '
+  + 'Server-authoritative tax codes, categories and rates are a later step; until then a '
+  + 'durable invoice must carry no tax. Nothing has been saved.';
+
+const UNSUPPORTED_CHARGES =
+  'Additional charges are not yet supported on server-held invoices: there is no controlled '
+  + 'account for them, so the entry could not say where they post. Nothing has been saved.';
+
+const UNSUPPORTED_INVENTORY =
+  'This invoice sells inventory items. Stock movements and cost of sales have not moved to the '
+  + 'server, so issuing here would sell stock without depleting it. Nothing has been saved.';
+
+/** One message per browser-resident dimension, naming the field. */
+const UNVERIFIABLE: Record<string, string> = {
+  projectId: 'projects',
+  costCenterId: 'cost centres',
+  salespersonId: 'salespeople',
+  templateId: 'invoice templates',
+};
+
+function refuseUnverifiable(field: string, value: unknown): void {
+  if (value === undefined || value === null || value === '') return;
+  const what = UNVERIFIABLE[field] ?? field;
+  throw errors.validation(
+    `This invoice references ${what}, which are still held in the browser and cannot be verified `
+    + 'by the server. A durable invoice may not name a record the books cannot check. '
+    + 'Nothing has been saved.',
+    { fieldErrors: { [field]: `Remove the ${what} reference to save this invoice.` } },
+  );
+}
+
+/**
+ * Refuse anything the server cannot stand behind.
+ *
+ * Runs before any write, so a refused invoice leaves nothing at all — no draft,
+ * no number, no line.
+ */
+function assertWithinBoundary(input: InvoiceInput): void {
+  /* ── Tax ─────────────────────────────────────────────────────────────── */
+  for (const [index, line] of (input.lines ?? []).entries()) {
+    const at = index + 1;
+    const bearsTax =
+      (line.taxCodeId !== undefined && line.taxCodeId !== null && line.taxCodeId !== '')
+      || (line.taxRate !== undefined && line.taxRate !== '' && /[1-9]/.test(line.taxRate))
+      || (line.taxAmount !== undefined && line.taxAmount !== '' && /[1-9]/.test(line.taxAmount));
+    if (bearsTax) {
+      throw errors.validation(UNSUPPORTED_TAX, {
+        fieldErrors: { [`lines.${at}.tax`]: 'Remove the tax from this line, or issue it from a demo workspace.' },
+      });
+    }
+
+    /*
+     * Inventory is refused by the SHAPE of the line, not by a flag the client
+     * sets. A line that names no item and no warehouse cannot move stock, so
+     * this is a property of what was sent rather than a claim about it.
+     */
+    if (line.itemId) {
+      throw errors.validation(UNSUPPORTED_INVENTORY, {
+        fieldErrors: { [`lines.${at}.itemId`]: 'Remove the stock item, or issue this invoice from a demo workspace.' },
+      });
+    }
+
+    refuseUnverifiable('projectId', line.projectId);
+    refuseUnverifiable('costCenterId', line.costCenterId);
+  }
+
+  /* ── Charges ─────────────────────────────────────────────────────────── */
+  if (input.additionalChargesTotal !== undefined
+      && input.additionalChargesTotal !== ''
+      && /[1-9]/.test(input.additionalChargesTotal)) {
+    throw errors.validation(UNSUPPORTED_CHARGES, {
+      fieldErrors: { additionalChargesTotal: 'Remove the additional charges to save this invoice.' },
+    });
+  }
+
+  /* ── Decided by the server, never by the caller ───────────────────────── */
+  if (input.status !== undefined) {
+    throw errors.validation(
+      'An invoice status is set by issuing or voiding it, not by asking for one. Nothing has been saved.',
+      { fieldErrors: { status: 'Remove the status from the request.' } },
+    );
+  }
+  if (input.invoiceNumber !== undefined) {
+    throw errors.validation(
+      'Invoice numbers are allocated by the server, in sequence, so two people cannot be given the '
+      + 'same one. Nothing has been saved.',
+      { fieldErrors: { invoiceNumber: 'Remove the invoice number from the request.' } },
+    );
+  }
+
+  /* ── Browser-resident dimensions ─────────────────────────────────────── */
+  refuseUnverifiable('projectId', input.projectId);
+  refuseUnverifiable('costCenterId', input.costCenterId);
+  refuseUnverifiable('salespersonId', input.salespersonId);
+  refuseUnverifiable('templateId', input.templateId);
+}
+
+/**
+ * The currency an invoice may be raised in.
+ *
+ * Only the company's functional currency. A foreign-currency invoice needs an
+ * exchange rate, and rates are browser-resident — so the server would be
+ * recording a converted figure it cannot justify. Refused rather than converted
+ * at 1.0, which would silently misstate the receivable.
+ */
+function assertFunctionalCurrency(requested: string | undefined, functional: string): void {
+  if (!requested) return;
+  if (requested.trim().toUpperCase() !== functional.toUpperCase()) {
+    throw errors.validation(
+      `This invoice is in ${requested.toUpperCase()}, but only ${functional} invoices can be held on the `
+      + 'server yet: exchange rates are still kept in the browser, so the server cannot justify a '
+      + 'converted amount. Nothing has been saved.',
+      { fieldErrors: { currency: `Raise this invoice in ${functional}.` } },
+    );
+  }
+}
+
 /**
  * Recompute every total from the lines.
  *
@@ -386,7 +548,11 @@ interface ComputedLine {
  * client that can supply the wrong one, and the figure on a tax document is not
  * a matter of opinion — least of all once an authority holds a copy of it.
  */
-function computeTotals(lines: InvoiceLineInput[], additionalCharges = '0'): {
+function computeTotals(
+  lines: InvoiceLineInput[],
+  additionalCharges = '0',
+  decimals = 2,
+): {
   computed: ComputedLine[];
   subtotal: Money.Amount;
   taxTotal: Money.Amount;
@@ -409,9 +575,25 @@ function computeTotals(lines: InvoiceLineInput[], additionalCharges = '0'): {
         : discount;
     if (discountAmount > gross) throw errors.validation(`Line ${at}: the discount exceeds the line value.`);
 
-    const lineSubtotal = gross - discountAmount;
-    const taxAmount = amount(line.taxAmount ?? '0', `line ${at} taxAmount`);
-    if (Money.isNegative(taxAmount)) throw errors.validation(`Line ${at}: tax cannot be negative.`);
+    /*
+     * Rounded to the CURRENCY, not left at the internal ten-digit scale.
+     *
+     * A percentage discount rarely lands on a minor unit — 10% of 99.999 is
+     * 9.9999 — and a line net of 89.9991 JOD is an amount no customer can pay
+     * and no receipt can clear to zero. The remainder is resolved here, once,
+     * rather than surfacing later as a balance that will not close.
+     */
+    const lineSubtotal = Money.roundTo(gross - discountAmount, decimals);
+
+    /*
+     * Zero, always — and not because the client sent zero.
+     *
+     * A tax-bearing line is refused at the boundary above, so reaching here
+     * means there is none. Reading `line.taxAmount` would make an untrusted
+     * client number the authority for the one figure the server most needs to
+     * own, which is precisely what the boundary exists to prevent.
+     */
+    const taxAmount = Money.ZERO;
 
     return { input: line, lineSubtotal, taxAmount, lineTotal: lineSubtotal + taxAmount };
   });
@@ -610,15 +792,21 @@ export async function createDraft(
   if (!input.issuingEntityId) throw errors.validation('An issuing entity is required.');
   if (!input.lines || input.lines.length === 0) throw errors.validation('An invoice needs at least one line.');
 
-  const { computed, subtotal, taxTotal, chargesTotal, grandTotal } =
-    computeTotals(input.lines, input.additionalChargesTotal);
+  /* Refused before any write, so a rejected invoice leaves nothing behind. */
+  assertWithinBoundary(input);
 
   return db.transaction().execute(async (trx) => {
     await assertCustomerSelectable(trx, actor, input.customerId);
     await assertAccountsArePostable(trx, actor, input.lines);
 
     const currency = await functionalCurrencyOf(trx, actor.organizationId);
+    assertFunctionalCurrency(input.currency, currency);
     const decimals = monetaryDecimalsFor(currency);
+
+    /* Computed here, where the currency's precision is known — rounding a line
+     * net needs to know what a minor unit is. */
+    const { computed, subtotal, taxTotal, chargesTotal, grandTotal } =
+      computeTotals(input.lines, input.additionalChargesTotal, decimals);
     const invoiceNumber = await allocateInvoiceNumber(trx, actor.organizationId, actor.companyId, input.issuingEntityId, input.issueDate);
 
     const created = await trx.insertInto('invoices').values({
@@ -666,8 +854,10 @@ export async function updateDraft(
 ): Promise<InvoiceRecord> {
   assertDates(input);
   if (!input.lines || input.lines.length === 0) throw errors.validation('An invoice needs at least one line.');
-  const { computed, subtotal, taxTotal, chargesTotal, grandTotal } =
-    computeTotals(input.lines, input.additionalChargesTotal);
+
+  /* The same boundary as creation: an edit cannot introduce tax, stock or a
+   * browser-only dimension that a create would have refused. */
+  assertWithinBoundary(input);
 
   return db.transaction().execute(async (trx) => {
     const current = await lockInvoice(trx, actor, id, options.expectedVersion);
@@ -677,8 +867,15 @@ export async function updateDraft(
       );
     }
 
+    /* The customer may be changed by an edit, so it is re-checked: still in
+     * these books, still holding the role, still not archived. */
+    if (input.customerId) await assertCustomerSelectable(trx, actor, input.customerId);
     await assertAccountsArePostable(trx, actor, input.lines);
     const decimals = monetaryDecimalsFor(current.transaction_currency);
+    assertFunctionalCurrency(input.currency, current.transaction_currency);
+
+    const { computed, subtotal, taxTotal, chargesTotal, grandTotal } =
+      computeTotals(input.lines, input.additionalChargesTotal, decimals);
 
     await trx.updateTable('invoices').set({
       customer_id: input.customerId,
@@ -756,6 +953,46 @@ export async function deleteDraft(
 }
 
 /**
+ * The account this invoice debits, decided by the server.
+ *
+ * ══ Why not from the request ═════════════════════════════════════════════════
+ *
+ * It used to arrive in the body: `receivableAccountId`, chosen by whatever
+ * screen happened to be calling. A caller who named a different account
+ * balanced their own entry while leaving the real receivable outstanding
+ * forever — and settlement, which credits whatever the invoice recorded, would
+ * then clear a balance nobody owed.
+ *
+ * S1 put the answer in the customer's own profile, with a real foreign key to
+ * `accounts` in the same books. So the server reads it rather than being told,
+ * and a customer with no receivable configured is refused with the reason
+ * instead of defaulting to something plausible.
+ */
+async function resolveReceivableAccount(
+  trx: Transaction<Database>,
+  actor: AccountingActor,
+  customerId: string,
+): Promise<string> {
+  const profile = await trx
+    .selectFrom('business_party_customer_profiles')
+    .select('default_receivable_account_id')
+    .where('organization_id', '=', actor.organizationId)
+    .where('company_id', '=', actor.companyId)
+    .where('party_id', '=', customerId)
+    .executeTakeFirst();
+
+  const accountId = profile?.default_receivable_account_id;
+  if (!accountId) {
+    throw errors.validation(
+      'This customer has no receivable account set, so there is nothing for the invoice to debit. '
+      + 'Set one on the customer record and try again.',
+      { fieldErrors: { customerId: 'Set a receivable account on the customer record.' } },
+    );
+  }
+  return accountId;
+}
+
+/**
  * Issue an invoice: one transaction, or nothing.
  *
  * ══ The defect this replaces ═════════════════════════════════════════════════
@@ -800,9 +1037,6 @@ export async function issueInvoice(
   actor: AccountingActor,
   id: string,
   options: MutationOptions,
-  receivableAccountId: string,
-  taxAccountId?: string,
-  chargesAccountId?: string,
 ): Promise<InvoiceRecord> {
   return db.transaction().execute(async (trx) => {
     const current = await lockInvoice(trx, actor, id, options.expectedVersion);
@@ -820,6 +1054,8 @@ export async function issueInvoice(
       throw errors.validation('An invoice needs at least one line before it can be issued.');
     }
 
+    const receivableAccountId = await resolveReceivableAccount(trx, actor, current.customer_id);
+
     const total = Money.toAmount(current.grand_total);
     const taxDue = Money.toAmount(current.tax_total);
 
@@ -832,10 +1068,13 @@ export async function issueInvoice(
      * subledger and the general ledger then disagree by exactly the tax, and the
      * tax collected on the authority's behalf is recorded as owed to nobody.
      */
-    if (!Money.isZero(taxDue) && !taxAccountId) {
-      throw errors.validation('This invoice carries tax, so a tax account is required to post it.', {
-        fieldErrors: { taxAccountId: 'Choose the liability account that holds tax collected.' },
-      });
+    if (!Money.isZero(taxDue)) {
+      /*
+       * Reachable only for a row written before the boundary existed. There is
+       * no controlled tax account to post it to and no authoritative rate
+       * behind it, so it is refused rather than posted somewhere plausible.
+       */
+      throw errors.validation(UNSUPPORTED_TAX);
     }
 
     /*
@@ -845,11 +1084,7 @@ export async function issueInvoice(
      * refuse, turning a missing account into an unexplained posting failure.
      */
     const charges = Money.toAmount(current.additional_charges_total);
-    if (!Money.isZero(charges) && !chargesAccountId) {
-      throw errors.validation('This invoice carries additional charges, so an account is required to post them.', {
-        fieldErrors: { chargesAccountId: 'Choose the income account that receives delivery or handling charges.' },
-      });
-    }
+    if (!Money.isZero(charges)) throw errors.validation(UNSUPPORTED_CHARGES);
 
     /*
      * Posted through the source-posting door, inside THIS transaction, so the
@@ -872,16 +1107,6 @@ export async function issueInvoice(
           projectId: line.project_id,
           costCenterId: line.cost_center_id,
         })),
-        ...(Money.isZero(taxDue)
-          ? []
-          : [{ accountId: taxAccountId!, credit: Money.toDecimalString(taxDue), memo: 'Tax' }]),
-        ...(Money.isZero(charges)
-          ? []
-          : [{
-              accountId: chargesAccountId!,
-              credit: Money.toDecimalString(charges),
-              memo: 'Additional charges',
-            }]),
       ],
     });
 
@@ -894,8 +1119,8 @@ export async function issueInvoice(
        * leaving this invoice's receivable outstanding forever.
        */
       receivable_account_id: receivableAccountId,
-      tax_account_id: taxAccountId ?? null,
-      additional_charges_account_id: chargesAccountId ?? null,
+      tax_account_id: null,
+      additional_charges_account_id: null,
       issued_at: new Date(),
       version: current.version + 1,
       updated_by: actor.userId,

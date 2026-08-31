@@ -126,65 +126,6 @@ export interface ServerInvoiceAuditEvent {
   actorName: string | null;
 }
 
-/** One browser invoice on its way into the database. Lines carry a CODE. */
-export interface ImportedInvoiceLine {
-  accountCode: string;
-  description?: string;
-  quantity: string;
-  unitPrice: string;
-  lineSubtotal: string;
-  lineTotal: string;
-  taxRate?: string;
-  taxAmount?: string;
-  unit?: string;
-  itemId?: string | null;
-  projectId?: string | null;
-  costCenterId?: string | null;
-}
-
-export interface ImportedPayment {
-  paidOn: string;
-  amount: string;
-  method?: string;
-  reference?: string;
-}
-
-export interface ImportedInvoice {
-  invoiceNumber: string;
-  status: ServerInvoiceStatus;
-  issuingEntityId: string;
-  customerId: string;
-  issueDate: string;
-  dueDate: string;
-  transactionCurrency?: string;
-  exchangeRate?: string;
-  subtotal: string;
-  discountTotal?: string;
-  taxTotal: string;
-  grandTotal: string;
-  amountPaid: string;
-  additionalChargesTotal?: string;
-  /** Receipts already recorded in the browser, migrated without re-posting. */
-  payments?: ImportedPayment[];
-  creditsApplied?: string;
-  notes?: string;
-  terms?: string;
-  paymentTerms?: string;
-  purchaseOrderReference?: string;
-  customerReference?: string;
-  voidReason?: string;
-  issuedAt?: string;
-  voidedAt?: string;
-  lines: ImportedInvoiceLine[];
-}
-
-export interface ImportOutcome {
-  imported: number;
-  skipped: number;
-  failures: { invoiceNumber: string; reason: string }[];
-  unmatchedAccounts: { invoiceNumber: string; accountCode: string }[];
-}
-
 export const invoicesApi = {
   list: async (query: { status?: ServerInvoiceStatus; customerId?: string } = {}): Promise<ServerInvoice[]> => {
     const search = new URLSearchParams();
@@ -220,19 +161,16 @@ export const invoicesApi = {
     await apiRequest<void>(`/api/invoices/${id}`, { method: 'DELETE', body: { expectedVersion } });
   },
 
-  issue: async (
-    id: string,
-    expectedVersion: number,
-    receivableAccountId: string,
-    taxAccountId?: string,
-    chargesAccountId?: string,
-  ): Promise<ServerInvoice> =>
-    (await api.post<{ invoice: ServerInvoice }>(`/api/invoices/${id}/issue`, {
-      expectedVersion,
-      receivableAccountId,
-      taxAccountId,
-      chargesAccountId,
-    })).invoice,
+  /*
+   * Issuing names no accounts.
+   *
+   * The receivable is read from the customer's own profile by the server, and
+   * within the current boundary there is no tax or charges leg to post. A
+   * caller that passed account ids was choosing where a sale landed — which is
+   * the server's decision, and the one settlement later relies on.
+   */
+  issue: async (id: string, expectedVersion: number): Promise<ServerInvoice> =>
+    (await api.post<{ invoice: ServerInvoice }>(`/api/invoices/${id}/issue`, { expectedVersion })).invoice,
 
   /*
    * Receipts. Both return the UPDATED INVOICE rather than the payment, because
@@ -257,11 +195,4 @@ export const invoicesApi = {
 
   void: async (id: string, expectedVersion: number, reason: string): Promise<ServerInvoice> =>
     (await api.post<{ invoice: ServerInvoice }>(`/api/invoices/${id}/void`, { expectedVersion, reason })).invoice,
-
-  /**
-   * The migration endpoint. Idempotent on (organization, invoice number), so an
-   * interrupted cutover is resumed by calling it again with the same payload.
-   */
-  import: async (invoices: ImportedInvoice[]): Promise<ImportOutcome> =>
-    (await api.post<{ outcome: ImportOutcome }>('/api/invoices/import', { invoices })).outcome,
 };

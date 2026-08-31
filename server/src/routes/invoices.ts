@@ -20,7 +20,6 @@ import { requireCompanyScope, companyOf } from '../guards/companyScope.js';
 import type { AccountingActor } from '../services/accounting/audit.js';
 import type { SalesInvoiceStatus } from '../db/schema.js';
 import * as invoices from '../services/invoicing/invoiceService.js';
-import * as imports from '../services/invoicing/invoiceImportService.js';
 import * as settlement from '../services/invoicing/invoiceSettlementService.js';
 
 /**
@@ -120,43 +119,20 @@ export async function invoiceRoutes(app: FastifyInstance): Promise<void> {
    * Issuing posts to the ledger, so it needs `post` rather than `edit` — the
    * same separation the general journal makes between authoring a draft and
    * making it permanent.
+   *
+   * The accounts are no longer the caller's to choose. The receivable comes
+   * from the customer's own profile, and there is no tax or charges leg inside
+   * the current boundary — a caller that named accounts was choosing where a
+   * sale posted, which is the server's decision to make and settlement's to
+   * rely on.
    */
   app.post('/api/invoices/:id/issue', { preHandler: onBooks(postInvoices) }, async (request, reply) => {
-    const body = (request.body ?? {}) as {
-      expectedVersion?: number;
-      receivableAccountId?: string;
-      taxAccountId?: string;
-      chargesAccountId?: string;
-    };
-    if (!body.receivableAccountId) {
-      throw errors.validation('A receivable account is required to post this invoice.', {
-        fieldErrors: { receivableAccountId: 'Choose the account this invoice debits.' },
-      });
-    }
+    const body = (request.body ?? {}) as { expectedVersion?: number };
     return reply.send({
       invoice: await invoices.issueInvoice(
         app.db, actorOf(request), idOf(request),
         { expectedVersion: expectedVersionOf(body) },
-        body.receivableAccountId,
-        body.taxAccountId,
-        body.chargesAccountId,
       ),
-    });
-  });
-
-  /*
-   * Migration from browser storage.
-   *
-   * Deliberately its own endpoint rather than a flag on create: a migrated
-   * invoice keeps its number, keeps its status and posts nothing to the ledger,
-   * and none of those are behaviours the ordinary create path should be able to
-   * be talked into. Gated on `create` — it writes invoices — and idempotent, so
-   * an interrupted migration is resumed by running it again.
-   */
-  app.post('/api/invoices/import', { preHandler: onBooks(createInvoices) }, async (request, reply) => {
-    const body = (request.body ?? {}) as { invoices?: imports.ImportedInvoice[] };
-    return reply.send({
-      outcome: await imports.importInvoices(app.db, actorOf(request), body.invoices ?? []),
     });
   });
 

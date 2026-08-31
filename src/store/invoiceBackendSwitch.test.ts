@@ -16,6 +16,18 @@
  * would silently discard it.
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
+
+/*
+ * The backend verdict now comes from the books engine — the same latched
+ * decision the chart, the journal and the customer directory use — rather than
+ * from a per-company migration timestamp nothing ever wrote.
+ */
+const engine = vi.hoisted(() => ({ current: 'server' as 'server' | 'demo' }));
+vi.mock('@/services/books/booksEngine', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/services/books/booksEngine')>()),
+  booksEngine: () => engine.current,
+}));
+
 import { useInvoiceStore } from './invoiceStore';
 import { invoicesApi } from '@/services/api/invoicesApi';
 
@@ -45,9 +57,8 @@ const record = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-const MIGRATED = { invoicesMigratedAt: '2026-03-01T00:00:00.000Z' };
-
 beforeEach(() => {
+  engine.current = 'server';
   vi.clearAllMocks();
   useInvoiceStore.setState({ invoices: [], backend: 'browser', syncing: false, syncError: undefined });
 });
@@ -55,7 +66,7 @@ beforeEach(() => {
 describe('hydrating from the server', () => {
   it('replaces the local list and flips the backend', async () => {
     api.list.mockResolvedValue([record()] as never);
-    await useInvoiceStore.getState().syncFromServer(MIGRATED);
+    await useInvoiceStore.getState().syncFromServer();
 
     const state = useInvoiceStore.getState();
     expect(state.backend).toBe('server');
@@ -68,14 +79,15 @@ describe('hydrating from the server', () => {
   it('replaces rather than merges', async () => {
     useInvoiceStore.setState({ invoices: [{ id: 'stale', invoiceNumber: 'OLD-1' } as never] });
     api.list.mockResolvedValue([record()] as never);
-    await useInvoiceStore.getState().syncFromServer(MIGRATED);
+    await useInvoiceStore.getState().syncFromServer();
 
     // A merge would resurrect an invoice that was voided elsewhere.
     expect(useInvoiceStore.getState().invoices.map((i) => i.invoiceNumber)).toEqual(['INV-SERVER-1']);
   });
 
-  it('does not call the API for a company that has not migrated', async () => {
-    await useInvoiceStore.getState().syncFromServer({ invoicesMigratedAt: null });
+  it('does not call the API in a DEMO workspace', async () => {
+    engine.current = 'demo';
+    await useInvoiceStore.getState().syncFromServer();
     expect(api.list).not.toHaveBeenCalled();
     expect(useInvoiceStore.getState().backend).toBe('browser');
   });
@@ -84,7 +96,7 @@ describe('hydrating from the server', () => {
     useInvoiceStore.setState({ invoices: [{ id: 'held', invoiceNumber: 'HELD-1' } as never] });
     api.list.mockRejectedValue(new Error('gateway timeout'));
 
-    await useInvoiceStore.getState().syncFromServer(MIGRATED);
+    await useInvoiceStore.getState().syncFromServer();
 
     const state = useInvoiceStore.getState();
     /*
@@ -100,7 +112,7 @@ describe('hydrating from the server', () => {
 describe('lifecycle writes route to the API', () => {
   beforeEach(async () => {
     api.list.mockResolvedValue([record()] as never);
-    await useInvoiceStore.getState().syncFromServer(MIGRATED);
+    await useInvoiceStore.getState().syncFromServer();
   });
 
   it('deletes through the API, carrying the version off the loaded record', async () => {

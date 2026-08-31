@@ -7,6 +7,13 @@
  * wrong thing.
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
+
+/* The verdict comes from the books engine now, not from a migration flag. */
+const engine = vi.hoisted(() => ({ current: 'server' as 'server' | 'demo' }));
+vi.mock('@/services/books/booksEngine', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/services/books/booksEngine')>()),
+  booksEngine: () => engine.current,
+}));
 import type { Invoice } from '@/types/invoice';
 import { repositoryFor, type BrowserInvoiceAdapter } from './invoiceRepository';
 import { invoicesApi } from '@/services/api/invoicesApi';
@@ -40,22 +47,23 @@ const adapter: BrowserInvoiceAdapter = {
   reversePayment: vi.fn(() => browserInvoice),
 };
 
-const repo = (migratedAt: string | null | undefined) =>
-  repositoryFor({ company: { invoicesMigratedAt: migratedAt }, browser: adapter, decimals: 3 });
+/* The verdict now comes from the books engine, not from an argument. */
+const repo = () => repositoryFor({ browser: adapter, decimals: 3 });
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => { engine.current = 'server'; vi.clearAllMocks(); });
 
 describe('which backend answers', () => {
-  it('uses the browser store until the company has migrated', async () => {
-    const result = await repo(null).list();
+  it('uses the browser store in a DEMO workspace', async () => {
+    engine.current = 'demo';
+    const result = await repo().list();
     expect(adapter.list).toHaveBeenCalled();
     expect(api.list).not.toHaveBeenCalled();
     expect(result).toEqual([browserInvoice]);
   });
 
-  it('uses the API once it has', async () => {
+  it('uses the API when the books are on the server', async () => {
     api.list.mockResolvedValue([serverRecord()] as never);
-    const result = await repo('2026-03-01T00:00:00.000Z').list();
+    const result = await repo().list();
 
     expect(api.list).toHaveBeenCalled();
     expect(adapter.list).not.toHaveBeenCalled();
@@ -63,13 +71,15 @@ describe('which backend answers', () => {
   });
 
   it('reports which backend it is, so a screen can say so', () => {
-    expect(repo(undefined).backend).toBe('browser');
-    expect(repo('2026-03-01T00:00:00.000Z').backend).toBe('server');
+    engine.current = 'demo';
+    expect(repo().backend).toBe('browser');
+    engine.current = 'server';
+    expect(repo().backend).toBe('server');
   });
 });
 
 describe('what the server path sends', () => {
-  const migrated = () => repo('2026-03-01T00:00:00.000Z');
+  const migrated = () => repo();
 
   it('carries the invoice version as the concurrency token', async () => {
     api.list.mockResolvedValue([serverRecord()] as never);
@@ -111,7 +121,7 @@ describe('totals are copied, never recomputed', () => {
      * entry -- and later with a cleared tax document.
      */
     api.list.mockResolvedValue([serverRecord({ lines: [], grandTotal: '116.000' })] as never);
-    const [invoice] = await repo('2026-03-01T00:00:00.000Z').list();
+    const [invoice] = await repo().list();
     expect(invoice!.grandTotal).toBe(116);
   });
 });
@@ -119,6 +129,6 @@ describe('totals are copied, never recomputed', () => {
 describe('reading one invoice', () => {
   it('returns undefined rather than throwing when it is gone', async () => {
     api.get.mockRejectedValue(new Error('404'));
-    expect(await repo('2026-03-01T00:00:00.000Z').get('missing')).toBeUndefined();
+    expect(await repo().get('missing')).toBeUndefined();
   });
 });

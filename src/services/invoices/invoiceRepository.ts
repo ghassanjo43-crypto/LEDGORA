@@ -23,9 +23,10 @@
  * Issuing. The two paths do genuinely different things at issue — the browser
  * also moves stock and freezes a template snapshot, the server posts through
  * `journalService` and does neither — and hiding that behind one method would
- * be the drift this file exists to prevent. `invoiceBackend.assessEligibility`
- * refuses to migrate a company that relies on the difference; until stock
- * movement exists server-side, issuing stays explicit at the call site.
+ * be the drift this file exists to prevent. The server refuses a line that
+ * names a stock item at all, so the difference cannot be reached by accident;
+ * until stock movement exists server-side, issuing stays explicit at the call
+ * site.
  */
 import type { Invoice } from '@/types/invoice';
 import {
@@ -34,7 +35,7 @@ import {
   type ServerInvoiceStatus,
 } from '@/services/api/invoicesApi';
 import { toBrowserInvoice, numberToDecimal } from './serverInvoiceMapping';
-import { backendFor, type InvoiceBackendState } from './invoiceBackend';
+import { invoiceBackend } from './invoiceBackend';
 
 export interface PaymentDraft {
   paidOn: string;
@@ -129,14 +130,13 @@ function invoiceVersion(invoice: Invoice): number {
 }
 
 export interface RepositoryContext {
-  company: InvoiceBackendState | undefined;
   browser: BrowserInvoiceAdapter;
   /** The company's monetary precision, from Currency Master. */
   decimals: number;
 }
 
 export function repositoryFor(context: RepositoryContext): InvoiceRepository {
-  return backendFor(context.company) === 'server'
+  return invoiceBackend() === 'server'
     ? serverRepository(context.decimals)
     : browserRepository(context.browser);
 }

@@ -268,6 +268,9 @@ describe('two companies under one subscriber', () => {
        * that will reference it. See migration 031. */
       const customer = await call('POST', '/api/customers', user, {
         partyCode: `CUST-${reference}`, legalName: 'Selector Customer LLC',
+        /* Issuing debits the account on the customer, not one the request
+         * names, so it is set when the customer is created. */
+        customer: { defaultReceivableAccountId: receivable.json().account.id },
       }, reference);
       expect(customer.statusCode, customer.body).toBe(201);
 

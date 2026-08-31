@@ -9,7 +9,6 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { authHeaders, createTestContext, login, seedUser, type SessionCookies, type TestContext, seedCustomerParty } from './helpers/testApp.js';
-import * as journals from '../src/services/accounting/journalService.js';
 
 let ctx: TestContext;
 let customerId: string;
@@ -79,103 +78,73 @@ async function taxedInvoice(name: string) {
       quantity: '1', unitPrice: '100.000', taxAmount: '16.000', taxRate: '16',
     }],
   });
-  expect(response.statusCode, response.body).toBe(201);
-  return { user, organizationId, invoice: response.json().invoice, receivable, sales, taxPayable, bank };
+  /* No 201 assertion: within the zero-tax boundary this is REFUSED, and the
+   * refusal is what the surviving test inspects. */
+  return { user, organizationId, response, receivable, sales, taxPayable, bank };
 }
 
-/**
- * A reader for this organization's books.
- *
- * Carries the COMPANY as well as the organization, because journals are
- * company-scoped: an actor without one resolves nothing at all, which is the
- * point — there is no such thing as reading an organization's journals without
- * saying which set of books. The tenant keeps exactly one, so it is found
- * rather than passed in.
- */
-async function actorFor(organizationId: string) {
-  const company = await ctx.db
-    .selectFrom('companies')
-    .select('id')
-    .where('organization_id', '=', organizationId)
-    .executeTakeFirstOrThrow();
-  return { organizationId, companyId: company.id, userId: null, name: 'test', requestId: 't' };
-}
 
-/** The posted journal behind an invoice, as debit/credit pairs by account. */
-async function postedLines(organizationId: string, journalEntryId: string) {
-  const actor = await actorFor(organizationId);
-  const entry = await journals.getJournal(ctx.db, actor as never, journalEntryId);
-  return entry.lines.map((line: { accountId: string; debit: string; credit: string }) => ({
-    accountId: line.accountId,
-    debit: Number(line.debit),
-    credit: Number(line.credit),
-  }));
-}
 
-describe('what issuing a taxed invoice debits and credits', () => {
-  it('debits the customer the tax-inclusive total', async () => {
-    const t = await taxedInvoice('Alpha');
-    const issued = await call('POST', `/api/invoices/${t.invoice.id}/issue`, t.user, {
-      expectedVersion: t.invoice.version,
-      receivableAccountId: t.receivable,
-      taxAccountId: t.taxPayable,
-    });
-    expect(issued.statusCode, issued.body).toBe(200);
+describe('a taxed invoice, while tax is not server-authoritative', () => {
+  /*
+   * ══ What this block used to assert, and what must come back ════════════════
+   *
+   * Until the zero-tax boundary these tests proved the accounting for a taxed
+   * invoice, and the reasoning is worth keeping even while the behaviour is
+   * suspended:
+   *
+   *   · the receivable is debited the TAX-INCLUSIVE total (116, not 100).
+   *     Crediting tax back to the receivable balances the entry while netting
+   *     the customer's balance down to the sale value, and the tax collected is
+   *     then owed to nobody;
+   *   · the tax is credited to a LIABILITY account, because tax collected on
+   *     the authority's behalf is owed until remitted;
+   *   · issuing is refused when there is nowhere to put the tax.
+   *
+   * S2c restores all three, on top of server-authoritative tax codes,
+   * categories and effective-dated rates. Until then a taxed invoice is refused
+   * outright rather than quietly issued at zero, which would understate output
+   * tax on a document the customer holds.
+   */
+  it('is REFUSED at creation, not silently zero-rated', async () => {
+    const { response } = await taxedInvoice('Alpha');
 
-    const lines = await postedLines(t.organizationId, issued.json().invoice.journalEntryId);
-    const receivableDebit = lines
-      .filter((l) => l.accountId === t.receivable)
-      .reduce((sum, l) => sum + l.debit - l.credit, 0);
-
-    /*
-     * The customer owes 116, not 100. Crediting the tax back to the receivable
-     * nets the customer's balance down to the sale value and the tax collected
-     * is never recorded as owed to anyone.
-     */
-    expect(receivableDebit).toBe(116);
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error.message).toMatch(/tax is not yet calculated on the server/i);
+    expect(response.json().error.message).toMatch(/nothing has been saved/i);
   });
 
-  it('credits the tax to a liability account, not back to the receivable', async () => {
-    const t = await taxedInvoice('Bravo');
-    const issued = await call('POST', `/api/invoices/${t.invoice.id}/issue`, t.user, {
-      expectedVersion: t.invoice.version,
-      receivableAccountId: t.receivable,
-      taxAccountId: t.taxPayable,
-    });
-
-    const lines = await postedLines(t.organizationId, issued.json().invoice.journalEntryId);
-    const taxCredit = lines
-      .filter((l) => l.accountId === t.taxPayable)
-      .reduce((sum, l) => sum + l.credit - l.debit, 0);
-
-    // Tax collected on behalf of the authority is a liability until remitted.
-    expect(taxCredit).toBe(16);
-  });
-
-  it('refuses to issue a taxed invoice with nowhere to put the tax', async () => {
-    const t = await taxedInvoice('Charlie');
-    const issued = await call('POST', `/api/invoices/${t.invoice.id}/issue`, t.user, {
-      expectedVersion: t.invoice.version,
-      receivableAccountId: t.receivable,
-    });
-    // Silently absorbing it into the receivable is what this replaces.
-    expect(issued.statusCode, issued.body).toBe(400);
-    expect(issued.json().error.message).toMatch(/tax/i);
-  });
-
-  it('still issues a zero-tax invoice without one', async () => {
-    const { user } = await tenantUser('Delta');
+  it('still issues a ZERO-tax invoice, which is the supported path', async () => {
+    const { user, organizationId } = await tenantUser('Delta');
     const receivable = await account(user, '1200', 'Trade receivables', 'asset');
     const sales = await account(user, '4000', 'Sales', 'income');
+
+    /* The receivable now comes from the customer's own profile rather than the
+     * issue request, so it is set here. */
+    const company = await ctx.db.selectFrom('companies').select('id')
+      .where('organization_id', '=', organizationId).executeTakeFirstOrThrow();
+    await ctx.db.insertInto('business_party_customer_profiles')
+      .values({
+        organization_id: organizationId, company_id: company.id,
+        party_id: customerId, default_receivable_account_id: receivable,
+      } as never)
+      .onConflict((oc) => oc
+        .columns(['organization_id', 'company_id', 'party_id'])
+        .doUpdateSet({ default_receivable_account_id: receivable }))
+      .execute();
+
     const created = await call('POST', '/api/invoices', user, {
       issuingEntityId: '11111111-1111-1111-1111-111111111111',
       customerId,
       issueDate: '2026-03-01', dueDate: '2026-03-31',
       lines: [{ accountId: sales, quantity: '1', unitPrice: '100.000' }],
     });
+    expect(created.statusCode, created.body).toBe(201);
+
     const issued = await call('POST', `/api/invoices/${created.json().invoice.id}/issue`, user, {
-      expectedVersion: created.json().invoice.version, receivableAccountId: receivable,
+      expectedVersion: created.json().invoice.version,
     });
     expect(issued.statusCode, issued.body).toBe(200);
+    expect(issued.json().invoice.grandTotal).toBe('100.000');
   });
 });
