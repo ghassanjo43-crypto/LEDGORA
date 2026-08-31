@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { Plus, Send, Save, Info, Eye, Palette, LayoutTemplate, Wand2 } from 'lucide-react';
 import type { BusinessEntity } from '@/types';
 import type { Invoice, InvoiceLine } from '@/types/invoice';
@@ -33,6 +33,7 @@ import { useHasModule } from '@/store/entitlementHooks';
 import { salesItemDefaults } from '@/lib/itemCatalogue';
 import { useInventoryStore } from '@/store/inventoryStore';
 import { useTaxCodeStore } from '@/store/taxCodeStore';
+import { useServerTaxCodeStore, taxCodeBackend } from '@/store/serverTaxCodeStore';
 import { useMonetaryStep } from '@/lib/useMonetaryPrecision';
 import { useCustomers } from '@/services/parties/useCustomers';
 
@@ -63,6 +64,21 @@ export function InvoiceEditorDrawer({ open, invoiceId, onClose }: Props) {
   const showInventory = useHasModule('inventory_basic');
   const catalogueItems = useInventoryStore((s) => s.items);
   const taxCodes = useTaxCodeStore((s) => s.taxCodes);
+  /*
+   * On server books the tax comes from a controlled code, and the browser seed
+   * is not offered at all — a code invented in a tab is one no invoice can be
+   * issued against, so showing it would produce a refusal for something the
+   * user is looking at.
+   */
+  const serverTax = taxCodeBackend() === 'server';
+  const serverTaxCodes = useServerTaxCodeStore((s) => s.taxCodes);
+  const serverTaxError = useServerTaxCodeStore((s) => s.loadError);
+  const loadServerTaxCodes = useServerTaxCodeStore((s) => s.load);
+  const serverTaxLoaded = useServerTaxCodeStore((s) => s.loaded);
+
+  useEffect(() => {
+    if (serverTax && !serverTaxLoaded) void loadServerTaxCodes();
+  }, [serverTax, serverTaxLoaded, loadServerTaxCodes]);
   const setActiveView = useStore((s) => s.setActiveView);
   const invoice = useInvoiceStore((s) => (invoiceId ? s.invoices.find((i) => i.id === invoiceId) : undefined));
   const updateDraft = useInvoiceStore((s) => s.updateDraft);
@@ -140,6 +156,12 @@ export function InvoiceEditorDrawer({ open, invoiceId, onClose }: Props) {
     const item = catalogueItems.find((candidate) => candidate.id === itemId);
     if (!item) return;
     const defaults = salesItemDefaults(item);
+    if (serverTax) {
+      /* The item's own default rate is a BROWSER figure. On server books the
+       * rate follows from the code, so only the code is carried across. */
+      setLine(lineId, { ...defaults, taxRate: 0 });
+      return;
+    }
     const tax = defaults.taxCodeId ? taxCodes.find((candidate) => candidate.id === defaults.taxCodeId) : undefined;
     setLine(lineId, { ...defaults, taxRate: tax?.rate ?? 0 });
   };
@@ -285,6 +307,8 @@ export function InvoiceEditorDrawer({ open, invoiceId, onClose }: Props) {
             onChange={setLine}
             onSelectItem={selectItem}
             onRemove={removeLine}
+            serverTaxCodes={serverTax ? serverTaxCodes : undefined}
+            serverTaxError={serverTax ? serverTaxError : undefined}
           />
           <InvoiceLineTotals
             subtotal={totals.subtotal}

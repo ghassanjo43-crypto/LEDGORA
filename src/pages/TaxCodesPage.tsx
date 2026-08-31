@@ -15,11 +15,23 @@ import { PageActions } from '@/components/ui/PageActions';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { useToast } from '@/components/ui/Toast';
 import { TaxCodeEditor } from '@/components/tax/TaxCodeEditor';
+import { ServerTaxCodes } from '@/components/tax/ServerTaxCodes';
+import { taxCodeBackend } from '@/store/serverTaxCodeStore';
 
 const STATUS_TONE: Record<TaxCode['status'], BadgeTone> = { active: 'green', inactive: 'slate', archived: 'red' };
 const CATEGORY_TONE: Partial<Record<TaxCategory, BadgeTone>> = { standard: 'blue', reduced: 'cyan', 'zero-rated': 'teal', exempt: 'amber', 'out-of-scope': 'slate', 'reverse-charge': 'violet', import: 'indigo', withholding: 'rose' };
 
 export function TaxCodesPage() {
+  /*
+   * On server-held books the browser's tax configuration is not the books'.
+   * Showing it would offer codes no invoice could be issued against, so the
+   * server screen replaces it entirely rather than sitting beside it.
+   */
+  if (taxCodeBackend() === 'server') return <ServerTaxCodes />;
+  return <BrowserTaxCodesPage />;
+}
+
+function BrowserTaxCodesPage() {
   const accounts = useStore((s) => s.accounts);
   const taxCodes = useTaxCodeStore((s) => s.taxCodes);
   const store = useTaxCodeStore();

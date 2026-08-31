@@ -105,33 +105,41 @@ beforeEach(async () => {
 });
 afterEach(async () => { await ctx.close(); });
 
-/* ══ Tax ═══════════════════════════════════════════════════════════════════ */
+/* ══ Tax: the code is the client's, every figure is the server's ═════════ */
 
-describe('tax on a durable invoice', () => {
-  it('REFUSES a tax rate rather than issuing at zero', async () => {
+describe('who decides the tax on a durable invoice', () => {
+  /*
+   * S2b refused tax outright, because the server could not compute it. S2c can,
+   * so the refusal MOVED rather than disappeared: what is refused now is the
+   * client telling the server what the answer is. These tests pin the new line,
+   * and the ones that follow still pin everything S2c did not bring.
+   */
+  it('REFUSES a client-supplied rate — that figure belongs to the server', async () => {
     await expect(draft({
       lines: [{ accountId: chart.sales, quantity: '1', unitPrice: '100.000', taxRate: '16' }],
-    })).rejects.toThrow(/tax is not yet calculated on the server/i);
+    })).rejects.toThrow(/supplies a rate for its tax/i);
 
     /* And nothing was written. A refusal that leaves a draft behind is not a
      * refusal, it is a half-saved invoice. */
     expect(await invoiceCount()).toBe(0);
   });
 
-  it('refuses a tax amount', async () => {
+  it('refuses a client-supplied tax amount', async () => {
     await expect(draft({
       lines: [{ accountId: chart.sales, quantity: '1', unitPrice: '100.000', taxAmount: '16.000' }],
-    })).rejects.toThrow(/tax is not yet calculated on the server/i);
+    })).rejects.toThrow(/supplies an amount for its tax/i);
     expect(await invoiceCount()).toBe(0);
   });
 
-  it('refuses a tax code, even with no rate or amount', async () => {
+  it('refuses a ZERO rate too — that is still an assertion about the tax', async () => {
+    /*
+     * The tempting exception. "0" is refused with every other figure because a
+     * zero from a client that believed the supply was exempt is exactly the
+     * mistake a server-resolved category exists to prevent.
+     */
     await expect(draft({
-      lines: [{
-        accountId: chart.sales, quantity: '1', unitPrice: '100.000',
-        taxCodeId: '33333333-3333-3333-3333-333333333333',
-      }],
-    })).rejects.toThrow(/tax is not yet calculated on the server/i);
+      lines: [{ accountId: chart.sales, quantity: '1', unitPrice: '100.000', taxRate: '0' }],
+    })).rejects.toThrow(/supplies a rate for its tax/i);
     expect(await invoiceCount()).toBe(0);
   });
 
@@ -141,16 +149,30 @@ describe('tax on a durable invoice', () => {
     }).then(() => null, (e) => e as Error);
 
     expect(error).toBeInstanceOf(Error);
-    expect(error!.message).toMatch(/server-authoritative tax codes/i);
+    expect(error!.message).toMatch(/calculated by the server/i);
+    expect(error!.message).toMatch(/send the tax code alone/i);
     expect(error!.message).toMatch(/nothing has been saved/i);
   });
 
-  it('ACCEPTS an explicit zero rate — that is not a taxable invoice', async () => {
+  it('refuses a tax code from ANOTHER company', async () => {
+    await expect(draft({
+      lines: [{
+        accountId: chart.sales, quantity: '1', unitPrice: '100.000',
+        taxCodeId: '33333333-3333-3333-3333-333333333333',
+      }],
+    })).rejects.toThrow(/does not exist in these books/i);
+    expect(await invoiceCount()).toBe(0);
+  });
+
+  it('ACCEPTS a line with no tax code at all', async () => {
     const created = await draft({
-      lines: [{ accountId: chart.sales, quantity: '1', unitPrice: '100.000', taxRate: '0', taxAmount: '0' }],
+      lines: [{ accountId: chart.sales, quantity: '1', unitPrice: '100.000' }],
     });
     expect(created.taxTotal).toBe('0.000');
     expect(created.grandTotal).toBe('100.000');
+    /* No code means no tax — which is NOT the same as a zero-rated supply, and
+     * the absent snapshot is how the two stay distinguishable. */
+    expect(created.lines[0]!.taxSnapshot).toBeNull();
   });
 });
 

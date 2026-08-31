@@ -25,39 +25,36 @@
  * somebody post to the wrong ledger. Empty and loading is honest; populated and
  * wrong is not.
  */
+import {
+  booksGeneration, isCurrentGeneration, bumpBooksGeneration, __resetBooksGenerationForTests,
+} from './booksGenerationCounter';
 import { useStore } from '@/store/useStore';
 import { useJournalStore } from '@/store/journalStore';
 import { clearCustomerCache } from '@/services/parties/customerDirectory';
 import { useInvoiceStore } from '@/store/invoiceStore';
+import { useServerTaxCodeStore } from '@/store/serverTaxCodeStore';
 import { useCompanyStore } from '@/store/companyStore';
 import { clearMemoryWorkspace } from '@/lib/workspaceStorage';
 import { resetCompanySettings } from '@/services/companySettingsSync';
 import { resetCompanyRegistration } from '@/services/api/companyRegistration';
-import { booksEngine } from './booksEngine';
+import { booksEngine } from '@/services/books/booksEngine';
 
 /**
- * Bumped by every company change. A hydration that started under an older
- * value has been overtaken and must not write.
+ * The counter itself lives in `booksGenerationCounter`, which imports nothing.
+ * This module has to import the stores in order to clear them, and a store that
+ * needed the counter from here would close a cycle whose resolution order
+ * decides whether the clearing runs at all.
  */
-let generation = 0;
-
 /** The company the current caches describe, for diagnostics and tests. */
 let scopedTo: string | null = null;
 
 /** The controller for whatever hydration is in flight, so it can be dropped. */
 let inFlight: AbortController | null = null;
 
-export function booksGeneration(): number {
-  return generation;
-}
+export { booksGeneration, isCurrentGeneration };
 
 export function scopedCompany(): string | null {
   return scopedTo;
-}
-
-/** Whether a result from `startedAt` may still be applied. */
-export function isCurrentGeneration(startedAt: number): boolean {
-  return startedAt === generation;
 }
 
 /**
@@ -66,7 +63,7 @@ export function isCurrentGeneration(startedAt: number): boolean {
 export function beginHydration(): { generation: number; signal: AbortSignal } {
   inFlight?.abort();
   inFlight = new AbortController();
-  return { generation, signal: inFlight.signal };
+  return { generation: booksGeneration(), signal: inFlight.signal };
 }
 
 /**
@@ -87,7 +84,7 @@ export function clearBooksCache(): void {
  * wrong, and everything in flight about it is now irrelevant.
  */
 export function enterCompanyScope(reference: string | null): void {
-  generation += 1;
+  bumpBooksGeneration();
   scopedTo = reference;
   inFlight?.abort();
   inFlight = null;
@@ -112,7 +109,15 @@ export function enterCompanyScope(reference: string | null): void {
    * receivables on screen for as long as the next fetch takes. A demo
    * workspace's invoices are the originals, so they are left alone.
    */
-  if (booksEngine() === 'server') useInvoiceStore.setState({ invoices: [] });
+  if (booksEngine() === 'server') {
+    useInvoiceStore.setState({ invoices: [] });
+    /*
+     * Tax codes are per company too. Leaving them would offer the previous
+     * company's codes on the next company's invoice, and the server would
+     * refuse a code the user can see on the screen in front of them.
+     */
+    useServerTaxCodeStore.setState({ taxCodes: [], loaded: false, loadError: undefined });
+  }
 
   /* Both are per-company verdicts, and both are stale for the same reason. */
   resetCompanySettings();
@@ -130,7 +135,7 @@ export function enterCompanyScope(reference: string | null): void {
  * this correct by coincidence.
  */
 export function leaveCompanyScope(): void {
-  generation += 1;
+  bumpBooksGeneration();
   scopedTo = null;
   inFlight?.abort();
   inFlight = null;
@@ -171,7 +176,7 @@ export function bindCompanyScope(): () => void {
 
 /** Test seam: forget which company the caches describe. */
 export function __resetBooksScopeForTests(): void {
-  generation = 0;
+  __resetBooksGenerationForTests();
   scopedTo = null;
   inFlight = null;
 }

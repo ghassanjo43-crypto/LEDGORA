@@ -85,32 +85,32 @@ async function taxedInvoice(name: string) {
 
 
 
-describe('a taxed invoice, while tax is not server-authoritative', () => {
+describe('a taxed invoice, now that tax IS server-authoritative', () => {
   /*
-   * ══ What this block used to assert, and what must come back ════════════════
+   * ══ What changed, and where the accounting now lives ═══════════════════════
    *
-   * Until the zero-tax boundary these tests proved the accounting for a taxed
-   * invoice, and the reasoning is worth keeping even while the behaviour is
-   * suspended:
+   * Until S2c a taxed invoice was refused outright, because the server could not
+   * compute the tax and issuing at zero would have understated output tax on a
+   * document the customer holds. S2c brought controlled tax codes, so the three
+   * properties this block used to guard are restored and proved in full by
+   * `invoiceTaxPosting`:
    *
-   *   · the receivable is debited the TAX-INCLUSIVE total (116, not 100).
-   *     Crediting tax back to the receivable balances the entry while netting
-   *     the customer's balance down to the sale value, and the tax collected is
-   *     then owed to nobody;
+   *   · the receivable is debited the TAX-INCLUSIVE total (1160, not 1000);
    *   · the tax is credited to a LIABILITY account, because tax collected on
    *     the authority's behalf is owed until remitted;
    *   · issuing is refused when there is nowhere to put the tax.
    *
-   * S2c restores all three, on top of server-authoritative tax codes,
-   * categories and effective-dated rates. Until then a taxed invoice is refused
-   * outright rather than quietly issued at zero, which would understate output
-   * tax on a document the customer holds.
+   * What survives HERE is the narrower rule this file can still see: the client
+   * does not get to say what the tax IS. The refusal moved rather than
+   * disappearing — a rate in the request is the browser authoring the one figure
+   * a tax authority will hold a copy of.
    */
-  it('is REFUSED at creation, not silently zero-rated', async () => {
+  it('REFUSES a client-supplied rate rather than trusting it', async () => {
     const { response } = await taxedInvoice('Alpha');
 
     expect(response.statusCode).toBe(400);
-    expect(response.json().error.message).toMatch(/tax is not yet calculated on the server/i);
+    expect(response.json().error.message).toMatch(/supplies a rate for its tax/i);
+    expect(response.json().error.message).toMatch(/calculated by the server/i);
     expect(response.json().error.message).toMatch(/nothing has been saved/i);
   });
 

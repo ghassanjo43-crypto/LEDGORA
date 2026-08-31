@@ -42,6 +42,7 @@ import * as accountClassification from './migrations/028_account_classification.
 import * as sourcePostingIdentity from './migrations/029_source_posting_identity.js';
 import * as businessParties from './migrations/030_business_parties.js';
 import * as invoiceCustomerFk from './migrations/031_invoice_customer_fk.js';
+import * as salesTaxCodes from './migrations/032_sales_tax_codes.js';
 
 const MIGRATIONS: Record<string, Migration> = {
   '001_initial_schema': initialSchema,
@@ -75,6 +76,7 @@ const MIGRATIONS: Record<string, Migration> = {
   '029_source_posting_identity': sourcePostingIdentity,
   '030_business_parties': businessParties,
   '031_invoice_customer_fk': invoiceCustomerFk,
+  '032_sales_tax_codes': salesTaxCodes,
 };
 
 class StaticMigrationProvider implements MigrationProvider {

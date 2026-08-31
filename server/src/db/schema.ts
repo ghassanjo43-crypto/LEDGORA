@@ -788,6 +788,9 @@ export interface Database {
   invoice_payments: InvoicePaymentsTable;
   invoice_numbering: InvoiceNumberingTable;
   invoice_audit_events: InvoiceAuditEventsTable;
+  tax_codes: TaxCodesTable;
+  tax_rate_versions: TaxRateVersionsTable;
+  tax_code_audit_events: TaxCodeAuditEventsTable;
 }
 
 
@@ -1252,7 +1255,106 @@ export interface InvoiceLinesTable {
   warehouse_id: string | null;
   inventory_fulfillment_mode: InventoryFulfillmentMode | null;
   issued_unit_cost: string | null;
+  /*
+   * The FROZEN tax snapshot, written at issue and never recomputed.
+   *
+   * Denormalised on purpose: `tax_code_id` alone would leave an issued invoice
+   * depending on mutable current configuration, so archiving a code or
+   * end-dating a rate would change what a posted document says it charged.
+   * These columns are what was actually charged, and only a reversal may write
+   * a different set.
+   */
+  tax_rate_version_id: string | null;
+  tax_code_code: string | null;
+  tax_code_name: string | null;
+  tax_category: SalesTaxCategory | null;
+  tax_calculation_method: SalesTaxMethod | null;
+  tax_rate_effective_from: string | null;
+  tax_rate_effective_to: string | null;
+  taxable_amount: Generated<string>;
+  tax_account_id: string | null;
+  /** The date the rate was resolved on — this invoice's `issue_date`. */
+  tax_point_date: string | null;
+  tax_snapshot_at: Timestamp | null;
   created_at: Timestamp;
+}
+
+/**
+ * The categories the server can stand behind, and why the list stops here.
+ *
+ * Zero-rated, exempt and out-of-scope all charge nothing, and collapsing them
+ * would be the easy mistake: they are legally distinct and reported
+ * separately — a zero-rated export belongs in a different box from an exempt
+ * supply, and an out-of-scope item is not in the return at all. Reverse-charge,
+ * import, self-assessed and withholding are absent because each posts to
+ * accounts this slice has no controlled mapping for.
+ */
+export type SalesTaxCategory = 'standard' | 'reduced' | 'zero-rated' | 'exempt' | 'out-of-scope';
+
+/** Percentage only. Fixed, compound and self-assessed are refused explicitly. */
+export type SalesTaxMethod = 'exclusive' | 'inclusive';
+
+export type SalesTaxStatus = 'active' | 'inactive' | 'archived';
+
+export interface TaxCodesTable {
+  id: Generated<string>;
+  organization_id: string;
+  company_id: string;
+  code: string;
+  name: string;
+  description: Generated<string>;
+  category: SalesTaxCategory;
+  calculation_method: SalesTaxMethod;
+  status: Generated<SalesTaxStatus>;
+  /**
+   * Where output tax credits. Per CODE rather than per company because §12
+   * makes the code resolve its own account: one company-wide default would
+   * force two legally distinct taxes into one control account and make a
+   * reconciliation that has to separate them impossible.
+   */
+  output_tax_account_id: string | null;
+  effective_from: string;
+  effective_to: string | null;
+  version: Generated<number>;
+  created_by: string | null;
+  updated_by: string | null;
+  created_at: Generated<Timestamp>;
+  updated_at: Generated<Timestamp>;
+}
+
+/**
+ * A rate is a property of a code ON A DATE, not of the code.
+ *
+ * One stored number would mean a rate rise silently rewrote every invoice ever
+ * issued under the old one — including the documents a tax authority already
+ * holds copies of.
+ */
+export interface TaxRateVersionsTable {
+  id: Generated<string>;
+  organization_id: string;
+  company_id: string;
+  tax_code_id: string;
+  /** A PERCENTAGE held exactly, as a decimal string. Never a float. */
+  rate: string;
+  effective_from: string;
+  effective_to: string | null;
+  output_tax_account_id: string | null;
+  created_by: string | null;
+  created_at: Generated<Timestamp>;
+}
+
+export interface TaxCodeAuditEventsTable {
+  id: Generated<string>;
+  organization_id: string;
+  company_id: string;
+  tax_code_id: string;
+  action: string;
+  detail: ColumnType<unknown, string | null, string | null>;
+  previous_version: number | null;
+  resulting_version: number | null;
+  actor_user_id: string | null;
+  actor_name: Generated<string>;
+  created_at: Generated<Timestamp>;
 }
 
 export interface InvoicePaymentsTable {

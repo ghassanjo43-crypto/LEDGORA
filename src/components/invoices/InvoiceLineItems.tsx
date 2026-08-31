@@ -36,7 +36,14 @@ import { ItemSelector } from '@/components/items/ItemSelector';
 import { CostCenterLineControl } from '@/components/cost-centers/CostCenterLineControl';
 import { ProjectPicker } from '@/components/projects/ProjectPicker';
 import { InventoryLineControl } from '@/components/inventory/InventoryLineControl';
+import { rateOn } from '@/store/serverTaxCodeStore';
+import type { ServerTaxCode } from '@/services/api/taxCodesApi';
 import { cn } from '@/lib/utils';
+
+/** "16.000000" reads badly in a picker; "16" is the same number. */
+function trimRate(rate: string): string {
+  return rate.includes('.') ? rate.replace(/0+$/, '').replace(/\.$/, '') : rate;
+}
 
 /** One labelled field inside a card. */
 function LineField({
@@ -78,6 +85,16 @@ export interface InvoiceLineItemsProps {
   onChange: (id: string, patch: Partial<InvoiceLine>) => void;
   onSelectItem: (lineId: string, itemId?: string) => void;
   onRemove: (id: string) => void;
+  /**
+   * On SERVER books the tax is a code, not a number.
+   *
+   * The rate, the category and the method are decided by the server from the
+   * code and the invoice date, so typing a percentage here would be typing a
+   * figure the server refuses. When these are absent the workspace is a demo
+   * one, whose invoices are browser records, and the free rate input stays.
+   */
+  serverTaxCodes?: ServerTaxCode[];
+  serverTaxError?: string;
 }
 
 export function InvoiceLineItems({
@@ -95,7 +112,10 @@ export function InvoiceLineItems({
   onChange,
   onSelectItem,
   onRemove,
+  serverTaxCodes,
+  serverTaxError,
 }: InvoiceLineItemsProps) {
+  const serverTax = serverTaxCodes !== undefined;
   const showDimensions = showCostCenter || showProject || showInventory;
   /*
    * The last line is not removable. `removeLine` already refuses it, but a
@@ -183,18 +203,50 @@ export function InvoiceLineItems({
                 />
               </LineField>
 
-              <LineField label="Tax %" htmlFor={id('tax')} className="lg:col-span-1">
-                <Input
-                  id={id('tax')}
-                  type="number"
-                  step="0.01"
-                  inputMode="decimal"
-                  value={line.taxRate}
-                  onChange={(e) => onChange(line.id, { taxRate: Number(e.target.value) })}
-                  disabled={readOnly}
-                  className="h-9 text-right"
-                />
-              </LineField>
+              {serverTax ? (
+                <LineField label="Tax code" htmlFor={id('tax')} className="col-span-2 lg:col-span-2">
+                  <select
+                    id={id('tax')}
+                    value={line.taxCodeId ?? ''}
+                    onChange={(e) => onChange(line.id, { taxCodeId: e.target.value || undefined })}
+                    disabled={readOnly}
+                    className="h-9 w-full rounded-md border border-slate-300 bg-white px-2 text-sm dark:border-slate-700 dark:bg-slate-900"
+                  >
+                    {/* "No tax" is NOT zero-rated. A supply with no code is
+                        untaxed; a zero-rated one is taxed at 0% and reported. */}
+                    <option value="">No tax code</option>
+                    {(serverTaxCodes ?? []).map((code) => {
+                      const rate = rateOn(code, issueDate);
+                      return (
+                        <option key={code.id} value={code.id}>
+                          {code.code} — {code.name}
+                          {rate === null ? ' (no rate on this date)' : ` (${trimRate(rate)}%)`}
+                        </option>
+                      );
+                    })}
+                  </select>
+                  {serverTaxError ? (
+                    <p className="mt-1 text-xs text-red-600 dark:text-red-400">{serverTaxError}</p>
+                  ) : (serverTaxCodes ?? []).length === 0 ? (
+                    <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                      No tax codes are set up for these books yet. Add one under Tax to charge tax.
+                    </p>
+                  ) : null}
+                </LineField>
+              ) : (
+                <LineField label="Tax %" htmlFor={id('tax')} className="lg:col-span-1">
+                  <Input
+                    id={id('tax')}
+                    type="number"
+                    step="0.01"
+                    inputMode="decimal"
+                    value={line.taxRate}
+                    onChange={(e) => onChange(line.id, { taxRate: Number(e.target.value) })}
+                    disabled={readOnly}
+                    className="h-9 text-right"
+                  />
+                </LineField>
+              )}
 
               {/* Wide enough to show a full account name, which was the point. */}
               <LineField label="Revenue account" htmlFor={id('account')} className="col-span-2 sm:col-span-4 lg:col-span-4">

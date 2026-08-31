@@ -79,8 +79,15 @@ export interface ServerInvoiceLineInput {
   unitPrice: string;
   discountType?: string | null;
   discountValue?: string | null;
+  /**
+   * The tax CODE, and nothing else about the tax.
+   *
+   * There is deliberately no `taxRate`, `taxAmount`, `taxCategory` or snapshot
+   * here. The server resolves every one of them from this code and the
+   * invoice's own date, and refuses the request outright if any arrives — so
+   * the absence of those fields is the contract, not an omission.
+   */
   taxCodeId?: string | null;
-  taxRate?: string;
   itemId?: string | null;
   projectId?: string | null;
   costCenterId?: string | null;

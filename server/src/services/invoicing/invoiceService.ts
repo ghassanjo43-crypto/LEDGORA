@@ -33,7 +33,7 @@
  */
 import type { Kysely, Transaction } from 'kysely';
 import { sql } from 'kysely';
-import type { Database, SalesInvoiceStatus } from '../../db/schema.js';
+import type { Database, SalesInvoiceStatus, SalesTaxCategory, SalesTaxMethod } from '../../db/schema.js';
 import { errors } from '../../lib/errors.js';
 import type { AccountingActor } from '../accounting/audit.js';
 import { assessPostingAccount } from '../accounting/accountEligibility.js';
@@ -42,6 +42,11 @@ import { monetaryDecimalsFor } from '../accounting/currencyPrecision.js';
 import * as Money from '../accounting/money.js';
 import * as journals from '../accounting/journalService.js';
 import { postSourceJournalIn } from '../accounting/sourcePostingService.js';
+import * as SalesTax from '../accounting/salesTax.js';
+import { toCalendarDate, toCalendarDateOrNull } from '../accounting/calendarDate.js';
+import {
+  resolveTaxForDate, assertOutputAccountPostable, type ResolvedTax,
+} from './taxCodeService.js';
 
 type Executor = Kysely<Database> | Transaction<Database>;
 type Trx = Transaction<Database>;
@@ -128,12 +133,42 @@ export interface InvoiceLineRecord {
   taxCodeId: string | null;
   taxRate: string;
   taxAmount: string;
+  /** The base tax was charged on. Differs from the line total when inclusive. */
+  taxableAmount: string;
   lineSubtotal: string;
   lineTotal: string;
+  /**
+   * The FROZEN snapshot, present only once the invoice is issued.
+   *
+   * Null on a draft is meaningful rather than missing: nothing is frozen until
+   * issue, and a screen that showed a draft's current figures as though they
+   * were a snapshot would imply a permanence the document does not yet have.
+   */
+  taxSnapshot: InvoiceLineTaxSnapshot | null;
   itemId: string | null;
   entityId: string | null;
   projectId: string | null;
   costCenterId: string | null;
+}
+
+/** Everything needed to reproduce and audit one line's tax, as at issue. */
+export interface InvoiceLineTaxSnapshot {
+  taxCodeId: string;
+  code: string;
+  name: string;
+  category: SalesTaxCategory;
+  calculationMethod: SalesTaxMethod;
+  rate: string;
+  rateVersionId: string | null;
+  effectiveFrom: string | null;
+  effectiveTo: string | null;
+  taxableAmount: string;
+  taxAmount: string;
+  grossAmount: string;
+  outputTaxAccountId: string | null;
+  /** The date the rate was resolved on — this invoice's issue date. */
+  taxPointDate: string | null;
+  capturedAt: string | null;
 }
 
 export interface InvoiceRecord {
@@ -179,8 +214,15 @@ export const CONCURRENCY_MESSAGE =
 
 /* ══ Reading ═══════════════════════════════════════════════════════════════ */
 
-const dateText = (value: unknown): string =>
-  typeof value === 'string' ? value : new Date(value as string).toISOString().slice(0, 10);
+/*
+ * A calendar date, read as the date the column holds.
+ *
+ * NOT `toISOString().slice(0, 10)`: `node-postgres` builds a bare `date` at
+ * LOCAL midnight, and converting that to UTC east of Greenwich yields the
+ * previous day — which would move an invoice into a different accounting
+ * period and, since S2c, resolve its tax at a different rate.
+ */
+const dateText = toCalendarDate;
 const instant = (value: unknown): string | null =>
   value ? new Date(value as string).toISOString() : null;
 
@@ -215,8 +257,28 @@ function toLine(row: any, decimals: number): InvoiceLineRecord {
     taxCodeId: row.tax_code_id,
     taxRate: display(row.tax_rate, decimals),
     taxAmount: display(row.tax_amount, decimals),
+    taxableAmount: display(row.taxable_amount ?? row.line_subtotal, decimals),
     lineSubtotal: display(row.line_subtotal, decimals),
     lineTotal: display(row.line_total, decimals),
+    /* Present only when `tax_snapshot_at` says one was actually frozen. */
+    taxSnapshot: row.tax_snapshot_at && row.tax_code_id ? {
+      taxCodeId: row.tax_code_id,
+      code: row.tax_code_code ?? '',
+      name: row.tax_code_name ?? '',
+      category: row.tax_category,
+      calculationMethod: row.tax_calculation_method,
+      rate: display(row.tax_rate, decimals),
+      rateVersionId: row.tax_rate_version_id ?? null,
+      effectiveFrom: toCalendarDateOrNull(row.tax_rate_effective_from),
+      effectiveTo: toCalendarDateOrNull(row.tax_rate_effective_to),
+      taxableAmount: display(row.taxable_amount ?? row.line_subtotal, decimals),
+      taxAmount: display(row.tax_amount, decimals),
+      grossAmount: display(row.line_total, decimals),
+      outputTaxAccountId: row.tax_account_id ?? null,
+      taxPointDate: toCalendarDateOrNull(row.tax_point_date),
+      capturedAt: row.tax_snapshot_at instanceof Date
+        ? row.tax_snapshot_at.toISOString() : String(row.tax_snapshot_at),
+    } : null,
     itemId: row.item_id,
     entityId: row.entity_id,
     projectId: row.project_id,
@@ -385,9 +447,15 @@ function amount(value: string | null | undefined, field: string): Money.Amount {
 
 interface ComputedLine {
   input: InvoiceLineInput;
+  /** The base tax is charged on — net of discount, at the currency's precision. */
   lineSubtotal: Money.Amount;
   taxAmount: Money.Amount;
   lineTotal: Money.Amount;
+  /**
+   * What the SERVER resolved for this line, or null when the line names no tax
+   * code. Never anything the client sent.
+   */
+  tax: ResolvedTax | null;
 }
 
 /* ══ The durable-invoice boundary ═════════════════════════════════════════ */
@@ -423,10 +491,29 @@ interface ComputedLine {
  * Converting it would understate output tax on a document the customer receives
  * and the authority may clear. Server-authoritative tax is its own slice.
  */
-const UNSUPPORTED_TAX =
-  'This invoice charges tax, and tax is not yet calculated on the server. '
-  + 'Server-authoritative tax codes, categories and rates are a later step; until then a '
-  + 'durable invoice must carry no tax. Nothing has been saved.';
+/**
+ * Figures the client may SEND but never decides.
+ *
+ * S2b refused tax outright because the server could not compute it. It can now
+ * — from a tax code these books own, at a rate effective on the invoice's own
+ * date — so the refusal moves rather than disappears: what is refused is the
+ * client telling the server WHAT THE ANSWER IS.
+ *
+ * A rate, an amount, a category, a method or a snapshot arriving in the request
+ * is not a hint to be validated, it is an attempt to author the one figure a
+ * tax authority will hold a copy of. Ignoring those fields would be worse than
+ * refusing: the caller would believe the invoice carried 5% and the books would
+ * hold 16%, with nothing anywhere saying so. Only `taxCodeId` is accepted, and
+ * every number is derived from it.
+ */
+const CLIENT_OWNED_TAX_FIELDS: Record<string, string> = {
+  taxRate: 'a rate',
+  taxAmount: 'an amount',
+  taxCategory: 'a category',
+  taxCalculationMethod: 'a calculation method',
+  taxSnapshot: 'a snapshot',
+  taxAccountId: 'an account',
+};
 
 const UNSUPPORTED_CHARGES =
   'Additional charges are not yet supported on server-held invoices: there is no controlled '
@@ -462,17 +549,24 @@ function refuseUnverifiable(field: string, value: unknown): void {
  * no number, no line.
  */
 function assertWithinBoundary(input: InvoiceInput): void {
-  /* ── Tax ─────────────────────────────────────────────────────────────── */
+  /* ── Tax: the code is the client's, every figure is the server's ─────── */
   for (const [index, line] of (input.lines ?? []).entries()) {
     const at = index + 1;
-    const bearsTax =
-      (line.taxCodeId !== undefined && line.taxCodeId !== null && line.taxCodeId !== '')
-      || (line.taxRate !== undefined && line.taxRate !== '' && /[1-9]/.test(line.taxRate))
-      || (line.taxAmount !== undefined && line.taxAmount !== '' && /[1-9]/.test(line.taxAmount));
-    if (bearsTax) {
-      throw errors.validation(UNSUPPORTED_TAX, {
-        fieldErrors: { [`lines.${at}.tax`]: 'Remove the tax from this line, or issue it from a demo workspace.' },
-      });
+    for (const [field, what] of Object.entries(CLIENT_OWNED_TAX_FIELDS)) {
+      const value = (line as unknown as Record<string, unknown>)[field];
+      if (value === undefined || value === null || value === '') continue;
+      /*
+       * A zero rate is still an assertion about the tax. It is refused with
+       * everything else rather than waved through, because "0" from a client
+       * that believed the supply was exempt is exactly the mistake a
+       * server-resolved category exists to prevent.
+       */
+      throw errors.validation(
+        `This invoice supplies ${what} for its tax on line ${at}. Tax is calculated by the server `
+        + 'from the tax code and the invoice date, so a figure sent with the request would be the '
+        + 'client deciding what a tax authority is told. Send the tax code alone. Nothing has been saved.',
+        { fieldErrors: { [`lines.${at}.${field}`]: 'Remove this — the server derives it from the tax code.' } },
+      );
     }
 
     /*
@@ -548,17 +642,34 @@ function assertFunctionalCurrency(requested: string | undefined, functional: str
  * client that can supply the wrong one, and the figure on a tax document is not
  * a matter of opinion — least of all once an authority holds a copy of it.
  */
-function computeTotals(
+async function computeTotals(
+  trx: Executor,
+  actor: AccountingActor,
   lines: InvoiceLineInput[],
-  additionalCharges = '0',
-  decimals = 2,
-): {
+  options: { additionalCharges?: string; decimals: number; taxPointDate: string },
+): Promise<{
   computed: ComputedLine[];
   subtotal: Money.Amount;
   taxTotal: Money.Amount;
   chargesTotal: Money.Amount;
   grandTotal: Money.Amount;
-} {
+}> {
+  const { decimals, taxPointDate } = options;
+  const additionalCharges = options.additionalCharges ?? '0';
+
+  /*
+   * Resolved ONCE per distinct code rather than per line, so a ten-line invoice
+   * cannot end up with two different answers for one code because a rate
+   * version was edited between two queries in the same loop.
+   */
+  const codeIds = [...new Set(
+    lines.map((line) => line.taxCodeId).filter((id): id is string => Boolean(id)),
+  )];
+  const resolved = new Map<string, ResolvedTax>();
+  for (const codeId of codeIds) {
+    resolved.set(codeId, await resolveTaxForDate(trx, actor, codeId, taxPointDate));
+  }
+
   const computed: ComputedLine[] = lines.map((line, index) => {
     const at = index + 1;
     const quantity = amount(line.quantity ?? '0', `line ${at} quantity`);
@@ -583,19 +694,43 @@ function computeTotals(
      * and no receipt can clear to zero. The remainder is resolved here, once,
      * rather than surfacing later as a balance that will not close.
      */
-    const lineSubtotal = Money.roundTo(gross - discountAmount, decimals);
+    const lineAmount = Money.roundTo(gross - discountAmount, decimals);
 
     /*
-     * Zero, always — and not because the client sent zero.
+     * The tax, from the code the line names and nothing else.
      *
-     * A tax-bearing line is refused at the boundary above, so reaching here
-     * means there is none. Reading `line.taxAmount` would make an untrusted
-     * client number the authority for the one figure the server most needs to
-     * own, which is precisely what the boundary exists to prevent.
+     * `line.taxRate` and `line.taxAmount` are refused at the boundary above, so
+     * there is no client figure here to be tempted by. A line with no code
+     * bears no tax and is NOT the same as a zero-rated one — which is why the
+     * category is only ever recorded when a code supplied it.
      */
-    const taxAmount = Money.ZERO;
+    const tax = line.taxCodeId ? resolved.get(line.taxCodeId) ?? null : null;
+    if (!tax) {
+      return { input: line, lineSubtotal: lineAmount, taxAmount: Money.ZERO, lineTotal: lineAmount, tax: null };
+    }
 
-    return { input: line, lineSubtotal, taxAmount, lineTotal: lineSubtotal + taxAmount };
+    const result = SalesTax.calculateTaxLine({
+      lineAmount,
+      rate: tax.rate,
+      category: tax.category,
+      method: tax.method,
+      decimals,
+    });
+
+    /*
+     * For INCLUSIVE tax the line amount already contains the tax, so the
+     * subtotal is the extracted net and the line total is the amount the
+     * customer was quoted — the gross does not grow. For EXCLUSIVE the net is
+     * the line amount and the tax sits on top. Getting this backwards is how an
+     * inclusive invoice silently overcharges by the rate.
+     */
+    return {
+      input: line,
+      lineSubtotal: result.taxableAmount,
+      taxAmount: result.taxAmount,
+      lineTotal: result.grossAmount,
+      tax,
+    };
   });
 
   const subtotal = Money.sum(computed.map((c) => c.lineSubtotal));
@@ -700,7 +835,7 @@ async function replaceLines(
 
   for (const [index, line] of computed.entries()) {
     const value = line.input;
-    for (const [field, raw] of [['unitPrice', value.unitPrice], ['taxAmount', value.taxAmount]] as const) {
+    for (const [field, raw] of [['unitPrice', value.unitPrice]] as const) {
       if (raw !== undefined && Money.exceedsPrecision(amount(raw, field), decimals)) {
         throw errors.validation(
           `Line ${index + 1}: ${field} carries more decimal places than this currency allows.`,
@@ -721,8 +856,15 @@ async function replaceLines(
       discount_type: value.discountType ?? null,
       discount_value: value.discountValue ?? null,
       tax_code_id: value.taxCodeId ?? null,
-      tax_rate: value.taxRate ?? '0',
+      /*
+       * The rate the SERVER resolved, never the one the request carried — that
+       * one is refused at the boundary. A draft stores it so the screen can
+       * show what the invoice would charge; the snapshot columns beside it stay
+       * empty until issue, because until then nothing is frozen.
+       */
+      tax_rate: line.tax ? Money.toDecimalString(line.tax.rate) : '0',
       tax_amount: Money.toDecimalString(line.taxAmount),
+      taxable_amount: Money.toDecimalString(line.lineSubtotal),
       line_subtotal: Money.toDecimalString(line.lineSubtotal),
       line_total: Money.toDecimalString(line.lineTotal),
       entity_id: value.entityId ?? null,
@@ -803,10 +945,17 @@ export async function createDraft(
     assertFunctionalCurrency(input.currency, currency);
     const decimals = monetaryDecimalsFor(currency);
 
-    /* Computed here, where the currency's precision is known — rounding a line
-     * net needs to know what a minor unit is. */
+    /*
+     * Computed here, where the currency's precision AND the tax date are known.
+     * The tax point is the invoice's own `issueDate` — see `resolveTaxForDate`
+     * for why that is the only internally consistent choice.
+     */
     const { computed, subtotal, taxTotal, chargesTotal, grandTotal } =
-      computeTotals(input.lines, input.additionalChargesTotal, decimals);
+      await computeTotals(trx, actor, input.lines, {
+        additionalCharges: input.additionalChargesTotal,
+        decimals,
+        taxPointDate: input.issueDate,
+      });
     const invoiceNumber = await allocateInvoiceNumber(trx, actor.organizationId, actor.companyId, input.issuingEntityId, input.issueDate);
 
     const created = await trx.insertInto('invoices').values({
@@ -874,8 +1023,19 @@ export async function updateDraft(
     const decimals = monetaryDecimalsFor(current.transaction_currency);
     assertFunctionalCurrency(input.currency, current.transaction_currency);
 
+    /*
+     * A DRAFT recalculates, and only a draft. The rule is explicit because the
+     * alternative is invisible: leaving a draft on a rate that has since been
+     * superseded would issue tax nobody charges any more. An ISSUED invoice
+     * never passes through here — `EDITABLE` stops it above — so no posted
+     * document is ever recomputed.
+     */
     const { computed, subtotal, taxTotal, chargesTotal, grandTotal } =
-      computeTotals(input.lines, input.additionalChargesTotal, decimals);
+      await computeTotals(trx, actor, input.lines, {
+        additionalCharges: input.additionalChargesTotal,
+        decimals,
+        taxPointDate: input.issueDate,
+      });
 
     await trx.updateTable('invoices').set({
       customer_id: input.customerId,
@@ -992,6 +1152,154 @@ async function resolveReceivableAccount(
   return accountId;
 }
 
+/* ══ Freezing the tax onto the issued lines ═══════════════════════════════ */
+
+interface FrozenLine {
+  /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+  row: any;
+  taxableAmount: Money.Amount;
+  taxAmount: Money.Amount;
+  tax: ResolvedTax | null;
+}
+
+/**
+ * Recompute each line's tax at the invoice's date and WRITE THE SNAPSHOT.
+ *
+ * ══ Why the snapshot is denormalised onto the line ═══════════════════════════
+ *
+ * `tax_code_id` alone makes an issued invoice depend on mutable configuration:
+ * archive the code, end-date the rate, correct a typo in its name, and the
+ * document's own history changes underneath it. A tax authority holding a copy
+ * of that invoice does not see the code change with it.
+ *
+ * So every fact needed to reproduce the figure is copied onto the line — the
+ * code's identity and name, the category, the method, the rate, WHICH rate
+ * version it came from, the base, the tax, the account it posted to, and the
+ * date the rate was resolved on. Nothing but a reversal may write these again.
+ */
+async function freezeLineTax(
+  trx: Trx,
+  actor: AccountingActor,
+  /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+  lines: any[],
+  options: { issueDate: string; decimals: number },
+): Promise<FrozenLine[]> {
+  const { issueDate, decimals } = options;
+
+  /* One resolution per code, so every line sharing a code shares one answer. */
+  const codeIds = [...new Set(
+    lines.map((line) => line.tax_code_id).filter((id): id is string => Boolean(id)),
+  )];
+  const resolved = new Map<string, ResolvedTax>();
+  for (const codeId of codeIds) {
+    const tax = await resolveTaxForDate(trx, actor, codeId, issueDate);
+    /*
+     * The account is re-checked HERE, not only when the code was configured. An
+     * account can be archived, blocked, deactivated or given a child between
+     * configuration and issue, and posting tax to one the ledger would refuse
+     * from any other door is exactly the inconsistency this check exists for.
+     */
+    if (SalesTax.chargesTax(tax.category)) {
+      await assertOutputAccountPostable(trx, actor, tax);
+    }
+    resolved.set(codeId, tax);
+  }
+
+  const frozen: FrozenLine[] = [];
+  const capturedAt = new Date();
+
+  for (const row of lines) {
+    const tax = row.tax_code_id ? resolved.get(row.tax_code_id) ?? null : null;
+
+    /*
+     * The base is rebuilt from quantity, price and discount rather than read
+     * back from `line_subtotal`, because for an inclusive line that column
+     * holds the NET the draft extracted — feeding it back in would extract the
+     * tax a second time and understate the sale on every re-issue.
+     */
+    const quantity = Money.toAmount(String(row.quantity ?? '0'), 'quantity');
+    const unitPrice = Money.toAmount(String(row.unit_price ?? '0'), 'unitPrice');
+    const gross = Money.multiply(quantity, unitPrice);
+    const discount = Money.toAmount(String(row.discount_value ?? '0'), 'discountValue');
+    const discountAmount = row.discount_type === 'percentage'
+      ? Money.multiply(gross, discount) / 100n
+      : discount;
+    const lineAmount = Money.roundTo(gross - discountAmount, decimals);
+
+    if (!tax) {
+      frozen.push({ row, taxableAmount: lineAmount, taxAmount: Money.ZERO, tax: null });
+      await trx.updateTable('invoice_lines').set({
+        taxable_amount: Money.toDecimalString(lineAmount),
+        line_subtotal: Money.toDecimalString(lineAmount),
+        line_total: Money.toDecimalString(lineAmount),
+        tax_amount: '0',
+        tax_rate: '0',
+      } as never)
+        .where('organization_id', '=', actor.organizationId)
+        .where('company_id', '=', actor.companyId)
+        .where('id', '=', row.id)
+        .execute();
+      continue;
+    }
+
+    const result = SalesTax.calculateTaxLine({
+      lineAmount, rate: tax.rate, category: tax.category, method: tax.method, decimals,
+    });
+
+    frozen.push({ row, taxableAmount: result.taxableAmount, taxAmount: result.taxAmount, tax });
+
+    await trx.updateTable('invoice_lines').set({
+      tax_rate: Money.toDecimalString(SalesTax.effectiveRate(tax.rate, tax.category)),
+      tax_amount: Money.toDecimalString(result.taxAmount),
+      taxable_amount: Money.toDecimalString(result.taxableAmount),
+      line_subtotal: Money.toDecimalString(result.taxableAmount),
+      line_total: Money.toDecimalString(result.grossAmount),
+      tax_rate_version_id: tax.rateVersionId,
+      tax_code_code: tax.code,
+      tax_code_name: tax.name,
+      tax_category: tax.category,
+      tax_calculation_method: tax.method,
+      tax_rate_effective_from: tax.effectiveFrom,
+      tax_rate_effective_to: tax.effectiveTo,
+      tax_account_id: tax.outputTaxAccountId,
+      tax_point_date: issueDate,
+      tax_snapshot_at: capturedAt,
+    } as never)
+      .where('organization_id', '=', actor.organizationId)
+      .where('company_id', '=', actor.companyId)
+      .where('id', '=', row.id)
+      .execute();
+  }
+
+  return frozen;
+}
+
+/** The one output account this invoice used, or null when it used several. */
+function singleTaxAccountOf(lines: FrozenLine[]): string | null {
+  const accounts = new Set(
+    lines.map((line) => line.tax?.outputTaxAccountId).filter((id): id is string => Boolean(id)),
+  );
+  return accounts.size === 1 ? [...accounts][0]! : null;
+}
+
+/** Tax owed per output account, with the codes that contributed to each. */
+function groupTaxByAccount(
+  lines: FrozenLine[],
+): { accountId: string; amount: Money.Amount; codes: string[] }[] {
+  const byAccount = new Map<string, { amount: Money.Amount; codes: Set<string> }>();
+  for (const line of lines) {
+    if (!line.tax || !line.tax.outputTaxAccountId || Money.isZero(line.taxAmount)) continue;
+    const entry = byAccount.get(line.tax.outputTaxAccountId)
+      ?? { amount: Money.ZERO, codes: new Set<string>() };
+    entry.amount = Money.add(entry.amount, line.taxAmount);
+    entry.codes.add(line.tax.code);
+    byAccount.set(line.tax.outputTaxAccountId, entry);
+  }
+  return [...byAccount.entries()].map(([accountId, entry]) => ({
+    accountId, amount: entry.amount, codes: [...entry.codes].sort(),
+  }));
+}
+
 /**
  * Issue an invoice: one transaction, or nothing.
  *
@@ -1056,8 +1364,25 @@ export async function issueInvoice(
 
     const receivableAccountId = await resolveReceivableAccount(trx, actor, current.customer_id);
 
-    const total = Money.toAmount(current.grand_total);
-    const taxDue = Money.toAmount(current.tax_total);
+    const issueDate = dateText(current.issue_date);
+    const decimals = monetaryDecimalsFor(current.transaction_currency);
+
+    /*
+     * ══ The tax is recomputed HERE, and this is the moment it freezes ═══════
+     *
+     * Not carried forward from the draft. A draft's figures were resolved when
+     * it was last saved, and a rate version added since would leave the posted
+     * journal disagreeing with the code the invoice names. Recomputing at issue
+     * against the invoice's own date makes the snapshot, the stored totals and
+     * the journal one answer by construction rather than by hoping three writes
+     * stayed in step.
+     */
+    const taxed = await freezeLineTax(trx, actor, lines, { issueDate, decimals });
+
+    const subtotal = Money.sum(taxed.map((line) => line.taxableAmount));
+    const taxDue = Money.sum(taxed.map((line) => line.taxAmount));
+    const charges = Money.toAmount(current.additional_charges_total);
+    const total = Money.add(Money.add(subtotal, taxDue), charges);
 
     /*
      * Tax is credited to a LIABILITY account, never back to the receivable.
@@ -1068,22 +1393,14 @@ export async function issueInvoice(
      * subledger and the general ledger then disagree by exactly the tax, and the
      * tax collected on the authority's behalf is recorded as owed to nobody.
      */
-    if (!Money.isZero(taxDue)) {
-      /*
-       * Reachable only for a row written before the boundary existed. There is
-       * no controlled tax account to post it to and no authoritative rate
-       * behind it, so it is refused rather than posted somewhere plausible.
-       */
-      throw errors.validation(UNSUPPORTED_TAX);
-    }
 
     /*
      * Additional charges are part of what the customer owes, so they are inside
      * the receivable debit and need a credit of their own. Without one the entry
      * is out of balance by exactly the charges — which `journalService` would
      * refuse, turning a missing account into an unexplained posting failure.
+     * Still refused: S2c brought tax, not a charges account.
      */
-    const charges = Money.toAmount(current.additional_charges_total);
     if (!Money.isZero(charges)) throw errors.validation(UNSUPPORTED_CHARGES);
 
     /*
@@ -1099,13 +1416,30 @@ export async function issueInvoice(
       description: `Sales invoice ${current.invoice_number}`,
       lines: [
         { accountId: receivableAccountId, debit: Money.toDecimalString(total), memo: current.invoice_number },
-        ...lines.map((line) => ({
-          accountId: line.account_id,
-          credit: Money.toDecimalString(Money.toAmount(line.line_subtotal)),
-          memo: line.description,
-          entityId: line.entity_id,
-          projectId: line.project_id,
-          costCenterId: line.cost_center_id,
+        /*
+         * Revenue is credited NET of tax, for both methods. On an inclusive
+         * invoice that means the revenue leg is smaller than the line the
+         * customer sees — which is the whole point: the difference is not the
+         * seller's income, it is money held for an authority.
+         */
+        ...taxed.map((line) => ({
+          accountId: line.row.account_id,
+          credit: Money.toDecimalString(line.taxableAmount),
+          memo: line.row.description,
+          entityId: line.row.entity_id,
+          projectId: line.row.project_id,
+          costCenterId: line.row.cost_center_id,
+        })),
+        /*
+         * One leg per output account, not one per line: several lines sharing a
+         * code produce one credit, and two codes mapped to different accounts
+         * stay apart — which is what makes a control-account reconciliation
+         * possible at all.
+         */
+        ...groupTaxByAccount(taxed).map(({ accountId, amount: taxAmount, codes }) => ({
+          accountId,
+          credit: Money.toDecimalString(taxAmount),
+          memo: `Output tax ${codes.join(', ')} — ${current.invoice_number}`,
         })),
       ],
     });
@@ -1119,7 +1453,22 @@ export async function issueInvoice(
        * leaving this invoice's receivable outstanding forever.
        */
       receivable_account_id: receivableAccountId,
-      tax_account_id: null,
+      /*
+       * Recomputed at issue, so the stored totals, the frozen line snapshots
+       * and the posted journal are one answer rather than three writes hoping
+       * to agree.
+       */
+      subtotal: Money.toDecimalString(subtotal),
+      tax_total: Money.toDecimalString(taxDue),
+      grand_total: Money.toDecimalString(total),
+      balance_due: Money.toDecimalString(total),
+      /*
+       * The single output account when the invoice used exactly one, and NULL
+       * when it used several. Null is honest here: two codes mapped to
+       * different control accounts have no one account this column could name,
+       * and the per-line snapshots are where that detail actually lives.
+       */
+      tax_account_id: singleTaxAccountOf(taxed),
       additional_charges_account_id: null,
       issued_at: new Date(),
       version: current.version + 1,

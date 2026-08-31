@@ -340,7 +340,13 @@ export async function loadAccountsForPosting(
     .where('company_id', '=', companyId)
     .where('id', 'in', [...new Set(accountIds)])
     .execute();
-  const children = await db
+  /*
+   * Guarded, because `IN ()` is a SYNTAX ERROR rather than an empty result.
+   * Reached whenever every requested id is absent — an account from another
+   * company, or one that never existed — and the caller wants "not found" back,
+   * not a 500 that says nothing about which account was wrong.
+   */
+  const children = rows.length === 0 ? [] : await db
     .selectFrom('accounts')
     .select('parent_account_id')
     .where('organization_id', '=', organizationId)

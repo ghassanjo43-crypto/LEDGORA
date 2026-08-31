@@ -27,12 +27,13 @@ import { useStore } from '@/store/useStore';
 import { useJournalStore } from '@/store/journalStore';
 import { recomputeLevels } from '@/lib/accountTree';
 import type { Account } from '@/types';
-import { booksEngine } from './booksEngine';
+import { booksEngine } from '@/services/books/booksEngine';
 import { beginHydration, isCurrentGeneration } from './booksScope';
 import { toAccount } from './accountMapping';
 import { toJournalEntry } from './journalMapping';
 import { loadCustomers } from '@/services/parties/customerDirectory';
 import { useInvoiceStore } from '@/store/invoiceStore';
+import { useServerTaxCodeStore } from '@/store/serverTaxCodeStore';
 
 export type BooksLoadState = 'idle' | 'loading' | 'ready' | 'unavailable';
 
@@ -137,6 +138,13 @@ export async function hydrateBooks(): Promise<{ ok: boolean; error?: string }> {
      * accounts because a receivables list could not be filled.
      */
     void useInvoiceStore.getState().syncFromServer();
+
+    /*
+     * And the tax codes, for the same reason and with the same treatment: an
+     * invoice screen that cannot list them is still a usable ledger, and the
+     * picker reports its own failure rather than blanking the accounts.
+     */
+    void useServerTaxCodeStore.getState().load();
 
     setStatus({ state: 'ready', error: null });
     return { ok: true };

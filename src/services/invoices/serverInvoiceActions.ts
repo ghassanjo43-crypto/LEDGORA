@@ -52,8 +52,13 @@ function toLineInput(line: Invoice['lines'][number], decimals: number): ServerIn
     quantity: numberToDecimal(line.quantity, 6),
     unitPrice: numberToDecimal(line.unitPrice, decimals),
     unit: line.unit,
+    /*
+     * The CODE only. The rate, the amount, the category and the method are
+     * refused by the server if they arrive — deliberately, because a figure
+     * sent from here would be the browser deciding what a tax authority is
+     * told. Everything numeric comes back resolved.
+     */
     taxCodeId: line.taxCodeId ?? null,
-    taxRate: numberToDecimal(line.taxRate ?? 0, 6),
     itemId: line.inventoryItemId ?? null,
     projectId: line.projectId ?? null,
     costCenterId: line.costCenterId ?? null,
