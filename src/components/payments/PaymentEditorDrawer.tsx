@@ -3,7 +3,7 @@ import { Send, Save, Eye, X, Printer, CheckCircle2, Info } from 'lucide-react';
 import type { BusinessEntity } from '@/types';
 import type { Payment, PaymentAllocation, PaymentMethod, PaymentType } from '@/types/payment';
 import { useStore } from '@/store/useStore';
-import { useEntityStore } from '@/store/useEntityStore';
+import { useSuppliers } from '@/services/parties/useSuppliers';
 import { useBillStore } from '@/store/billStore';
 import { usePaymentStore } from '@/store/paymentStore';
 import { calculatePaymentTotals } from '@/lib/paymentCalculations';
@@ -53,7 +53,6 @@ export function PaymentEditorDrawer({ open, paymentId, onClose }: Props) {
   const moneyStep = useMonetaryStep();
 
   const accounts = useStore((s) => s.accounts);
-  const entities = useEntityStore((s) => s.entities);
   const bills = useBillStore((s) => s.bills);
   const payment = usePaymentStore((s) => (paymentId ? s.payments.find((p) => p.id === paymentId) : undefined));
   const updateDraft = usePaymentStore((s) => s.updateDraft);
@@ -66,7 +65,15 @@ export function PaymentEditorDrawer({ open, paymentId, onClose }: Props) {
   const companyCurrency = useTransactionCurrency();
   const [showPreview, setShowPreview] = useState(false);
 
-  const suppliers = useMemo(() => entities.filter((e) => e.entityType === 'supplier' || e.entityType === 'both'), [entities]);
+  /*
+   * The SUPPLIER DIRECTORY, not the local entity store.
+   *
+   * Purchasing P1 made suppliers server-held for a durable subscriber, so
+   * reading `entities` here would offer browser records a payment could name but
+   * the books do not have. Free Demo still resolves to the local store, inside
+   * the hook rather than by branching here.
+   */
+  const { suppliers } = useSuppliers();
   /* The customer directory: the server's for a durable subscriber, the local
    * store for Free Demo. One seam, so no screen decides for itself. */
   const { customers } = useCustomers();

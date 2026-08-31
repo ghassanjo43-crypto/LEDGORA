@@ -35,6 +35,7 @@ import { accountingRoutes } from './routes/accounting.js';
 import { invoiceRoutes } from './routes/invoices.js';
 import { customerRoutes } from './routes/customers.js';
 import { taxCodeRoutes } from './routes/taxCodes.js';
+import { vendorRoutes } from './routes/vendors.js';
 import { joFotaraMockRoutes } from './services/joFotara/index.js';
 import { decoratePermissions } from './guards/permissions.js';
 import { decorateCompany, COMPANY_REFERENCE_HEADER } from './guards/companyScope.js';
@@ -271,6 +272,7 @@ export async function buildApp({
   await app.register(invoiceRoutes);
   await app.register(customerRoutes);
   await app.register(taxCodeRoutes);
+  await app.register(vendorRoutes);
 
   /*
    * The JoFotara clearance mock, when explicitly enabled.

@@ -32,6 +32,7 @@ import { beginHydration, isCurrentGeneration } from './booksScope';
 import { toAccount } from './accountMapping';
 import { toJournalEntry } from './journalMapping';
 import { loadCustomers } from '@/services/parties/customerDirectory';
+import { loadSuppliers } from '@/services/parties/supplierDirectory';
 import { useInvoiceStore } from '@/store/invoiceStore';
 import { useServerTaxCodeStore } from '@/store/serverTaxCodeStore';
 
@@ -129,6 +130,13 @@ export async function hydrateBooks(): Promise<{ ok: boolean; error?: string }> {
      * accounts because a picker could not be filled.
      */
     void loadCustomers();
+
+    /*
+     * And the suppliers, on the same terms: a purchasing screen that cannot
+     * list them is still a usable ledger, and it reports its own failure rather
+     * than blanking a bookkeeper's accounts.
+     */
+    void loadSuppliers();
 
     /*
      * And the invoices, from the same books. Not awaited into the verdict for

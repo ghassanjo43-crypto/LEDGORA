@@ -782,6 +782,7 @@ export interface Database {
   business_parties: BusinessPartiesTable;
   business_party_addresses: BusinessPartyAddressesTable;
   business_party_customer_profiles: BusinessPartyCustomerProfilesTable;
+  business_party_supplier_profiles: BusinessPartySupplierProfilesTable;
   business_party_audit_events: BusinessPartyAuditEventsTable;
   invoices: InvoicesTable;
   invoice_lines: InvoiceLinesTable;
@@ -1135,6 +1136,35 @@ export interface BusinessPartyCustomerProfilesTable {
   default_invoice_template_id: string | null;
   invoice_delivery_method: Generated<string>;
   customer_payment_terms: Generated<string>;
+  created_at: Generated<Timestamp>;
+  updated_at: Generated<Timestamp>;
+}
+
+/**
+ * The supplier role's own fields.
+ *
+ * Separate from the party for the reason migration 030 gives: the vendor route
+ * can be handed this table and the shared one, and is then STRUCTURALLY unable
+ * to write a customer field — the columns are not in a table it touches.
+ */
+export interface BusinessPartySupplierProfilesTable {
+  organization_id: string;
+  company_id: string;
+  party_id: string;
+  supplier_category: Generated<string>;
+  /**
+   * Accounts Payable control for this supplier.
+   *
+   * Per supplier, mirroring the receivable on the customer profile. There is no
+   * company-level default in this product, so there is no precedence rule.
+   */
+  default_payable_account_id: string | null;
+  /** Master data for a later slice. Nothing posts it: P1 creates no bills. */
+  default_expense_account_id: string | null;
+  supplier_payment_terms: Generated<string>;
+  /** Recorded, never acted on — withholding has no server accounting treatment. */
+  withholding_tax_applicable: Generated<boolean>;
+  preferred_payment_method: Generated<string>;
   created_at: Generated<Timestamp>;
   updated_at: Generated<Timestamp>;
 }

@@ -10,6 +10,7 @@ import { assertEntityPermission, type EntityPermission } from '@/lib/entityPermi
 import { getCurrentUser } from '@/store/authStore';
 import { isPlatformAdminFullAccess } from '@/store/platformFullAccess';
 import { customersAreServerAuthoritative } from '@/services/parties/customerDirectory';
+import { suppliersAreServerAuthoritative } from '@/services/parties/supplierDirectory';
 
 export interface EntityActionResult {
   ok: boolean;
@@ -64,25 +65,32 @@ function entityFromForm(
 
 
 /**
- * The refusal that keeps a durable subscriber's customers out of this store.
+ * The refusal that keeps a durable subscriber's parties out of this store.
  *
  * A local write here APPEARS to save, and the next hydration replaces the cache
  * without a word — so the record is gone with nothing to retry. "Could not save"
  * is recoverable; "saved somewhere that does not count" is not.
  *
- * It applies to the CUSTOMER role only. Suppliers have not migrated: their
- * records are still browser-resident and the purchasing screens still write
- * them here, exactly as before. Refusing those too would break Bills and
- * Payments for a domain this slice does not touch.
+ * Purchasing P1 moved the SUPPLIER role, so both roles are now refused. A party
+ * holding either role in a durable workspace belongs to the server; the local
+ * store keeps only Free Demo's records, whose originals live nowhere else.
  */
 const SERVER_CUSTOMERS_MESSAGE =
   'Customers are saved on the server for this workspace. Use the customer directory, '
   + 'which writes through the server rather than this browser.';
 
+const SERVER_SUPPLIERS_MESSAGE =
+  'Suppliers are saved on the server for this workspace. Use the supplier directory, '
+  + 'which writes through the server rather than this browser.';
+
 function refusesCustomerWrite(type: EntityType): EntityActionResult | null {
-  if (!customersAreServerAuthoritative()) return null;
-  if (type !== 'customer' && type !== 'both') return null;
-  return { ok: false, error: SERVER_CUSTOMERS_MESSAGE };
+  if (customersAreServerAuthoritative() && (type === 'customer' || type === 'both')) {
+    return { ok: false, error: SERVER_CUSTOMERS_MESSAGE };
+  }
+  if (suppliersAreServerAuthoritative() && (type === 'supplier' || type === 'both')) {
+    return { ok: false, error: SERVER_SUPPLIERS_MESSAGE };
+  }
+  return null;
 }
 
 interface EntityState {

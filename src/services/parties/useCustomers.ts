@@ -23,17 +23,30 @@ import { useCustomerDirectory, customersAreServerAuthoritative } from './custome
 /**
  * A server party as the existing screens expect to see it.
  *
- * `entityType` reports only what this route can know. A party that is also a
- * supplier is still rendered as a customer here, because the supplier profile
- * has not migrated and claiming the role would promise purchasing data that no
- * server table holds yet.
+ * `entityType` now reports what the party actually holds. Purchasing P1 gave
+ * the supplier role its own profile table, so a party that trades in both
+ * directions renders as `both` with both sides populated — one record, one
+ * code, one tax number, which is what the directory has always modelled.
  */
 export function partyToEntity(party: ServerBusinessParty): BusinessEntity {
   const primary = party.addresses.find((a) => a.isPrimary && a.purpose === 'billing')
     ?? party.addresses.find((a) => a.purpose === 'billing')
     ?? party.addresses[0];
 
-  const entityType: EntityType = party.isSupplier ? 'both' : 'customer';
+  const supplier = (party as ServerBusinessParty & {
+    supplier?: {
+      supplierCategory: string;
+      defaultPayableAccountId: string | null;
+      defaultExpenseAccountId: string | null;
+      supplierPaymentTerms: string;
+      withholdingTaxApplicable: boolean;
+      preferredPaymentMethod: string;
+    } | null;
+  }).supplier ?? null;
+
+  const entityType: EntityType = party.isSupplier
+    ? (party.isCustomer ? 'both' : 'supplier')
+    : 'customer';
 
   return {
     id: party.id,
@@ -87,14 +100,20 @@ export function partyToEntity(party: ServerBusinessParty): BusinessEntity {
     invoiceDeliveryMethod: (party.customer?.invoiceDeliveryMethod ?? '') as BusinessEntity['invoiceDeliveryMethod'],
     customerPaymentTerms: (party.customer?.customerPaymentTerms ?? '') as BusinessEntity['customerPaymentTerms'],
 
-    /* Supplier-only fields stay at their defaults. This route cannot read them
-     * and must not appear to. */
-    supplierCategory: '',
-    defaultExpenseAccount: '',
-    defaultPayableAccount: '',
-    supplierPaymentTerms: '',
-    withholdingTaxApplicable: false,
-    preferredPaymentMethod: '',
+    /*
+     * Read from the supplier profile when the party holds that role.
+     *
+     * Reading is not writing: the customer service still issues no statement
+     * against the supplier profile table, and the supplier service issues none
+     * against the customer one. The separation is about which tables each
+     * WRITE path touches, and it is unchanged.
+     */
+    supplierCategory: supplier?.supplierCategory ?? '',
+    defaultExpenseAccount: supplier?.defaultExpenseAccountId ?? '',
+    defaultPayableAccount: supplier?.defaultPayableAccountId ?? '',
+    supplierPaymentTerms: (supplier?.supplierPaymentTerms ?? '') as BusinessEntity['supplierPaymentTerms'],
+    withholdingTaxApplicable: supplier?.withholdingTaxApplicable ?? false,
+    preferredPaymentMethod: (supplier?.preferredPaymentMethod ?? '') as BusinessEntity['preferredPaymentMethod'],
   };
 }
 

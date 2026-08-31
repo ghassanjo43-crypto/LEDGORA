@@ -307,9 +307,9 @@ const RESET_PLAN: readonly PlanEntry[] = [
     why: 'Why a tenant changed its document language. Meaningless once the tenant is gone.',
   },
   /* ── Business parties (Sales S1) ───────────────────────────────────────
-   * Children first: the audit trail and the role profile, then the addresses,
-   * then the party itself. The customer profile carries foreign keys to
-   * `accounts`, so it must go before them.
+   * Children first: the audit trail and the role profiles, then the addresses,
+   * then the party itself. BOTH role profiles carry foreign keys to `accounts`,
+   * so they must go before them.
    */
   {
     table: 'business_party_audit_events',
@@ -324,6 +324,13 @@ const RESET_PLAN: readonly PlanEntry[] = [
     order: 30.04,
     label: 'Customer profiles',
     why: 'The customer role of a business party. References accounts, so it goes before them.',
+  },
+  {
+    table: 'business_party_supplier_profiles',
+    action: 'scoped_delete',
+    order: 30.05,
+    label: 'Supplier profiles',
+    why: 'The supplier role of a business party. References accounts, so it goes before them.',
   },
   {
     table: 'business_party_addresses',

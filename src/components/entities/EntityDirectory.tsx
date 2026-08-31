@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
 import { useEntityStore } from '@/store/useEntityStore';
 import { useCustomers } from '@/services/parties/useCustomers';
+import { useSuppliers } from '@/services/parties/useSuppliers';
 import {
   computeEntityStats,
   distinctValues,
@@ -27,6 +28,7 @@ import { EntitySearchFilterBar } from './EntitySearchFilterBar';
 import { EntityTable } from './EntityTable';
 import { EntityFormDrawer, type EntityFormMode } from './EntityFormDrawer';
 import { customerActions, IMPORT_UNSUPPORTED } from '@/services/parties/customerActions';
+import { supplierActions } from '@/services/parties/supplierActions';
 
 interface EntityDirectoryProps {
   scope: EntityScope;
@@ -43,18 +45,27 @@ const SCOPE_DEFAULT_TYPE = {
 export function EntityDirectory({ scope, title, description }: EntityDirectoryProps) {
   const localEntities = useEntityStore((s) => s.entities);
   /*
-   * The customer scope reads the DIRECTORY, which is the server's for a durable
-   * subscriber and the local store for Free Demo. The supplier and combined
-   * scopes stay on the local store: suppliers have not migrated, and showing a
-   * durable subscriber a server-backed customer list beside a browser-backed
-   * supplier list is the honest picture of where this migration has reached.
+   * Each ROLE scope reads its own directory — the server's for a durable
+   * subscriber, the local store for Free Demo. Purchasing P1 moved the supplier
+   * half, so both roles are now server-held for a durable workspace.
+   *
+   * The COMBINED scope stays on the local store deliberately. It is one table
+   * of every party, and the two server directories are paged and searched
+   * independently; merging them here would produce a list that is neither
+   * complete nor consistently ordered. A durable subscriber uses the two role
+   * screens, which are the ones the navigation offers.
    */
-  const { customers, serverBacked } = useCustomers();
-  const actions = customerActions();
-  const entities = useMemo(
-    () => (scope === 'customer' && serverBacked ? customers : localEntities),
-    [scope, serverBacked, customers, localEntities],
-  );
+  const { customers, serverBacked: customersOnServer } = useCustomers();
+  const { suppliers, serverBacked: suppliersOnServer, total: supplierTotal } = useSuppliers();
+  const serverBacked = scope === 'customer' ? customersOnServer
+    : scope === 'supplier' ? suppliersOnServer
+    : false;
+  const actions = scope === 'supplier' ? supplierActions() : customerActions();
+  const entities = useMemo(() => {
+    if (scope === 'customer' && customersOnServer) return customers;
+    if (scope === 'supplier' && suppliersOnServer) return suppliers;
+    return localEntities;
+  }, [scope, customersOnServer, suppliersOnServer, customers, suppliers, localEntities]);
   const deleteEntity = useEntityStore((s) => s.deleteEntity);
   const replaceAll = useEntityStore((s) => s.replaceAll);
   const { notify } = useToast();
@@ -66,6 +77,24 @@ export function EntityDirectory({ scope, title, description }: EntityDirectoryPr
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const scoped = useMemo(() => scopeEntities(entities, scope), [entities, scope]);
+
+  /*
+   * A CENSUS, not a migration.
+   *
+   * Suppliers left in this browser cannot be imported automatically: the server
+   * would have to decide which payable account each posts to and whether a code
+   * clashes with a party already there, and guessing either would attach real
+   * bills to an account nobody chose. So this COUNTS them and says so, and the
+   * records are left exactly where they are.
+   *
+   * Without this a durable subscriber whose suppliers never moved sees an empty
+   * table that looks like data loss.
+   */
+  const strandedSuppliers = useMemo(
+    () => (scope === 'supplier' && serverBacked ? scopeEntities(localEntities, 'supplier').length : 0),
+    [scope, serverBacked, localEntities],
+  );
+  const showSupplierCensus = strandedSuppliers > 0 && supplierTotal === 0;
   const stats = useMemo(() => computeEntityStats(entities), [entities]);
   const countries = useMemo(() => distinctValues(entities, 'country'), [entities]);
   const currencies = useMemo(() => distinctValues(entities, 'defaultCurrency'), [entities]);
@@ -99,7 +128,9 @@ export function EntityDirectory({ scope, title, description }: EntityDirectoryPr
     if (actions.serverBacked) {
       const result = await actions.setArchived(pendingDeleteId, true);
       notify(
-        result.ok ? 'Customer archived.' : result.error ?? 'Could not archive.',
+        result.ok
+          ? `${scope === 'supplier' ? 'Supplier' : 'Customer'} archived.`
+          : result.error ?? 'Could not archive.',
         result.ok ? 'success' : 'error',
       );
     } else {
@@ -206,6 +237,21 @@ export function EntityDirectory({ scope, title, description }: EntityDirectoryPr
             countries={countries}
             currencies={currencies}
           />
+          {showSupplierCensus ? (
+            <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-800 dark:bg-amber-950/40">
+              <p className="font-medium text-amber-900 dark:text-amber-200">
+                {strandedSuppliers} supplier{strandedSuppliers === 1 ? '' : 's'} remain in this
+                browser and are not in these books.
+              </p>
+              <p className="mt-1 text-amber-800 dark:text-amber-300">
+                This company&rsquo;s suppliers are held on the server, and these were never
+                imported. Importing them automatically would mean deciding which payable account
+                each one posts to and how to resolve any code that already exists here — decisions
+                that would attach real bills to an account nobody chose, so they are left for you
+                to make. Add them here individually; the browser copies are untouched.
+              </p>
+            </div>
+          ) : null}
           <p className="text-xs text-slate-400">
             Showing {visible.length} of {scoped.length} {scope === 'all' ? 'entities' : `${scope}s`}.
           </p>

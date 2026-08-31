@@ -314,6 +314,16 @@ export const TENANT_DEPENDENCIES: readonly TenantDependency[] = [
     rationale: 'The customer role of a business party. References accounts, so it is deleted before them.',
   },
   {
+    table: 'business_party_supplier_profiles',
+    ownershipKey: 'organization_id',
+    kind: 'authoritative',
+    disposition: 'delete',
+    order: 39.05,
+    label: 'Supplier profiles',
+    crossTenantReachable: false,
+    rationale: 'The supplier role of a business party. References accounts, so it is deleted before them.',
+  },
+  {
     table: 'business_party_addresses',
     ownershipKey: 'organization_id',
     kind: 'authoritative',
@@ -535,6 +545,7 @@ export const DIRECTLY_OWNED_TABLES = [
   /* Business parties, children first — see migration 030. */
   'business_party_audit_events',
   'business_party_customer_profiles',
+  'business_party_supplier_profiles',
   'business_party_addresses',
   'business_parties',
   'invoice_audit_events',

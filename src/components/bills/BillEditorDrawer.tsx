@@ -3,7 +3,7 @@ import { Plus, Trash2, Send, Save, Eye, X, Printer, CheckCircle2, Info, Upload }
 import type { BusinessEntity } from '@/types';
 import type { Bill, BillLine, BillType } from '@/types/bill';
 import { useStore } from '@/store/useStore';
-import { useEntityStore } from '@/store/useEntityStore';
+import { useSuppliers } from '@/services/parties/useSuppliers';
 import { useBillStore, makeEmptyBillLine } from '@/store/billStore';
 import { calculateBillLine, calculateBillTotals } from '@/lib/billCalculations';
 import { checkDuplicateSupplierInvoiceNumber } from '@/lib/billTax';
@@ -62,7 +62,6 @@ export function BillEditorDrawer({ open, billId, onClose }: Props) {
   const catalogueItems = useInventoryStore((s) => s.items);
   const taxCodes = useTaxCodeStore((s) => s.taxCodes);
   const showDimensions = showCostCenter || showProject || showInventory;
-  const entities = useEntityStore((s) => s.entities);
   const bills = useBillStore((s) => s.bills);
   const bill = useBillStore((s) => (billId ? s.bills.find((b) => b.id === billId) : undefined));
   const updateDraft = useBillStore((s) => s.updateDraft);
@@ -76,7 +75,15 @@ export function BillEditorDrawer({ open, billId, onClose }: Props) {
   const [showPreview, setShowPreview] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
-  const suppliers = useMemo(() => entities.filter((e) => e.entityType === 'supplier' || e.entityType === 'both'), [entities]);
+  /*
+   * The SUPPLIER DIRECTORY, not the local entity store.
+   *
+   * Purchasing P1 made suppliers server-held for a durable subscriber, so
+   * reading `entities` here would offer browser records a bill could name but
+   * the books do not have. Free Demo still resolves to the local store, inside
+   * the hook rather than by branching here.
+   */
+  const { suppliers } = useSuppliers();
 
   const [lines, setLines] = useState<BillLine[]>(bill?.lines ?? []);
   const [supplierId, setSupplierId] = useState(bill?.supplierId ?? '');

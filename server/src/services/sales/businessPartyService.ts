@@ -56,7 +56,11 @@ export type PartyAuditAction =
   | 'PARTY_ARCHIVED'
   | 'PARTY_RESTORED'
   | 'CUSTOMER_ROLE_GRANTED'
-  | 'CUSTOMER_ROLE_WITHDRAWN';
+  | 'CUSTOMER_ROLE_WITHDRAWN'
+  | 'SUPPLIER_ROLE_GRANTED'
+  | 'SUPPLIER_ROLE_WITHDRAWN'
+  | 'SUPPLIER_PAYABLE_ACCOUNT_CHANGED'
+  | 'SUPPLIER_TAX_IDENTITY_CHANGED';
 
 export interface PartyAddress {
   id: string;
@@ -78,6 +82,20 @@ export interface CustomerProfile {
   defaultInvoiceTemplateId: string | null;
   invoiceDeliveryMethod: string;
   customerPaymentTerms: string;
+}
+
+export interface SupplierProfile {
+  supplierCategory: string;
+  defaultPayableAccountId: string | null;
+  defaultExpenseAccountId: string | null;
+  supplierPaymentTerms: string;
+  /**
+   * Master data only. Withholding has no server accounting treatment — S2c
+   * refused the category outright — so this records what the user said about
+   * the supplier and promises nothing about a workflow.
+   */
+  withholdingTaxApplicable: boolean;
+  preferredPaymentMethod: string;
 }
 
 export interface BusinessParty {
@@ -107,6 +125,8 @@ export interface BusinessParty {
   addresses: PartyAddress[];
   /** Present only while the party holds the customer role. */
   customer: CustomerProfile | null;
+  /** Present only while the party holds the supplier role. */
+  supplier: SupplierProfile | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -181,7 +201,7 @@ const DECIMAL = /^-?\d{1,18}(\.\d{1,10})?$/;
  * an `@`, say — would refuse records the product has always accepted, and a
  * migration slice is the wrong place to discover a new rule.
  */
-function normalizeShared(input: SharedPartyInput): Record<string, string> {
+export function normalizeShared(input: SharedPartyInput): Record<string, string> {
   const out: Record<string, string> = {};
   const trim = (value: string | undefined): string | undefined =>
     value === undefined ? undefined : value.trim();
@@ -230,7 +250,7 @@ function assertDecimal(value: string | undefined, field: string): void {
 
 /* ══ Reading ══════════════════════════════════════════════════════════════ */
 
-interface PartyRow {
+export interface PartyRow {
   id: string; party_code: string; legal_name: string; trading_name: string;
   is_customer: boolean; is_supplier: boolean; contact_person: string; job_title: string;
   email: string; phone: string; mobile: string; website: string;
@@ -244,7 +264,7 @@ function toIso(value: Date | string): string {
   return value instanceof Date ? value.toISOString() : String(value);
 }
 
-async function hydrate(
+export async function hydrate(
   db: PartyExecutor,
   actor: Pick<PartyActor, 'organizationId' | 'companyId'>,
   rows: PartyRow[],
@@ -269,6 +289,19 @@ async function hydrate(
     .where('party_id', 'in', ids)
     .execute();
 
+  /*
+   * Read here so ONE hydrate serves both routes. Reading a profile is not
+   * writing one: the customer service still cannot change a supplier field,
+   * because it never inserts or updates this table.
+   */
+  const supplierProfiles = await db
+    .selectFrom('business_party_supplier_profiles')
+    .selectAll()
+    .where('organization_id', '=', actor.organizationId)
+    .where('company_id', '=', actor.companyId)
+    .where('party_id', 'in', ids)
+    .execute();
+
   const addressesBy = new Map<string, PartyAddress[]>();
   for (const row of addresses) {
     const list = addressesBy.get(row.party_id) ?? [];
@@ -286,9 +319,11 @@ async function hydrate(
   }
 
   const profileBy = new Map(profiles.map((row) => [row.party_id, row]));
+  const supplierBy = new Map(supplierProfiles.map((row) => [row.party_id, row]));
 
   return rows.map((row) => {
     const profile = profileBy.get(row.id);
+    const supplier = supplierBy.get(row.id);
     return {
       id: row.id,
       partyCode: row.party_code,
@@ -323,6 +358,16 @@ async function hydrate(
             defaultInvoiceTemplateId: profile.default_invoice_template_id,
             invoiceDeliveryMethod: profile.invoice_delivery_method,
             customerPaymentTerms: profile.customer_payment_terms,
+          }
+        : null,
+      supplier: supplier
+        ? {
+            supplierCategory: supplier.supplier_category,
+            defaultPayableAccountId: supplier.default_payable_account_id,
+            defaultExpenseAccountId: supplier.default_expense_account_id,
+            supplierPaymentTerms: supplier.supplier_payment_terms,
+            withholdingTaxApplicable: supplier.withholding_tax_applicable,
+            preferredPaymentMethod: supplier.preferred_payment_method,
           }
         : null,
       createdAt: toIso(row.created_at),
@@ -420,7 +465,7 @@ export async function getCustomer(
 
 /* ══ Writing ══════════════════════════════════════════════════════════════ */
 
-async function writeAudit(
+export async function writeAudit(
   trx: Transaction<Database>,
   actor: PartyActor,
   input: {
@@ -455,7 +500,7 @@ async function writeAudit(
  * read-before-write and only the index stops the second — so the race is LOST
  * gracefully here rather than prevented by a check that cannot hold.
  */
-function asConflict(cause: unknown): never {
+export function asConflict(cause: unknown): never {
   const message = String((cause as { message?: string })?.message ?? '');
   if (message.includes('business_parties_code_unique')) {
     throw errors.conflict('That party code is already used in these books.');
@@ -466,7 +511,7 @@ function asConflict(cause: unknown): never {
   throw cause as Error;
 }
 
-async function replaceAddresses(
+export async function replaceAddresses(
   trx: Transaction<Database>,
   actor: PartyActor,
   partyId: string,
