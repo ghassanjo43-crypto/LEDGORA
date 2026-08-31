@@ -853,59 +853,77 @@ async function lockAndVerify(
   return loadJournal(trx, actor, journalId);
 }
 
+/**
+ * Create a draft INSIDE a transaction the caller already holds.
+ *
+ * Split out for the reason `reverseJournalIn` was: Kysely does not nest
+ * transactions, so a caller that already has one cannot go through
+ * `createDraft` below. Invoice issue needs the document and its journal to
+ * commit or roll back together, which is impossible while the journal opens a
+ * transaction of its own.
+ */
+export async function createDraftIn(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  trx: any,
+  actor: AccountingActor,
+  input: JournalInput,
+  hooks: PostingHooks = {},
+): Promise<JournalRecord> {
+    const postingDate = resolveDates(input);
+
+  // Derived from the organization, inside the same transaction as the write.
+  const functionalCurrency = await functionalCurrencyOf(trx, actor.organizationId);
+  const { transactionCurrency, rate } = resolveOrdinaryCurrency(input, functionalCurrency);
+
+  const journalNumber = await allocateJournalNumber(trx, actor.organizationId, actor.companyId);
+  const created = await trx
+    .insertInto('journal_entries')
+    .values({
+      organization_id: actor.organizationId,
+      company_id: actor.companyId,
+      journal_number: journalNumber,
+      journal_type: input.journalType ?? 'general',
+      transaction_date: input.transactionDate,
+      posting_date: postingDate,
+      status: 'draft',
+      reference: input.reference ?? '',
+      description: input.description ?? '',
+      notes: input.notes ?? '',
+      transaction_currency: transactionCurrency,
+      functional_currency: functionalCurrency,
+      exchange_rate: Money.toDecimalString(rate),
+      source_type: input.sourceType ?? null,
+      source_id: input.sourceId ?? null,
+      source_event: input.sourceEvent ?? null,
+      created_by: actor.userId,
+      updated_by: actor.userId,
+    })
+    .returning('id')
+    .executeTakeFirstOrThrow();
+
+  await insertLines(trx, actor.organizationId, actor.companyId, created.id, input.lines ?? [], rate, transactionCurrency);
+
+  const journal = await loadJournal(trx, actor, created.id);
+  await writeVersion(trx, actor, journal, 'created', '');
+  await hooks.afterVersion?.(trx, journal);
+  await writeAccountingAudit(trx, actor, {
+    action: 'JOURNAL_CREATED',
+    recordType: 'journal_entry',
+    recordId: journal.id,
+    resultingVersion: journal.version,
+    detail: { journalNumber: journal.journalNumber, lines: journal.lines.length },
+  });
+  return journal;
+}
+
+/** The ordinary entry point: its own transaction, then the shared body. */
 export async function createDraft(
   db: Kysely<Database>,
   actor: AccountingActor,
   input: JournalInput,
   hooks: PostingHooks = {},
 ): Promise<JournalRecord> {
-  const postingDate = resolveDates(input);
-
-  return db.transaction().execute(async (trx) => {
-    // Derived from the organization, inside the same transaction as the write.
-    const functionalCurrency = await functionalCurrencyOf(trx, actor.organizationId);
-    const { transactionCurrency, rate } = resolveOrdinaryCurrency(input, functionalCurrency);
-
-    const journalNumber = await allocateJournalNumber(trx, actor.organizationId, actor.companyId);
-    const created = await trx
-      .insertInto('journal_entries')
-      .values({
-        organization_id: actor.organizationId,
-        company_id: actor.companyId,
-        journal_number: journalNumber,
-        journal_type: input.journalType ?? 'general',
-        transaction_date: input.transactionDate,
-        posting_date: postingDate,
-        status: 'draft',
-        reference: input.reference ?? '',
-        description: input.description ?? '',
-        notes: input.notes ?? '',
-        transaction_currency: transactionCurrency,
-        functional_currency: functionalCurrency,
-        exchange_rate: Money.toDecimalString(rate),
-        source_type: input.sourceType ?? null,
-        source_id: input.sourceId ?? null,
-        source_event: input.sourceEvent ?? null,
-        created_by: actor.userId,
-        updated_by: actor.userId,
-      })
-      .returning('id')
-      .executeTakeFirstOrThrow();
-
-    await insertLines(trx, actor.organizationId, actor.companyId, created.id, input.lines ?? [], rate, transactionCurrency);
-
-    const journal = await loadJournal(trx, actor, created.id);
-    await writeVersion(trx, actor, journal, 'created', '');
-    await hooks.afterVersion?.(trx, journal);
-    await writeAccountingAudit(trx, actor, {
-      action: 'JOURNAL_CREATED',
-      recordType: 'journal_entry',
-      recordId: journal.id,
-      resultingVersion: journal.version,
-      detail: { journalNumber: journal.journalNumber, lines: journal.lines.length },
-    });
-    return journal;
-  });
+  return db.transaction().execute((trx) => createDraftIn(trx, actor, input, hooks));
 }
 
 export async function updateDraft(
@@ -1011,6 +1029,63 @@ export async function deleteDraft(
  * of it, so there is no state in which an entry is posted but unaudited, or
  * validated but half-written.
  */
+/**
+ * Post a journal INSIDE a transaction the caller already holds.
+ *
+ * The other half of what invoice issue needs: the document, its number, its
+ * status and this posting have to share one transaction, so a failure here
+ * leaves the invoice an untouched draft rather than a numbered document with
+ * no entry behind it.
+ */
+export async function postJournalIn(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  trx: any,
+  actor: AccountingActor,
+  journalId: string,
+  options: MutationOptions,
+  hooks: PostingHooks = {},
+): Promise<JournalRecord> {
+  const journal = await lockAndVerify(trx, actor, journalId, options.expectedVersion);
+  if (journal.status === 'posted') throw errors.conflict('This entry is already posted.');
+  if (journal.status !== 'draft') throw errors.conflict(`A ${journal.status} entry cannot be posted.`);
+
+  await assertPeriodAccepts(trx, actor.organizationId, actor.companyId, journal.postingDate, 'post');
+  await validateForPosting(trx, actor.organizationId, actor.companyId, journal);
+
+  const now = new Date();
+  await trx
+    .updateTable('journal_entries')
+    .set({
+      status: 'posted',
+      posted_at: now,
+      posted_by: actor.userId,
+      version: journal.version + 1,
+      updated_by: actor.userId,
+      updated_at: now,
+    })
+    .where('organization_id', '=', actor.organizationId)
+    .where('company_id', '=', actor.companyId)
+    .where('id', '=', journalId)
+    .execute();
+
+  const posted = await loadJournal(trx, actor, journalId);
+  await writeVersion(trx, actor, posted, 'posted', options.reason ?? '');
+  await hooks.afterVersion?.(trx, posted);
+
+  await hooks.beforeAudit?.(trx);
+  await writeAccountingAudit(trx, actor, {
+    action: 'JOURNAL_POSTED',
+    recordType: 'journal_entry',
+    recordId: journalId,
+    previousVersion: journal.version,
+    resultingVersion: journal.version + 1,
+    detail: { journalNumber: journal.journalNumber, postingDate: journal.postingDate },
+  });
+
+  return posted;
+}
+
+/** The ordinary entry point: its own transaction, then the shared body. */
 export async function postJournal(
   db: Kysely<Database>,
   actor: AccountingActor,
@@ -1018,46 +1093,7 @@ export async function postJournal(
   options: MutationOptions,
   hooks: PostingHooks = {},
 ): Promise<JournalRecord> {
-  return db.transaction().execute(async (trx) => {
-    const journal = await lockAndVerify(trx, actor, journalId, options.expectedVersion);
-    if (journal.status === 'posted') throw errors.conflict('This entry is already posted.');
-    if (journal.status !== 'draft') throw errors.conflict(`A ${journal.status} entry cannot be posted.`);
-
-    await assertPeriodAccepts(trx, actor.organizationId, actor.companyId, journal.postingDate, 'post');
-    await validateForPosting(trx, actor.organizationId, actor.companyId, journal);
-
-    const now = new Date();
-    await trx
-      .updateTable('journal_entries')
-      .set({
-        status: 'posted',
-        posted_at: now,
-        posted_by: actor.userId,
-        version: journal.version + 1,
-        updated_by: actor.userId,
-        updated_at: now,
-      })
-      .where('organization_id', '=', actor.organizationId)
-      .where('company_id', '=', actor.companyId)
-      .where('id', '=', journalId)
-      .execute();
-
-    const posted = await loadJournal(trx, actor, journalId);
-    await writeVersion(trx, actor, posted, 'posted', options.reason ?? '');
-    await hooks.afterVersion?.(trx, posted);
-
-    await hooks.beforeAudit?.(trx);
-    await writeAccountingAudit(trx, actor, {
-      action: 'JOURNAL_POSTED',
-      recordType: 'journal_entry',
-      recordId: journalId,
-      previousVersion: journal.version,
-      resultingVersion: journal.version + 1,
-      detail: { journalNumber: journal.journalNumber, postingDate: journal.postingDate },
-    });
-
-    return posted;
-  });
+  return db.transaction().execute((trx) => postJournalIn(trx, actor, journalId, options, hooks));
 }
 
 /**

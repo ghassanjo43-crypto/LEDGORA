@@ -51,14 +51,34 @@ export const LIFECYCLE_WRITE_PREFIXES: readonly string[] = [
   '/api/organizations', // organization onboarding
   '/api/subscriptions', // package selection + confirmation
   '/api/plans', // catalogue
-  '/api/invoices', // invoice retrieval + payment-proof upload
+  /*
+   * NOT '/api/invoices'.
+   *
+   * Two unrelated resources share that prefix: the PLATFORM subscription
+   * invoice a customer pays to leave Free Preview, and the tenant's own SALES
+   * invoices. A prefix entry exempts both, so every sales-invoice create, issue
+   * and void bypassed this guard entirely — a preview customer could put
+   * permanent invoices in their books without an active subscription. Only the
+   * payment-proof upload is lifecycle, and it is named exactly below.
+   */
   '/api/admin', // platform staff, separately capability-guarded
   '/api/health',
 ];
 
+/**
+ * Lifecycle paths that cannot be expressed as a prefix.
+ *
+ * `/api/invoices/:id/payment-proof` is how a Free Preview customer pays, so it
+ * must stay writable — but its siblings under the same prefix are the tenant's
+ * sales invoices and must not. A suffix match keeps the exemption to exactly the
+ * one operation instead of the whole resource.
+ */
+const LIFECYCLE_WRITE_SUFFIXES: readonly string[] = ['/payment-proof'];
+
 export function isLifecycleWrite(path: string): boolean {
   // Compare the path only — a query string must never change the verdict.
   const clean = path.split('?')[0] ?? path;
+  if (LIFECYCLE_WRITE_SUFFIXES.some((suffix) => clean.endsWith(suffix))) return true;
   return LIFECYCLE_WRITE_PREFIXES.some(
     (prefix) => clean === prefix || clean.startsWith(`${prefix}/`),
   );

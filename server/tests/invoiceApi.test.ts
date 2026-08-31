@@ -56,13 +56,29 @@ async function account(user: SessionCookies, code: string, name: string, type: s
   return response.json().account.id;
 }
 
+/**
+ * A customer in the caller's own books.
+ *
+ * Migration 031 gave `invoices.customer_id` a foreign key, so an invoice can no
+ * longer name an invented uuid — which is the point of it. Each tenant gets its
+ * own, because a party belongs to exactly one set of books.
+ */
+async function customer(user: SessionCookies): Promise<string> {
+  const response = await call('POST', '/api/customers', user, {
+    partyCode: `CUST-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
+    legalName: 'Invoice Customer LLC',
+  });
+  expect(response.statusCode, response.body).toBe(201);
+  return response.json().customer.id;
+}
+
 /** A draft invoice for one JOD 100 line, plus the accounts it needs. */
 async function draft(user: SessionCookies, overrides: Record<string, unknown> = {}) {
   const receivable = await account(user, '1200', 'Trade receivables', 'asset');
   const sales = await account(user, '4000', 'Sales', 'income');
   const response = await call('POST', '/api/invoices', user, {
     issuingEntityId: '11111111-1111-1111-1111-111111111111',
-    customerId: '22222222-2222-2222-2222-222222222222',
+    customerId: await customer(user),
     issueDate: '2026-03-01', dueDate: '2026-03-31',
     lines: [{ accountId: sales, description: 'Consulting', quantity: '1', unitPrice: '100.000' }],
     ...overrides,
@@ -95,7 +111,7 @@ describe('creating a draft', () => {
 
     const response = await call('POST', '/api/invoices', user, {
       issuingEntityId: '11111111-1111-1111-1111-111111111111',
-      customerId: '22222222-2222-2222-2222-222222222222',
+      customerId: await customer(user),
       issueDate: '2026-03-01', dueDate: '2026-03-31',
       grandTotal: '1.000', // A client cannot price its own tax document.
       lines: [{ accountId: sales, quantity: '2', unitPrice: '50.000' }],
@@ -119,7 +135,7 @@ describe('creating a draft', () => {
 
     const response = await call('POST', '/api/invoices', user, {
       issuingEntityId: '11111111-1111-1111-1111-111111111111',
-      customerId: '22222222-2222-2222-2222-222222222222',
+      customerId: await customer(user),
       issueDate: '2026-03-01', dueDate: '2026-03-31',
       lines: [{ accountId: parent, quantity: '1', unitPrice: '10.000' }],
     });
@@ -133,7 +149,7 @@ describe('creating a draft', () => {
     const sales = await account(user, '4000', 'Sales', 'income');
     const response = await call('POST', '/api/invoices', user, {
       issuingEntityId: '11111111-1111-1111-1111-111111111111',
-      customerId: '22222222-2222-2222-2222-222222222222',
+      customerId: await customer(user),
       issueDate: '2026-03-31', dueDate: '2026-03-01',
       lines: [{ accountId: sales, quantity: '1', unitPrice: '10.000' }],
     });
@@ -158,7 +174,7 @@ describe('numbering', () => {
     const salesId = sales.json().accounts.find((a: { accountCode: string }) => a.accountCode === '4000').id;
     const second = await call('POST', '/api/invoices', user, {
       issuingEntityId: '11111111-1111-1111-1111-111111111111',
-      customerId: '22222222-2222-2222-2222-222222222222',
+      customerId: await customer(user),
       issueDate: '2026-03-02', dueDate: '2026-03-31',
       lines: [{ accountId: salesId, quantity: '1', unitPrice: '5.000' }],
     });
@@ -298,7 +314,7 @@ describe('tenant isolation and permissions', () => {
     expect((await call('GET', `/api/invoices/${invoice.id}`, auditor)).statusCode).toBe(200);
     const attempt = await call('POST', '/api/invoices', auditor, {
       issuingEntityId: '11111111-1111-1111-1111-111111111111',
-      customerId: '22222222-2222-2222-2222-222222222222',
+      customerId: await customer(owner),
       issueDate: '2026-03-01', dueDate: '2026-03-31',
       lines: [{ accountId: sales, quantity: '1', unitPrice: '1.000' }],
     });

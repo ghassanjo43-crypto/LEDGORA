@@ -204,6 +204,73 @@ export async function listSourceJournals(
  * when the books may be written to, which is exactly the divergence this phase
  * exists to end.
  */
+/**
+ * Post a source document's journal INSIDE a transaction the caller already
+ * holds.
+ *
+ * ══ Why this exists ══════════════════════════════════════════════════════════
+ *
+ * `postSourceJournal` below opens transactions of its own, through the journal
+ * primitives it calls. That is right for a caller with nothing else to commit,
+ * and wrong for one that has: an invoice that allocates a number, finalises its
+ * lines and changes status must have its journal in the SAME transaction, or a
+ * failure between them leaves a numbered, issued invoice with no entry behind
+ * it — or an entry with no invoice.
+ *
+ * The idempotency guarantee is unchanged and still belongs to the database. The
+ * unique index on (organization, company, source type, source id, source event)
+ * is what makes a retry find the existing journal instead of writing a second,
+ * and losing that race gracefully is handled here exactly as it is below.
+ */
+export async function postSourceJournalIn(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  trx: any,
+  actor: AccountingActor,
+  input: SourcePostingInput,
+): Promise<SourcePostingResult> {
+  const identity = assertIdentity(input);
+
+  const existing = await findSourceJournalIn(trx, actor, identity);
+  if (existing) return { journal: existing, created: false };
+
+  let draft: journals.JournalRecord;
+  try {
+    draft = await journals.createDraftIn(trx, actor, {
+      transactionDate: input.transactionDate,
+      postingDate: input.postingDate,
+      reference: input.reference ?? '',
+      description: input.description ?? '',
+      notes: input.notes ?? '',
+      sourceType: identity.sourceType,
+      sourceId: identity.sourceId,
+      sourceEvent: identity.sourceEvent,
+      lines: input.lines,
+    });
+  } catch (error) {
+    /*
+     * Lost the race to another connection. Inside a transaction the losing
+     * statement has aborted this one, so there is nothing to recover to and
+     * nothing to return — the caller's whole unit of work rolls back and the
+     * retry finds the winner on its next attempt. Reporting the duplicate
+     * honestly is the only correct move; pretending to have found the winner
+     * would have the caller commit an invoice against a journal this
+     * transaction cannot see.
+     */
+    throw error;
+  }
+
+  /*
+   * No draft cleanup here, unlike the standalone path. A failure to post rolls
+   * the whole transaction back, which removes the draft along with everything
+   * else — the compensating delete below exists precisely because that path has
+   * no transaction to roll back.
+   */
+  const posted = await journals.postJournalIn(trx, actor, draft.id, {
+    expectedVersion: draft.version,
+  });
+  return { journal: posted, created: true };
+}
+
 export async function postSourceJournal(
   db: Kysely<Database>,
   actor: AccountingActor,

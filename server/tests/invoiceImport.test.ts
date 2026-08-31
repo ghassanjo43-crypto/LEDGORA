@@ -7,7 +7,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { sql } from 'kysely';
-import { authHeaders, createTestContext, login, seedUser, type SessionCookies, type TestContext } from './helpers/testApp.js';
+import { authHeaders, createTestContext, login, seedUser, seedCustomerParty, type SessionCookies, type TestContext } from './helpers/testApp.js';
 import { sequenceOf } from '../src/services/invoicing/invoiceImportService.js';
 
 let ctx: TestContext;
@@ -32,6 +32,16 @@ async function tenantUser(name: string): Promise<SessionCookies> {
     country: 'JO', baseCurrency: 'JOD', planId: await planId(), onboarding: 'temporary', paymentConfirmed: true,
   } });
   expect(created.statusCode, created.body).toBe(201);
+
+  /*
+   * The customer the imported invoices name.
+   *
+   * Migration 031 gave `invoices.customer_id` a foreign key, and the import
+   * path writes that column directly — so the party has to exist before the
+   * import runs. Seeded with the fixture's own id so the payloads below are
+   * unchanged.
+   */
+  await seedCustomerParty(ctx, created.json().subscriber.organizationId, { id: CUSTOMER });
 
   const invited = await ctx.app.inject({ method: 'POST', url: '/api/admin/users', headers: authHeaders(admin), payload: {
     fullName: 'Migrator', email: `mig@${name.toLowerCase()}.test`,

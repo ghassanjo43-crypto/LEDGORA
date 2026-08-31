@@ -16,13 +16,15 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { sql } from 'kysely';
-import { createTestContext, seedUser, type TestContext } from './helpers/testApp.js';
+import { createTestContext, seedUser, type TestContext, seedCustomerParty } from './helpers/testApp.js';
 import type { AccountingActor } from '../src/services/accounting/audit.js';
 import * as accounts from '../src/services/accounting/accountService.js';
 import * as invoices from '../src/services/invoicing/invoiceService.js';
 
 let ctx: TestContext;
 let organizationId: string;
+let northCustomer: string;
+let southCustomer: string;
 let north: AccountingActor;
 let south: AccountingActor;
 
@@ -69,6 +71,16 @@ beforeEach(async () => {
     organizationId, companyId: await company(organizationId, 'co_south', 'Southern Logistics'),
     userId: who, name: 'Bookkeeper',
   };
+
+  /*
+   * One customer per COMPANY, not one shared between them.
+   *
+   * A business party belongs to a single set of books — that is what migration
+   * 031's composite foreign key enforces — so these two companies cannot name
+   * the same customer, which is itself the isolation this file is about.
+   */
+  northCustomer = await seedCustomerParty(ctx, organizationId, { companyId: north.companyId, code: 'NORTH-CUST' });
+  southCustomer = await seedCustomerParty(ctx, organizationId, { companyId: south.companyId, code: 'SOUTH-CUST' });
 });
 afterEach(async () => { await ctx.close(); });
 
@@ -87,7 +99,7 @@ async function northsInvoice() {
   const a = await chart(north);
   const draft = await invoices.createDraft(ctx.db, north, {
     issuingEntityId: '11111111-1111-1111-1111-111111111111',
-    customerId: '22222222-2222-2222-2222-222222222222',
+    customerId: northCustomer,
     issueDate: '2026-03-01',
     dueDate: '2026-03-31',
     lines: [{
@@ -134,7 +146,7 @@ describe('another company’s invoice, written to', () => {
     }, { expectedVersion: draft.version })).rejects.toMatchObject({ code: 'not_found' });
 
     const untouched = await invoices.getInvoice(ctx.db, north, draft.id);
-    expect(untouched.customerId).toBe('22222222-2222-2222-2222-222222222222');
+    expect(untouched.customerId).toBe(northCustomer);
   });
 
   it('cannot be deleted', async () => {
@@ -226,7 +238,7 @@ describe('invoice numbering', () => {
     const issue = async (actor: AccountingActor, ch: { receivable: string; sales: string }) => {
       const draft = await invoices.createDraft(ctx.db, actor, {
         issuingEntityId: '11111111-1111-1111-1111-111111111111',
-        customerId: '22222222-2222-2222-2222-222222222222',
+        customerId: actor.companyId === north.companyId ? northCustomer : southCustomer,
         issueDate: '2026-03-01', dueDate: '2026-03-31',
         lines: [{ accountId: ch.sales, quantity: '1', unitPrice: '100.000' }],
       });

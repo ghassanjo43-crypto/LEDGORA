@@ -8,10 +8,11 @@
  * what issuing actually debits the customer for.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { authHeaders, createTestContext, login, seedUser, type SessionCookies, type TestContext } from './helpers/testApp.js';
+import { authHeaders, createTestContext, login, seedUser, type SessionCookies, type TestContext, seedCustomerParty } from './helpers/testApp.js';
 import * as journals from '../src/services/accounting/journalService.js';
 
 let ctx: TestContext;
+let customerId: string;
 let admin: SessionCookies;
 const password = 'Bright-Harbour-58-Zq';
 
@@ -34,6 +35,11 @@ async function tenantUser(name: string): Promise<{ user: SessionCookies; organiz
   } });
   expect(created.statusCode, created.body).toBe(201);
   const organizationId = created.json().subscriber.organizationId;
+  /* Migration 031 gave `invoices.customer_id` a foreign key, so the customer
+   * these invoices name has to be a real party — and a party belongs to one set
+   * of books, so each organization gets its own. */
+  customerId = await seedCustomerParty(ctx, organizationId);
+
 
   const invited = await ctx.app.inject({ method: 'POST', url: '/api/admin/users', headers: authHeaders(admin), payload: {
     fullName: 'Cashier Person', email: `cash@${name.toLowerCase()}.test`,
@@ -66,7 +72,7 @@ async function taxedInvoice(name: string) {
 
   const response = await call('POST', '/api/invoices', user, {
     issuingEntityId: '11111111-1111-1111-1111-111111111111',
-    customerId: '22222222-2222-2222-2222-222222222222',
+    customerId,
     issueDate: '2026-03-01', dueDate: '2026-03-31',
     lines: [{
       accountId: sales, description: 'Consulting',
@@ -163,7 +169,7 @@ describe('what issuing a taxed invoice debits and credits', () => {
     const sales = await account(user, '4000', 'Sales', 'income');
     const created = await call('POST', '/api/invoices', user, {
       issuingEntityId: '11111111-1111-1111-1111-111111111111',
-      customerId: '22222222-2222-2222-2222-222222222222',
+      customerId,
       issueDate: '2026-03-01', dueDate: '2026-03-31',
       lines: [{ accountId: sales, quantity: '1', unitPrice: '100.000' }],
     });

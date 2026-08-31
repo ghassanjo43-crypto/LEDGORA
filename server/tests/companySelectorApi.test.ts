@@ -58,7 +58,8 @@ async function tenant(name: string, plan = 'core'): Promise<string> {
     },
   });
   expect(created.statusCode).toBe(201);
-  return created.json().subscriber.organizationId as string;
+  const organizationId = created.json().subscriber.organizationId as string;
+  return organizationId;
 }
 
 async function member(organizationId: string, email: string, role = 'admin'): Promise<SessionCookies> {
@@ -263,9 +264,16 @@ describe('two companies under one subscriber', () => {
       }, reference);
       expect([receivable.statusCode, sales.statusCode]).toEqual([201, 201]);
 
+      /* The customer lives in the company the header names, like the invoice
+       * that will reference it. See migration 031. */
+      const customer = await call('POST', '/api/customers', user, {
+        partyCode: `CUST-${reference}`, legalName: 'Selector Customer LLC',
+      }, reference);
+      expect(customer.statusCode, customer.body).toBe(201);
+
       const created = await call('POST', '/api/invoices', user, {
         issuingEntityId: '11111111-1111-1111-1111-111111111111',
-        customerId: '22222222-2222-2222-2222-222222222222',
+        customerId: customer.json().customer.id,
         issueDate: '2026-03-01', dueDate: '2026-03-31',
         lines: [{
           accountId: sales.json().account.id,

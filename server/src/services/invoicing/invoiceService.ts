@@ -41,6 +41,7 @@ import { loadAccountsForPosting } from '../accounting/accountService.js';
 import { monetaryDecimalsFor } from '../accounting/currencyPrecision.js';
 import * as Money from '../accounting/money.js';
 import * as journals from '../accounting/journalService.js';
+import { postSourceJournalIn } from '../accounting/sourcePostingService.js';
 
 type Executor = Kysely<Database> | Transaction<Database>;
 type Trx = Transaction<Database>;
@@ -50,6 +51,11 @@ const EDITABLE: readonly SalesInvoiceStatus[] = ['draft', 'approved'];
 
 /** What `source_type` an invoice's ledger entry carries. */
 export const INVOICE_SOURCE_TYPE = 'sales_invoice';
+/**
+ * What happened to the document. The unique index from 029 is partial on
+ * this, so a posting without one is covered by nothing.
+ */
+export const INVOICE_ISSUE_EVENT = 'issue';
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -546,6 +552,54 @@ async function replaceLines(
 
 /* ══ Writing ═══════════════════════════════════════════════════════════════ */
 
+/**
+ * The customer this invoice names must actually be one, in THESE books.
+ *
+ * The foreign key from migration 031 already makes a cross-company or invented
+ * customer unrepresentable, but a constraint violation reaches the caller as an
+ * internal error — accurate and useless. This says which of the three things is
+ * wrong, and it checks the two the key cannot:
+ *
+ *   · the party must hold the CUSTOMER role. Roles are mutable flags, not part
+ *     of any key, so nothing in the schema stops an invoice naming a
+ *     supplier-only party;
+ *   · the party must not be ARCHIVED. Archiving means "do not put this on new
+ *     documents", which is exactly this moment. Existing invoices keep naming
+ *     an archived customer, which is the point of archiving rather than
+ *     deleting.
+ */
+async function assertCustomerSelectable(
+  trx: Transaction<Database>,
+  actor: AccountingActor,
+  customerId: string,
+): Promise<void> {
+  const party = await trx
+    .selectFrom('business_parties')
+    .select(['id', 'is_customer', 'status', 'legal_name'])
+    .where('organization_id', '=', actor.organizationId)
+    .where('company_id', '=', actor.companyId)
+    .where('id', '=', customerId)
+    .executeTakeFirst();
+
+  /* Another company's customer does not resolve, which is the honest answer:
+   * there is no such customer in these books. */
+  if (!party) {
+    throw errors.validation('That customer is not in these books.', {
+      fieldErrors: { customerId: 'Choose a customer from this directory.' },
+    });
+  }
+  if (!party.is_customer) {
+    throw errors.validation(`${party.legal_name} is not a customer.`, {
+      fieldErrors: { customerId: 'This party does not hold the customer role.' },
+    });
+  }
+  if (party.status !== 'active') {
+    throw errors.validation(`${party.legal_name} is archived and cannot be invoiced.`, {
+      fieldErrors: { customerId: 'Restore the customer, or choose another.' },
+    });
+  }
+}
+
 export async function createDraft(
   db: Kysely<Database>,
   actor: AccountingActor,
@@ -560,6 +614,7 @@ export async function createDraft(
     computeTotals(input.lines, input.additionalChargesTotal);
 
   return db.transaction().execute(async (trx) => {
+    await assertCustomerSelectable(trx, actor, input.customerId);
     await assertAccountsArePostable(trx, actor, input.lines);
 
     const currency = await functionalCurrencyOf(trx, actor.organizationId);
@@ -701,13 +756,44 @@ export async function deleteDraft(
 }
 
 /**
- * Issue an invoice: post it to the ledger and freeze it.
+ * Issue an invoice: one transaction, or nothing.
  *
- * The entry is created and posted through `journalService`, which owns the one
- * write path into the books. Both directions of the link are set in this
- * transaction — the invoice's `journal_entry_id` and the entry's
- * `source_type`/`source_id` — because a half-written link is a document nobody
- * can reconcile.
+ * ══ The defect this replaces ═════════════════════════════════════════════════
+ *
+ * Issuing used to run in THREE transactions: read and lock the draft, create
+ * and post the journal, then re-lock and attach it. Every gap between them was
+ * a state the books could be left in. A crash after the posting committed left
+ * a posted sales journal with no issued invoice behind it — revenue in the
+ * ledger that no document explains, and a draft the user would issue again,
+ * posting it twice.
+ *
+ * The old comment justified the split by saying `journalService` owns posting
+ * and reaching into it with our transaction would fork its write path. That was
+ * the right instinct and the wrong remedy: the answer is not three transactions
+ * but one shared one, which is what `createDraftIn` / `postJournalIn` /
+ * `postSourceJournalIn` now exist for. The journal is still written by
+ * `journalService` and by nothing else; it simply writes inside the caller's
+ * unit of work.
+ *
+ * ══ Retries cannot double-post ═══════════════════════════════════════════════
+ *
+ * The journal carries the source identity `(sales_invoice, <invoice id>, issue)`
+ * and the unique index from migration 029 enforces it. A retry after a lost
+ * response finds the journal already there and returns it; two concurrent
+ * issues resolve to one, because the loser's INSERT is refused by the database
+ * rather than by a check that two connections can both pass.
+ *
+ * The previous implementation supplied a source TYPE and ID but no EVENT, and
+ * that index is partial on the event — so it covered nothing, and a retry wrote
+ * a second journal.
+ *
+ * ══ What is NOT allocated here ═══════════════════════════════════════════════
+ *
+ * The invoice number. It is allocated when the draft is created, under an
+ * advisory lock in that transaction, and issuing does not change it. Moving
+ * allocation to issue time would change what a draft shows and how gaps arise,
+ * which is numbering policy rather than atomicity, and is not this slice's to
+ * change.
  */
 export async function issueInvoice(
   db: Kysely<Database>,
@@ -718,7 +804,7 @@ export async function issueInvoice(
   taxAccountId?: string,
   chargesAccountId?: string,
 ): Promise<InvoiceRecord> {
-  const prepared = await db.transaction().execute(async (trx) => {
+  return db.transaction().execute(async (trx) => {
     const current = await lockInvoice(trx, actor, id, options.expectedVersion);
     if (!EDITABLE.includes(current.status)) {
       throw errors.conflict(`This invoice is already ${current.status}.`);
@@ -730,90 +816,78 @@ export async function issueInvoice(
       .where('invoice_id', '=', id)
       .orderBy('line_number', 'asc')
       .execute();
-    if (lines.length === 0) throw errors.validation('An invoice needs at least one line before it can be issued.');
+    if (lines.length === 0) {
+      throw errors.validation('An invoice needs at least one line before it can be issued.');
+    }
 
-    return { current, lines };
-  });
+    const total = Money.toAmount(current.grand_total);
+    const taxDue = Money.toAmount(current.tax_total);
 
-  /*
-   * The ledger entry is created OUTSIDE the invoice transaction because
-   * `journalService` opens its own — it owns posting, and reaching into it with
-   * a transaction of ours would fork the one write path this module exists to
-   * respect. The invoice is then attached in a second transaction, which
-   * re-checks the version: if anything changed in between, the entry is left as
-   * an unattached draft rather than bound to a document it no longer describes.
-   */
-  const total = Money.toAmount(prepared.current.grand_total);
-  const taxDue = Money.toAmount(prepared.current.tax_total);
+    /*
+     * Tax is credited to a LIABILITY account, never back to the receivable.
+     *
+     * Crediting it to the receivable balances the entry — which is why this was
+     * invisible — but it nets the customer's ledger balance down to the sale
+     * value while the invoice itself says they owe the tax-inclusive total. The
+     * subledger and the general ledger then disagree by exactly the tax, and the
+     * tax collected on the authority's behalf is recorded as owed to nobody.
+     */
+    if (!Money.isZero(taxDue) && !taxAccountId) {
+      throw errors.validation('This invoice carries tax, so a tax account is required to post it.', {
+        fieldErrors: { taxAccountId: 'Choose the liability account that holds tax collected.' },
+      });
+    }
 
-  /*
-   * Tax is credited to a LIABILITY account, never back to the receivable.
-   *
-   * Crediting it to the receivable balances the entry — which is why this was
-   * invisible — but it nets the customer's ledger balance down to the sale
-   * value while the invoice itself says they owe the tax-inclusive total. The
-   * subledger and the general ledger then disagree by exactly the tax, and the
-   * tax collected on the authority's behalf is recorded as owed to nobody.
-   */
-  if (!Money.isZero(taxDue) && !taxAccountId) {
-    throw errors.validation('This invoice carries tax, so a tax account is required to post it.', {
-      fieldErrors: { taxAccountId: 'Choose the liability account that holds tax collected.' },
+    /*
+     * Additional charges are part of what the customer owes, so they are inside
+     * the receivable debit and need a credit of their own. Without one the entry
+     * is out of balance by exactly the charges — which `journalService` would
+     * refuse, turning a missing account into an unexplained posting failure.
+     */
+    const charges = Money.toAmount(current.additional_charges_total);
+    if (!Money.isZero(charges) && !chargesAccountId) {
+      throw errors.validation('This invoice carries additional charges, so an account is required to post them.', {
+        fieldErrors: { chargesAccountId: 'Choose the income account that receives delivery or handling charges.' },
+      });
+    }
+
+    /*
+     * Posted through the source-posting door, inside THIS transaction, so the
+     * entry and the document below it commit together or not at all.
+     */
+    const { journal } = await postSourceJournalIn(trx, actor, {
+      sourceType: INVOICE_SOURCE_TYPE,
+      sourceId: id,
+      sourceEvent: INVOICE_ISSUE_EVENT,
+      transactionDate: dateText(current.issue_date),
+      reference: current.invoice_number,
+      description: `Sales invoice ${current.invoice_number}`,
+      lines: [
+        { accountId: receivableAccountId, debit: Money.toDecimalString(total), memo: current.invoice_number },
+        ...lines.map((line) => ({
+          accountId: line.account_id,
+          credit: Money.toDecimalString(Money.toAmount(line.line_subtotal)),
+          memo: line.description,
+          entityId: line.entity_id,
+          projectId: line.project_id,
+          costCenterId: line.cost_center_id,
+        })),
+        ...(Money.isZero(taxDue)
+          ? []
+          : [{ accountId: taxAccountId!, credit: Money.toDecimalString(taxDue), memo: 'Tax' }]),
+        ...(Money.isZero(charges)
+          ? []
+          : [{
+              accountId: chargesAccountId!,
+              credit: Money.toDecimalString(charges),
+              memo: 'Additional charges',
+            }]),
+      ],
     });
-  }
 
-  /*
-   * Additional charges are part of what the customer owes, so they are inside
-   * the receivable debit and need a credit of their own. Without one the entry
-   * is out of balance by exactly the charges — which `journalService` would
-   * refuse, turning a missing account into an unexplained posting failure.
-   */
-  const charges = Money.toAmount(prepared.current.additional_charges_total);
-  if (!Money.isZero(charges) && !chargesAccountId) {
-    throw errors.validation('This invoice carries additional charges, so an account is required to post them.', {
-      fieldErrors: { chargesAccountId: 'Choose the income account that receives delivery or handling charges.' },
-    });
-  }
-
-  const entry = await journals.createDraft(db, actor, {
-    transactionDate: dateText(prepared.current.issue_date),
-    reference: prepared.current.invoice_number,
-    description: `Sales invoice ${prepared.current.invoice_number}`,
-    sourceType: INVOICE_SOURCE_TYPE,
-    sourceId: id,
-    lines: [
-      { accountId: receivableAccountId, debit: Money.toDecimalString(total), memo: prepared.current.invoice_number },
-      ...prepared.lines.map((line) => ({
-        accountId: line.account_id,
-        credit: Money.toDecimalString(Money.toAmount(line.line_subtotal)),
-        memo: line.description,
-        entityId: line.entity_id,
-        projectId: line.project_id,
-        costCenterId: line.cost_center_id,
-      })),
-      ...(Money.isZero(taxDue)
-        ? []
-        : [{
-            accountId: taxAccountId!,
-            credit: Money.toDecimalString(taxDue),
-            memo: 'Tax',
-          }]),
-      ...(Money.isZero(charges)
-        ? []
-        : [{
-            accountId: chargesAccountId!,
-            credit: Money.toDecimalString(charges),
-            memo: 'Additional charges',
-          }]),
-    ],
-  });
-
-  const posted = await journals.postJournal(db, actor, entry.id, { expectedVersion: entry.version });
-
-  return db.transaction().execute(async (trx) => {
-    const current = await lockInvoice(trx, actor, id, options.expectedVersion);
     await trx.updateTable('invoices').set({
       status: 'issued',
-      journal_entry_id: posted.id,
+      journal_entry_id: journal.id,
       /*
        * Recorded so settlement credits the receivable this invoice DEBITED.
        * A receipt told to use some other account balances its own entry while
@@ -826,9 +900,12 @@ export async function issueInvoice(
       version: current.version + 1,
       updated_by: actor.userId,
       updated_at: new Date(),
-    }).where('organization_id', '=', actor.organizationId).where('company_id', '=', actor.companyId).where('id', '=', id).execute();
+    }).where('organization_id', '=', actor.organizationId)
+      .where('company_id', '=', actor.companyId)
+      .where('id', '=', id)
+      .execute();
 
-    await writeAudit(trx, actor, id, 'invoice.issued', posted.journalNumber);
+    await writeAudit(trx, actor, id, 'invoice.issued', journal.journalNumber);
     return loadInvoice(trx, actor, id);
   });
 }

@@ -347,6 +347,47 @@ describe('once the payment is approved', () => {
 
 /* ── 16–17: who the guard does not apply to ──────────────────────────────── */
 
+describe('sales invoices are business writes, not lifecycle', () => {
+  /*
+   * `/api/invoices` carries two unrelated resources: the PLATFORM subscription
+   * invoice a customer pays to leave Free Preview, and the tenant's own SALES
+   * invoices. The prefix once exempted both, so a preview customer could issue
+   * permanent invoices into their books. These pin both halves: the payment
+   * path stays open, the sales path is closed.
+   */
+  it('classifies a sales-invoice write as durable, and payment-proof as lifecycle', () => {
+    expect(isDurableBusinessWrite('POST', '/api/invoices')).toBe(true);
+    expect(isDurableBusinessWrite('POST', '/api/invoices/abc/issue')).toBe(true);
+    expect(isDurableBusinessWrite('POST', '/api/invoices/abc/void')).toBe(true);
+    expect(isDurableBusinessWrite('DELETE', '/api/invoices/abc')).toBe(true);
+
+    /* The one operation that must survive: paying to leave the preview. */
+    expect(isDurableBusinessWrite('POST', '/api/invoices/abc/payment-proof')).toBe(false);
+  });
+
+  it('refuses a Free Preview customer a sales invoice, while still taking their payment proof', async () => {
+    const preview = await previewCustomer();
+
+    const issued = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/invoices',
+      headers: authHeaders(preview.cookies),
+      payload: { customerId: 'whoever', issueDate: '2026-06-01', dueDate: '2026-07-01' },
+    });
+    expect(issued.statusCode).toBe(403);
+
+    /* And the way out of the preview is still open — otherwise a customer could
+     * never pay, and the preview would become permanent. */
+    const proof = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/invoices/${preview.subscriptionId}/payment-proof`,
+      headers: authHeaders(preview.cookies),
+      payload: {},
+    });
+    expect(proof.statusCode).not.toBe(403);
+  });
+});
+
 describe('the guard leaves other callers alone', () => {
   it('answers 401 — not a subscription message — to an unauthenticated caller', async () => {
     const response = await ctx.app.inject({ method: 'POST', url: '/api/journal-entries', payload: {} });

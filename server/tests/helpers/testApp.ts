@@ -140,3 +140,59 @@ export async function login(ctx: TestContext, email: string, password = TEST_PAS
   return readCookies(response.headers as Record<string, unknown>);
 }
 
+
+/**
+ * A customer party, seeded directly, with an id the caller chooses.
+ *
+ * Invoice tests were written when `invoices.customer_id` was a bare uuid and so
+ * they name a fixed fabricated one. Migration 031 gave that column a foreign
+ * key, which is the point of it — an invoice may no longer name a customer that
+ * does not exist. Rather than rewrite every assertion around a generated id,
+ * this makes the id they already use into a real customer.
+ *
+ * Inserted directly rather than through the API because these tests are about
+ * invoices: routing customer creation through its own surface would make a
+ * failure there present as a failure here.
+ */
+export async function seedCustomerParty(
+  ctx: TestContext,
+  organizationId: string,
+  options: { id?: string; code?: string; companyId?: string } = {},
+): Promise<string> {
+  const company = options.companyId
+    ? { id: options.companyId }
+    : await ctx.db
+        .selectFrom('companies')
+        .select('id')
+        .where('organization_id', '=', organizationId)
+        .orderBy('created_at', 'asc')
+        .executeTakeFirst();
+
+  /* An organization with no books yet has nowhere to put a customer. Callers
+   * that seed defensively should not be forced to check first. */
+  if (!company) return '';
+  const companyId = company.id;
+
+  const code = options.code ?? `CUST-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+
+  /*
+   * Idempotent when the caller names an id. A fixture id belongs to whichever
+   * tenant seeded it first, and a second tenant in the same test asking for the
+   * same one wants "make sure it exists", not a primary-key collision.
+   */
+  const row = await ctx.db
+    .insertInto('business_parties')
+    .values({
+      ...(options.id ? { id: options.id } : {}),
+      organization_id: organizationId,
+      company_id: companyId,
+      party_code: code,
+      legal_name: `Customer ${code}`,
+      is_customer: true,
+    } as never)
+    .onConflict((oc) => oc.doNothing())
+    .returning('id')
+    .executeTakeFirst();
+
+  return row?.id ?? options.id ?? '';
+}

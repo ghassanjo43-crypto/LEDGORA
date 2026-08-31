@@ -18,6 +18,9 @@ let ctx: TestContext;
 let orgA: string;
 let orgB: string;
 
+/** The customer each seeded organization invoices, by organization id. */
+const customerFor = new Map<string, string>();
+
 /** The set of books each seeded organization keeps, by organization id. */
 const booksFor = new Map<string, string>();
 const books = (org: string): string => booksFor.get(org)!;
@@ -52,6 +55,20 @@ async function organization(name: string): Promise<string> {
     RETURNING id
   `.execute(ctx.db);
   booksFor.set(org, rows[0]!.id);
+
+  /*
+   * A customer for these books.
+   *
+   * Migration 031 gave `invoices.customer_id` a foreign key, so an invoice can
+   * no longer name `gen_random_uuid()` — which is exactly the property this
+   * file exists to check elsewhere, now enforced for the customer too.
+   */
+  const { rows: party } = await sql<{ id: string }>`
+    INSERT INTO business_parties (organization_id, company_id, party_code, legal_name, is_customer)
+    VALUES (${org}, ${rows[0]!.id}, ${`CUST-${name}`}, ${`${name} Customer`}, true)
+    RETURNING id
+  `.execute(ctx.db);
+  customerFor.set(org, party[0]!.id);
   return org;
 }
 
@@ -67,7 +84,7 @@ async function invoice(org: string, number: string): Promise<string> {
   const { rows } = await sql<{ id: string }>`
     INSERT INTO invoices (organization_id, company_id, issuing_entity_id, customer_id, invoice_number,
                           issue_date, due_date, transaction_currency, functional_currency)
-    VALUES (${org}, ${books(org)}, gen_random_uuid(), gen_random_uuid(), ${number},
+    VALUES (${org}, ${books(org)}, gen_random_uuid(), ${customerFor.get(org)!}, ${number},
             '2026-01-15', '2026-02-15', 'JOD', 'JOD')
     RETURNING id
   `.execute(ctx.db);
