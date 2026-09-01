@@ -32,6 +32,30 @@ import { useBillStore } from './billStore';
 import { useInvoiceTemplateStore, INVOICE_ENTITY_ID } from './invoiceTemplateStore';
 import { transactionCurrencyCode } from '@/lib/transactionCurrency';
 import { roundToCompanyPrecision } from '@/lib/monetaryPrecision';
+import { paymentsAreServerAuthoritative } from '@/services/payments/paymentBackend';
+
+/**
+ * The refusal that keeps a durable subscriber's payments out of this store.
+ *
+ * A local write here APPEARS to save, and the next load replaces the cache
+ * without a word — so the payment is gone with nothing to retry, having in the
+ * meantime told a bookkeeper a supplier had been paid. "Could not save" is
+ * recoverable; "saved somewhere that does not count" is not. It is the same
+ * rule the customer, supplier, invoice and bill stores already follow.
+ *
+ * It sits at the STORE rather than in the buttons that call it, because a menu
+ * that merely hides itself is an affordance, not a gate.
+ *
+ * Free Demo is untouched: its payments are the originals and live nowhere else.
+ */
+const SERVER_PAYMENTS_MESSAGE =
+  'Payments are saved on the server for this workspace. Use the payments screen, which posts the '
+  + 'bank entry and its allocations together and derives what each bill still owes from them.';
+
+function refusesDurablePaymentWrite(): PaymentActionResult | null {
+  if (!paymentsAreServerAuthoritative()) return null;
+  return { ok: false, error: SERVER_PAYMENTS_MESSAGE };
+}
 
 const ACTOR = 'Finance Manager';
 const WHT_POLICY: PaymentWithholdingPolicy = { recognition: 'payment' };
@@ -192,6 +216,8 @@ export const usePaymentStore = create<PaymentState>()(
       },
 
       createDraft: (input) => {
+        const refused = refusesDurablePaymentWrite();
+        if (refused) return refused;
         /*
          * The authorization point for starting a payment.
          *
@@ -276,6 +302,8 @@ export const usePaymentStore = create<PaymentState>()(
       createPaymentForSupplier: (supplierId) => get().createDraft({ paymentType: 'supplier-payment', supplierId }),
 
       updateDraft: (id, patch) => {
+        const refused = refusesDurablePaymentWrite();
+        if (refused) return refused;
         const { payments } = get();
         const existing = payments.find((p) => p.id === id);
         if (!existing) return { ok: false, error: 'Payment not found.' };
@@ -286,6 +314,8 @@ export const usePaymentStore = create<PaymentState>()(
       },
 
       deleteDraft: (id) => {
+        const refused = refusesDurablePaymentWrite();
+        if (refused) return refused;
         const { payments } = get();
         const existing = payments.find((p) => p.id === id);
         if (!existing) return { ok: false, error: 'Payment not found.' };
@@ -295,6 +325,8 @@ export const usePaymentStore = create<PaymentState>()(
       },
 
       duplicatePayment: (id) => {
+        const refused = refusesDurablePaymentWrite();
+        if (refused) return refused;
         const { payments } = get();
         const src = payments.find((p) => p.id === id);
         if (!src) return { ok: false, error: 'Payment not found.' };
@@ -315,8 +347,11 @@ export const usePaymentStore = create<PaymentState>()(
         return { ok: true, id: newId };
       },
 
-      submitPayment: (id) => transition(get, set, id, 'draft', 'submitted', 'submittedAt', 'payment-submitted'),
+      submitPayment: (id) => refusesDurablePaymentWrite()
+        ?? transition(get, set, id, 'draft', 'submitted', 'submittedAt', 'payment-submitted'),
       approvePayment: (id) => {
+        const refused = refusesDurablePaymentWrite();
+        if (refused) return refused;
         const { payments } = get();
         const p = payments.find((x) => x.id === id);
         if (!p) return { ok: false, error: 'Payment not found.' };
@@ -326,6 +361,8 @@ export const usePaymentStore = create<PaymentState>()(
         return { ok: true, id };
       },
       returnToDraft: (id) => {
+        const refused = refusesDurablePaymentWrite();
+        if (refused) return refused;
         const { payments } = get();
         const p = payments.find((x) => x.id === id);
         if (!p) return { ok: false, error: 'Payment not found.' };
@@ -336,6 +373,8 @@ export const usePaymentStore = create<PaymentState>()(
       },
 
       postPayment: (id, opts) => {
+        const refused = refusesDurablePaymentWrite();
+        if (refused) return refused;
         const { payments } = get();
         const existing = payments.find((p) => p.id === id);
         if (!existing) return { ok: false, error: 'Payment not found.' };
@@ -393,6 +432,8 @@ export const usePaymentStore = create<PaymentState>()(
       },
 
       applyPaymentToBills: (id, allocations, date) => {
+        const refused = refusesDurablePaymentWrite();
+        if (refused) return refused;
         const { payments } = get();
         const payment = payments.find((p) => p.id === id);
         if (!payment) return { ok: false, error: 'Payment not found.' };
@@ -429,6 +470,8 @@ export const usePaymentStore = create<PaymentState>()(
       },
 
       unapplyPaymentAllocation: (id, allocationId) => {
+        const refused = refusesDurablePaymentWrite();
+        if (refused) return refused;
         const { payments } = get();
         const payment = payments.find((p) => p.id === id);
         if (!payment) return { ok: false, error: 'Payment not found.' };
@@ -452,6 +495,8 @@ export const usePaymentStore = create<PaymentState>()(
       },
 
       reversePayment: (id, reason) => {
+        const refused = refusesDurablePaymentWrite();
+        if (refused) return refused;
         const { payments } = get();
         const payment = payments.find((p) => p.id === id);
         if (!payment) return { ok: false, error: 'Payment not found.' };
@@ -481,6 +526,8 @@ export const usePaymentStore = create<PaymentState>()(
       },
 
       voidDraft: (id) => {
+        const refused = refusesDurablePaymentWrite();
+        if (refused) return refused;
         const { payments } = get();
         const p = payments.find((x) => x.id === id);
         if (!p) return { ok: false, error: 'Payment not found.' };

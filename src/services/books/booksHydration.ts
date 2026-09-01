@@ -34,6 +34,7 @@ import { toJournalEntry } from './journalMapping';
 import { loadCustomers } from '@/services/parties/customerDirectory';
 import { loadSuppliers } from '@/services/parties/supplierDirectory';
 import { loadBills } from '@/services/bills/billBackend';
+import { loadPayments } from '@/services/payments/paymentBackend';
 import { useInvoiceStore } from '@/store/invoiceStore';
 import { useServerTaxCodeStore } from '@/store/serverTaxCodeStore';
 
@@ -145,6 +146,13 @@ export async function hydrateBooks(): Promise<{ ok: boolean; error?: string }> {
      * blanking a bookkeeper's accounts.
      */
     void loadBills();
+
+    /*
+     * And the payments, with the outstanding schedule the server derives from
+     * them. Same terms again: a settlement screen that cannot load is still a
+     * usable ledger, and it says so rather than blanking the accounts.
+     */
+    void loadPayments();
 
     /*
      * And the invoices, from the same books. Not awaited into the verdict for

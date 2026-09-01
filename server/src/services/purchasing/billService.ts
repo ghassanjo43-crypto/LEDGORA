@@ -45,6 +45,7 @@ import { toCalendarDate, toCalendarDateOrNull } from '../accounting/calendarDate
 import * as Money from '../accounting/money.js';
 import { postSourceJournalIn } from '../accounting/sourcePostingService.js';
 import { reverseJournalIn } from '../accounting/journalService.js';
+import { assertNoLiveAllocations } from './paymentService.js';
 import * as SalesTax from '../accounting/salesTax.js';
 import {
   resolveTaxForDate, assertInputAccountPostable, PARTIAL_RECOVERY_UNSUPPORTED,
@@ -1633,6 +1634,24 @@ export async function reverseBill(
     if (current.status !== 'posted' || !current.journal_entry_id) {
       throw errors.conflict('Only a posted bill can be reversed.');
     }
+
+    /*
+     * ══ A paid bill is not reversible ════════════════════════════════════════
+     *
+     * Reversing it would debit accounts payable twice — once for the reversal,
+     * once for the payment — against a single credit, understating what the
+     * business owes and leaving a posted payment pointing at a document
+     * reversed out of the books.
+     *
+     * The check reads under the row lock `lockBill` already holds, and every
+     * path that posts, reallocates or reverses a payment takes that same lock
+     * on each bill it touches before writing an allocation. So a payment
+     * cannot appear between this check and the reversal below, and the two
+     * cannot interleave in the other direction either.
+     */
+    await assertNoLiveAllocations(
+      trx, actor, id, current.bill_number, monetaryDecimalsFor(current.currency),
+    );
 
     /*
      * The JOURNAL's own version, read under the same transaction. `reverseJournalIn`

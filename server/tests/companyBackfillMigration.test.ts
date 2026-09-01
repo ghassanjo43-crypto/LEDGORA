@@ -39,6 +39,7 @@ afterEach(async () => { await ctx.close(); });
  */
 async function rollBackCompanyScoping(): Promise<void> {
   for (const expected of [
+    '036_supplier_payments',
     '035_purchase_tax',
     '034_supplier_bills',
     '033_supplier_profiles',

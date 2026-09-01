@@ -43,14 +43,15 @@ import {
  * business-party directory shipped; `/api/counterparties` replaces it. `/api/bills`
  * was another until Purchasing P2 shipped the supplier-bill routes;
  * `/api/bills-business` replaces it, and the real path is covered by its own
- * classification test below.
+ * classification test below. `/api/payments` was the same until Purchasing P4
+ * shipped supplier payments; `/api/payments-business` replaces it.
  */
 const BUSINESS_PATHS = [
   '/api/journal-entries',
   '/api/counterparties',
   '/api/suppliers',
   '/api/bills-business',
-  '/api/payments',
+  '/api/payments-business',
   '/api/receipts',
   '/api/documents',
   '/api/reminders',
@@ -383,6 +384,47 @@ describe('supplier bills are business writes', () => {
     });
     /* Refused for the SUBSCRIPTION, before any supplier or account is looked
      * at — a preview customer cannot put a permanent liability in their books. */
+    expect(created.statusCode).toBe(403);
+  });
+});
+
+describe('supplier payments are business writes', () => {
+  /*
+   * `/api/payments` became a REAL route with Purchasing P4. It takes money out
+   * of the bank and clears a liability, so every mutating path under it is a
+   * durable business write — including `reallocate`, which restates which
+   * posted bills a posted payment settled.
+   */
+  it('classifies every payment write as durable', () => {
+    expect(isDurableBusinessWrite('POST', '/api/payments')).toBe(true);
+    expect(isDurableBusinessWrite('PATCH', '/api/payments/abc')).toBe(true);
+    expect(isDurableBusinessWrite('DELETE', '/api/payments/abc')).toBe(true);
+    expect(isDurableBusinessWrite('POST', '/api/payments/abc/post')).toBe(true);
+    expect(isDurableBusinessWrite('POST', '/api/payments/abc/reallocate')).toBe(true);
+    expect(isDurableBusinessWrite('POST', '/api/payments/abc/reverse')).toBe(true);
+
+    /* Reading what is owed, and the supplier statement, are never blocked. */
+    expect(isDurableBusinessWrite('GET', '/api/payments')).toBe(false);
+    expect(isDurableBusinessWrite('GET', '/api/payments/payables')).toBe(false);
+    expect(isDurableBusinessWrite('GET', '/api/payments/statement')).toBe(false);
+  });
+
+  it('refuses a Free Preview customer a supplier payment', async () => {
+    const preview = await previewCustomer();
+
+    const created = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/payments',
+      headers: authHeaders(preview.cookies),
+      payload: {
+        issuingEntityId: 'entity-main',
+        supplierId: '11111111-1111-1111-1111-111111111111',
+        paymentDate: '2026-06-01', amount: '100.000',
+        cashAccountId: '22222222-2222-2222-2222-222222222222',
+      },
+    });
+    /* Refused for the SUBSCRIPTION, before any supplier or account is looked
+     * at — a preview customer cannot move money in their books. */
     expect(created.statusCode).toBe(403);
   });
 });

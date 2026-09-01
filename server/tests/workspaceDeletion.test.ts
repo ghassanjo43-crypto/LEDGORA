@@ -144,6 +144,11 @@ describe('what the server actually stores for a tenant', () => {
       'bill_lines',
       'bill_numbering',
       'bill_audit_events',
+      /* Purchasing P4 brought supplier payments and their allocations. */
+      'supplier_payments',
+      'payment_allocations',
+      'payment_numbering',
+      'payment_audit_events',
     ];
     for (const table of accountingTables) {
       expect(names, `${table} is part of the Phase A foundation`).toContain(table);

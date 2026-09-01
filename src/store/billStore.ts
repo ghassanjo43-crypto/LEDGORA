@@ -145,9 +145,28 @@ const SERVER_BILLS_MESSAGE =
   'Bills are saved on the server for this workspace. Use the bills screen, which writes through '
   + 'the server rather than this browser.';
 
+/**
+ * Settlement has its own message, because it fails for its own reason.
+ *
+ * Purchasing P4 moved supplier payments and their allocations onto the server,
+ * and a bill's outstanding amount is now DERIVED from those allocations. A
+ * local `amountPaid` written here would be a second, private answer to the same
+ * question — one that survives until the next load and then vanishes, having in
+ * the meantime told a bookkeeper a bill was settled.
+ */
+const SERVER_SETTLEMENT_MESSAGE =
+  'Payments against this bill are recorded on the server for this workspace. Use the payments '
+  + 'screen, which posts the bank entry and its allocations together; what a bill still owes is '
+  + 'derived from those allocations rather than stored here.';
+
 function refusesDurableBillWrite(): BillActionResult | null {
   if (!billsAreServerAuthoritative()) return null;
   return { ok: false, error: SERVER_BILLS_MESSAGE };
+}
+
+function refusesDurableSettlement(): BillActionResult | null {
+  if (!billsAreServerAuthoritative()) return null;
+  return { ok: false, error: SERVER_SETTLEMENT_MESSAGE };
 }
 
 interface BillState {
@@ -453,6 +472,8 @@ export const useBillStore = create<BillState>()(
       },
 
       recordPayment: (id, input) => {
+        const refused = refusesDurableSettlement();
+        if (refused) return refused;
         const { bills } = get();
         const existing = bills.find((b) => b.id === id);
         if (!existing) return { ok: false, error: 'Bill not found.' };
@@ -483,6 +504,8 @@ export const useBillStore = create<BillState>()(
       },
 
       applyPaymentAllocation: (id, input) => {
+        const refused = refusesDurableSettlement();
+        if (refused) return refused;
         const { bills } = get();
         const existing = bills.find((b) => b.id === id);
         if (!existing) return { ok: false, error: 'Bill not found.' };
@@ -504,6 +527,8 @@ export const useBillStore = create<BillState>()(
       },
 
       removePaymentAllocations: (id, paymentId) => {
+        const refused = refusesDurableSettlement();
+        if (refused) return refused;
         const { bills } = get();
         const existing = bills.find((b) => b.id === id);
         if (!existing) return { ok: false, error: 'Bill not found.' };

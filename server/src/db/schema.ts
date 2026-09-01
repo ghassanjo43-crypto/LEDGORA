@@ -787,6 +787,10 @@ export interface Database {
   bill_lines: BillLinesTable;
   bill_numbering: BillNumberingTable;
   bill_audit_events: BillAuditEventsTable;
+  supplier_payments: SupplierPaymentsTable;
+  payment_allocations: PaymentAllocationsTable;
+  payment_numbering: PaymentNumberingTable;
+  payment_audit_events: PaymentAuditEventsTable;
   business_party_audit_events: BusinessPartyAuditEventsTable;
   invoices: InvoicesTable;
   invoice_lines: InvoiceLinesTable;
@@ -1280,6 +1284,88 @@ export interface BillNumberingTable {
   next_sequence: Generated<number>;
   created_at: Generated<Timestamp>;
   updated_at: Generated<Timestamp>;
+}
+
+/** draft | posted | reversed. A posted payment is fully allocated by construction. */
+export type SupplierPaymentStatus = 'draft' | 'posted' | 'reversed';
+
+/**
+ * Only `active` rows reduce a bill's outstanding balance.
+ *
+ * A row is never deleted: `superseded` records that an atomic reallocation
+ * replaced it, `reversed` that the payment was reversed. The trail of what
+ * settled what has to survive every correction.
+ */
+export type PaymentAllocationStatus = 'active' | 'superseded' | 'reversed';
+
+export interface SupplierPaymentsTable {
+  id: Generated<string>;
+  organization_id: string;
+  company_id: string;
+  issuing_entity_id: string;
+  supplier_id: string;
+  payment_number: string;
+  status: Generated<SupplierPaymentStatus>;
+  /** The payment date IS the posting date; period locks use it. */
+  payment_date: string;
+  currency: string;
+  amount: Generated<string>;
+  /** Descriptive. No method changes the accounting. */
+  method: Generated<string>;
+  reference: Generated<string>;
+  memo: Generated<string>;
+  /** FROZEN at posting, so later master-data changes cannot restate history. */
+  cash_account_id: string | null;
+  payable_account_id: string | null;
+  journal_entry_id: string | null;
+  reversal_journal_entry_id: string | null;
+  reversal_reason: string | null;
+  posted_at: Timestamp | null;
+  reversed_at: Timestamp | null;
+  version: Generated<number>;
+  created_by: string | null;
+  updated_by: string | null;
+  created_at: Generated<Timestamp>;
+  updated_at: Generated<Timestamp>;
+}
+
+export interface PaymentAllocationsTable {
+  id: Generated<string>;
+  organization_id: string;
+  company_id: string;
+  payment_id: string;
+  bill_id: string;
+  amount: string;
+  status: Generated<PaymentAllocationStatus>;
+  superseded_at: Timestamp | null;
+  reversed_at: Timestamp | null;
+  created_at: Generated<Timestamp>;
+}
+
+export interface PaymentNumberingTable {
+  organization_id: string;
+  company_id: string;
+  issuing_entity_id: string;
+  prefix: Generated<string>;
+  include_year: Generated<boolean>;
+  sequence_length: Generated<number>;
+  next_sequence: Generated<number>;
+  created_at: Generated<Timestamp>;
+  updated_at: Generated<Timestamp>;
+}
+
+export interface PaymentAuditEventsTable {
+  id: Generated<string>;
+  organization_id: string;
+  company_id: string;
+  payment_id: string;
+  action: string;
+  detail: ColumnType<unknown, string | null, string | null>;
+  previous_version: number | null;
+  resulting_version: number | null;
+  actor_user_id: string | null;
+  actor_name: Generated<string>;
+  at: Generated<Timestamp>;
 }
 
 export interface BillAuditEventsTable {

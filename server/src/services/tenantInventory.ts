@@ -293,6 +293,50 @@ export const TENANT_DEPENDENCIES: readonly TenantDependency[] = [
       'Why a tenant changed the language its documents are issued in. It outlives log retention because '
       + 'an auditor may ask years later, but it has no meaning once the tenant itself is gone.',
   },
+  /*
+   * Supplier payments, children first — and the whole group before BILLS,
+   * because an allocation points at the bill it settled.
+   */
+  {
+    table: 'payment_audit_events',
+    ownershipKey: 'organization_id',
+    kind: 'authoritative',
+    disposition: 'delete',
+    order: 37.92,
+    label: 'Payment audit events',
+    crossTenantReachable: false,
+    rationale: 'The history of a supplier payment; meaningless once that payment is gone.',
+  },
+  {
+    table: 'payment_allocations',
+    ownershipKey: 'organization_id',
+    kind: 'authoritative',
+    disposition: 'delete',
+    order: 37.94,
+    label: 'Payment allocations',
+    crossTenantReachable: false,
+    rationale: 'What each payment settled. References bills, so it is deleted before them.',
+  },
+  {
+    table: 'supplier_payments',
+    ownershipKey: 'organization_id',
+    kind: 'authoritative',
+    disposition: 'delete',
+    order: 37.96,
+    label: 'Supplier payments',
+    crossTenantReachable: false,
+    rationale: 'Money the tenant paid its suppliers. References suppliers and accounts, so it goes before both.',
+  },
+  {
+    table: 'payment_numbering',
+    ownershipKey: 'organization_id',
+    kind: 'authoritative',
+    disposition: 'delete',
+    order: 37.98,
+    label: 'Payment numbering',
+    crossTenantReachable: false,
+    rationale: 'The held payment sequence for a tenant company.',
+  },
   {
     table: 'bill_audit_events',
     ownershipKey: 'organization_id',
@@ -583,6 +627,12 @@ export const DIRECTLY_OWNED_TABLES = [
   'platform_preview_sessions',
   'organization_language_changes',
   /* Business parties, children first — see migration 030. */
+  /* Supplier payments, children first — see migration 036. Before the bills
+   * their allocations point at. */
+  'payment_audit_events',
+  'payment_allocations',
+  'supplier_payments',
+  'payment_numbering',
   /* Supplier bills, children first — see migration 034. */
   'bill_audit_events',
   'bill_lines',

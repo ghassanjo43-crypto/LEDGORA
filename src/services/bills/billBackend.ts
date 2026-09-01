@@ -21,13 +21,18 @@
  * Nothing here reaches `localStorage`. Clearing browser storage loses a cache
  * and not a bill.
  *
- * ══ What P2 does NOT bring, and what that means for the browser ══════════════
+ * ══ What is still not here, and what that means for the browser ═════════════
  *
- * Payments, supplier credits, attachments, amendments and approval transitions
- * have no server path. On durable books they are REFUSED rather than written
- * locally: a local write against a server-held bill appears to save and is
- * replaced by the next load without a word, which is the failure mode this
- * whole cutover exists to remove.
+ * Supplier credits, attachments, amendments and approval transitions have no
+ * server path. On durable books they are REFUSED rather than written locally: a
+ * local write against a server-held bill appears to save and is replaced by the
+ * next load without a word, which is the failure mode this whole cutover exists
+ * to remove.
+ *
+ * PAYMENTS are no longer among them — P4 brought supplier payments, their
+ * allocations and the derived outstanding balance onto the server. What a bill
+ * still owes comes from `paymentBackend`, never from a figure stored here, and
+ * a bill a posted payment settles cannot be reversed at all.
  */
 import { create } from 'zustand';
 import { booksEngine } from '@/services/books/booksEngine';
@@ -158,11 +163,6 @@ export function serverBillById(id: string): ServerBill | undefined {
 }
 
 /* ══ What the browser may no longer do on durable books ════════════════════ */
-
-export const PAYMENTS_UNSUPPORTED =
-  'Recording a payment against a server-held bill is not available yet. Supplier payments, '
-  + 'allocations and settlement are a later Purchasing step; until then a bill records what is '
-  + 'owed, and nothing here clears it.';
 
 export const CREDITS_UNSUPPORTED =
   'Supplier credits against a server-held bill are not available yet. A credit reverses part of a '

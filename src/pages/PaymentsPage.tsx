@@ -4,6 +4,7 @@ import type { PaymentStatus, PaymentType } from '@/types/payment';
 import { useStore } from '@/store/useStore';
 import { useEntityStore } from '@/store/useEntityStore';
 import { usePaymentStore } from '@/store/paymentStore';
+import { usePayments } from '@/services/payments/usePayments';
 import { usePaymentEditor } from '@/store/paymentEditorStore';
 import { formatCurrency } from '@/lib/money';
 import { cn as cx } from '@/lib/utils';
@@ -25,7 +26,13 @@ import { PaymentReverseDialog } from '@/components/payments/PaymentReverseDialog
 export function PaymentsPage() {
   const accounts = useStore((s) => s.accounts);
   const entities = useEntityStore((s) => s.entities);
-  const payments = usePaymentStore((s) => s.payments);
+  /*
+   * The LEDGER, which is the server's for a durable subscriber and the local
+   * store for Free Demo. Reading `usePaymentStore` directly here would show a
+   * durable workspace payments the books do not have — and worse, would claim
+   * bills had been settled by money that never left a bank.
+   */
+  const { payments, serverBacked, error: paymentsError, stranded } = usePayments();
   const store = usePaymentStore();
   const createDraft = usePaymentStore((s) => s.createDraft);
   const consumeEditorRequest = usePaymentEditor((s) => s.consume);
@@ -84,8 +91,32 @@ export function PaymentsPage() {
         <div className="relative min-w-[180px] flex-1"><Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search number, payee or reference…" className="h-9" /></div>
       </div>
 
+      {paymentsError ? (
+        <Card><CardBody className="text-sm">
+          <p className="font-medium text-red-700 dark:text-red-400">Could not load the payments.</p>
+          <p className="text-slate-600 dark:text-slate-400">{paymentsError}</p>
+          {/* Deliberately no local fallback: demo payments in a real list would
+              claim bills had been settled by money that never left a bank. */}
+        </CardBody></Card>
+      ) : null}
+
+      {stranded > 0 ? (
+        <Card><CardBody className="space-y-2 text-sm">
+          <p className="font-medium text-amber-800 dark:text-amber-300">
+            {stranded} payment{stranded === 1 ? '' : 's'} remain in this browser and are not in these books.
+          </p>
+          <p className="text-slate-600 dark:text-slate-400">
+            This company&rsquo;s payments are held on the server, and these were never imported.
+            Importing them automatically would mean deciding which bank account each one left, which
+            posted bills it settled, and what to do with any bank fees, withholding or unapplied
+            balance it carries &mdash; none of which the server records. Each would put entries in the
+            ledger nobody chose. They are left for you to re-enter; the browser copies are untouched.
+          </p>
+        </CardBody></Card>
+      ) : null}
+
       {rows.length === 0 ? (
-        <Card><CardBody><EmptyState icon={Banknote} title="No payments yet" description="Record money paid out — a payment stays a draft until you post it, which posts one balanced bank journal and settles the allocated bills." /></CardBody></Card>
+        <Card><CardBody><EmptyState icon={Banknote} title="No payments yet" description={serverBacked ? 'Record money paid out — a payment stays a draft until you post it, which debits the supplier’s payable, credits the bank, and settles the bills it names in full.' : 'Record money paid out — a payment stays a draft until you post it, which posts one balanced bank journal and settles the allocated bills.'} /></CardBody></Card>
       ) : (
         <Card className="overflow-hidden">
           <div className="overflow-x-auto">
@@ -123,7 +154,9 @@ export function PaymentsPage() {
                         {p.status === 'draft' && <MenuItem onClick={() => act(() => store.submitPayment(p.id), 'Payment submitted.')}><Send className="h-4 w-4" /> Submit</MenuItem>}
                         {(p.status === 'draft' || p.status === 'submitted') && <MenuItem onClick={() => act(() => store.approvePayment(p.id), 'Payment approved.')}><CheckCircle2 className="h-4 w-4" /> Approve</MenuItem>}
                         {['draft', 'submitted', 'approved'].includes(p.status) && <MenuItem onClick={() => act(() => store.postPayment(p.id), 'Payment posted.')}><Send className="h-4 w-4" /> Post</MenuItem>}
-                        {['posted', 'partially-allocated'].includes(p.status) && p.unappliedAmount > 0.005 && p.supplierId && <MenuItem onClick={() => setApplyId(p.id)}><Link2 className="h-4 w-4" /> Apply payment</MenuItem>}
+                        {/* Never on server books: a posted payment is fully allocated, so there
+                            is no unapplied balance to apply and no state in which there could be. */}
+                        {!serverBacked && ['posted', 'partially-allocated'].includes(p.status) && p.unappliedAmount > 0.005 && p.supplierId && <MenuItem onClick={() => setApplyId(p.id)}><Link2 className="h-4 w-4" /> Apply payment</MenuItem>}
                         <MenuItem onClick={() => act(() => store.duplicatePayment(p.id), 'Payment duplicated.')}><Copy className="h-4 w-4" /> Duplicate</MenuItem>
                         {p.journalEntryId && p.status !== 'reversed' && <MenuItem onClick={() => setReverseId(p.id)}><Ban className="h-4 w-4" /> Reverse</MenuItem>}
                         {p.status === 'draft' && <MenuItem onClick={() => act(() => store.deleteDraft(p.id), 'Draft deleted.')}><Trash2 className="h-4 w-4" /> Delete draft</MenuItem>}

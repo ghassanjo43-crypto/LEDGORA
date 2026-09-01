@@ -15,6 +15,7 @@ import type { Bill, BillLine, BillStatus } from '@/types/bill';
 import type { ServerBill } from '@/services/api/billsApi';
 import { useBillStore } from '@/store/billStore';
 import { useServerBills, billsAreServerAuthoritative } from './billBackend';
+import { useServerPayments } from '@/services/payments/paymentBackend';
 
 /**
  * A server bill as the existing screens expect to see it.
@@ -30,8 +31,14 @@ import { useServerBills, billsAreServerAuthoritative } from './billBackend';
  * from the bill — from each line's frozen snapshot once posted — and never
  * recomputed here. The browser calculator is not authoritative for a
  * server-held bill.
+ *
+ * SETTLEMENT is the same again: P4 made supplier payments server-authoritative,
+ * and what a bill still owes is DERIVED there from its active allocations. It
+ * arrives as `outstanding` and is never recomputed here — netting payments in
+ * the browser would give a second answer to a question the server has already
+ * answered, and the two would disagree the moment a reallocation landed.
  */
-export function toBrowserBill(bill: ServerBill): Bill {
+export function toBrowserBill(bill: ServerBill, outstanding?: string): Bill {
   const lines: BillLine[] = bill.lines.map((line, index) => ({
     id: line.id,
     billId: bill.id,
@@ -58,6 +65,15 @@ export function toBrowserBill(bill: ServerBill): Bill {
   }));
 
   const total = Number(bill.total);
+  /*
+   * A bill absent from the outstanding schedule is SETTLED, not unknown: the
+   * schedule lists every posted bill with something left to pay. A reversed one
+   * is absent for a different reason and is handled explicitly below.
+   */
+  const owed = outstanding === undefined
+    ? total
+    : Number(outstanding);
+  const paid = Number((total - owed).toFixed(6));
 
   return {
     id: bill.id,
@@ -84,13 +100,11 @@ export function toBrowserBill(bill: ServerBill): Bill {
     withholdingTaxTotal: 0,
     additionalChargesTotal: 0,
     grandTotal: total,
-    amountPaid: 0,
+    amountPaid: paid,
+    /* Supplier credits have no server treatment and are refused, so this is
+     * zero as a fact about the slice rather than as a placeholder. */
     supplierCreditsApplied: 0,
-    /*
-     * The whole total is outstanding: P2 creates no payments, so nothing has
-     * cleared it. This is a fact about the slice, not a placeholder.
-     */
-    balanceDue: bill.status === 'reversed' ? 0 : total,
+    balanceDue: bill.status === 'reversed' ? 0 : owed,
     accountsPayableAccountId: bill.payableAccountId ?? '',
     inputTaxAccountId: bill.inputTaxAccountId ?? undefined,
     templateId: '',
@@ -122,12 +136,22 @@ export interface BillLedgerView {
 export function useBills(): BillLedgerView {
   const serverBacked = billsAreServerAuthoritative();
   const directory = useServerBills();
+  const outstanding = useServerPayments((s) => s.outstanding);
   const localBills = useBillStore((s) => s.bills);
 
-  const bills = useMemo(
-    () => (serverBacked ? directory.bills.map(toBrowserBill) : localBills),
-    [serverBacked, directory.bills, localBills],
-  );
+  const bills = useMemo(() => {
+    if (!serverBacked) return localBills;
+    /*
+     * A posted bill missing from the schedule owes NOTHING — it is settled, and
+     * the server leaves settled bills out. A draft is never in it either, and
+     * owes its whole total until it is posted.
+     */
+    const owed = new Map(outstanding.map((row) => [row.billId, row.outstanding]));
+    return directory.bills.map((bill) => toBrowserBill(
+      bill,
+      bill.status === 'posted' ? (owed.get(bill.id) ?? '0') : undefined,
+    ));
+  }, [serverBacked, directory.bills, outstanding, localBills]);
 
   return {
     bills,

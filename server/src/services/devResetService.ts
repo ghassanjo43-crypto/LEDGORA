@@ -312,6 +312,39 @@ const RESET_PLAN: readonly PlanEntry[] = [
    * so they must go before them.
    */
   /*
+   * Supplier payments, children first — and the whole group before BILLS, because
+   * an allocation points at the bill it settled. Deleting the bills first would
+   * leave allocations referencing nothing.
+   */
+  {
+    table: 'payment_audit_events',
+    action: 'scoped_delete',
+    order: 28.92,
+    label: 'Payment audit events',
+    why: 'The history of a supplier payment; meaningless once the payment is gone.',
+  },
+  {
+    table: 'payment_allocations',
+    action: 'scoped_delete',
+    order: 28.94,
+    label: 'Payment allocations',
+    why: 'What each payment settled. References bills, so it goes before them.',
+  },
+  {
+    table: 'supplier_payments',
+    action: 'scoped_delete',
+    order: 28.96,
+    label: 'Supplier payments',
+    why: 'Money paid to suppliers. References suppliers and accounts, so it goes before both.',
+  },
+  {
+    table: 'payment_numbering',
+    action: 'scoped_delete',
+    order: 28.98,
+    label: 'Payment numbering',
+    why: 'The held payment sequence for a tenant company.',
+  },
+  /*
    * Supplier bills, children first. The lines carry foreign keys to `accounts`
    * and the header to `business_parties`, so the whole group goes before both.
    */

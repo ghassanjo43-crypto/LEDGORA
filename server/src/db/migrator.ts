@@ -46,6 +46,7 @@ import * as salesTaxCodes from './migrations/032_sales_tax_codes.js';
 import * as supplierProfiles from './migrations/033_supplier_profiles.js';
 import * as supplierBills from './migrations/034_supplier_bills.js';
 import * as purchaseTax from './migrations/035_purchase_tax.js';
+import * as supplierPayments from './migrations/036_supplier_payments.js';
 
 const MIGRATIONS: Record<string, Migration> = {
   '001_initial_schema': initialSchema,
@@ -83,6 +84,7 @@ const MIGRATIONS: Record<string, Migration> = {
   '033_supplier_profiles': supplierProfiles,
   '034_supplier_bills': supplierBills,
   '035_purchase_tax': purchaseTax,
+  '036_supplier_payments': supplierPayments,
 };
 
 class StaticMigrationProvider implements MigrationProvider {
