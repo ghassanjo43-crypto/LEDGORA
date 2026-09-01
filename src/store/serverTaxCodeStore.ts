@@ -68,8 +68,15 @@ interface ServerTaxCodeState {
   addRateVersion: (id: string, expectedVersion: number, input: RateVersionInput) => Promise<TaxActionResult>;
   setStatus: (id: string, expectedVersion: number, status: ServerTaxCode['status']) => Promise<TaxActionResult>;
 
-  /** Codes a NEW invoice line may choose on a given date. */
-  selectableOn: (date: string) => ServerTaxCode[];
+  /**
+   * Codes a NEW line may choose on a given date, for a given document.
+   *
+   * §3: a sales-only code never appears on a bill and a purchase-only code
+   * never on an invoice. Filtering here is an affordance — the server enforces
+   * the same rule — but offering a code the server would refuse is how a user
+   * is told "no" about something on the screen in front of them.
+   */
+  selectableOn: (date: string, usage?: 'sales' | 'purchase') => ServerTaxCode[];
   getTaxCode: (id: string) => ServerTaxCode | undefined;
 }
 
@@ -162,8 +169,10 @@ export const useServerTaxCodeStore = create<ServerTaxCodeState>()((set, get) => 
    * date, with a rate in force. Offering anything else produces a refusal at
    * save time for a code the user is looking at.
    */
-  selectableOn: (date) => get().taxCodes.filter((code) => {
+  selectableOn: (date, usage = 'sales') => get().taxCodes.filter((code) => {
     if (code.status !== 'active') return false;
+    const direction = code.direction ?? 'sales';
+    if (direction !== 'both' && direction !== usage) return false;
     if (code.effectiveFrom > date) return false;
     if (code.effectiveTo && code.effectiveTo < date) return false;
     return code.rateVersions.some((version) =>

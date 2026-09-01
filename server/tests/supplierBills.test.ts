@@ -326,49 +326,63 @@ describe('server calculation', () => {
   });
 });
 
-/* ══ The zero-purchase-tax boundary ════════════════════════════════════════ */
+/* ══ Tax: the code is the client's, every figure is the server's ═════════ */
 
-describe('purchase tax is refused, never zeroed', () => {
-  it.each([
-    ['taxCodeId', 'vat-standard'],
-    ['taxRate', '16'],
-    ['taxAmount', '16.000'],
-    ['taxableAmount', '100.000'],
-    ['taxSnapshot', { rate: '16' }],
-    ['taxInclusive', true],
-    ['reverseCharge', true],
-  ])('refuses a line carrying %s', async (field, value) => {
+describe('who decides the purchase tax on a bill', () => {
+  /*
+   * P2 refused purchase tax outright, because the server could not compute it.
+   * P3 can, so the refusal MOVED rather than disappearing: what is refused now
+   * is the client telling the server what the answer is. The arithmetic, the
+   * categories and the posting are covered in `purchaseTax`; this file keeps
+   * the narrower rule it can still see.
+   */
+  it('REFUSES a client-supplied rate — that figure belongs to the server', async () => {
     await expect(draft({
-      lines: [{ accountId: chart.expense, quantity: '1', unitPrice: '100.000', [field]: value }],
-    })).rejects.toThrow(/purchase tax is not calculated on the server yet/i);
+      lines: [{ accountId: chart.expense, quantity: '1', unitPrice: '100.000', taxRate: '16' }],
+    })).rejects.toThrow(/supplies a rate for its tax/i);
+    expect(await bills.listBills(ctx.db, actor)).toHaveLength(0);
   });
 
-  it('refuses even a ZERO tax rate — that is still an assertion about the tax', async () => {
+  it('refuses a client-supplied amount and base', async () => {
+    await expect(draft({
+      lines: [{ accountId: chart.expense, quantity: '1', unitPrice: '100.000', taxAmount: '16.000' }],
+    })).rejects.toThrow(/supplies an amount for its tax/i);
+    await expect(draft({
+      lines: [{ accountId: chart.expense, quantity: '1', unitPrice: '100.000', taxableAmount: '84.000' }],
+    })).rejects.toThrow(/supplies a taxable base/i);
+  });
+
+  it('refuses a ZERO rate too — that is still an assertion about the tax', async () => {
     await expect(draft({
       lines: [{ accountId: chart.expense, quantity: '1', unitPrice: '100.000', taxRate: '0' }],
-    })).rejects.toThrow(/purchase tax is not calculated/i);
+    })).rejects.toThrow(/supplies a rate for its tax/i);
   });
 
-  it('says purchase tax is NOT sales tax pointed the other way', async () => {
+  it('says WHY, so the message is actionable', async () => {
     const error = await draft({
       lines: [{ accountId: chart.expense, quantity: '1', unitPrice: '100.000', taxRate: '16' }],
     }).then(() => null, (e) => e as Error);
 
-    expect(error!.message).toMatch(/not output tax pointed the other way/i);
+    expect(error!.message).toMatch(/calculated by the server/i);
+    expect(error!.message).toMatch(/send the tax code alone/i);
     expect(error!.message).toMatch(/nothing has been saved/i);
   });
 
-  it('refuses withholding tax', async () => {
+  it('still refuses withholding, which has no server treatment', async () => {
     await expect(draft({
       lines: [{ accountId: chart.expense, quantity: '1', unitPrice: '100.000', withholdingTaxRate: '5' }],
     })).rejects.toThrow(/withholds tax/i);
   });
 
-  it('leaves NOTHING behind when a tax-bearing bill is refused', async () => {
-    await expect(draft({
-      lines: [{ accountId: chart.expense, quantity: '1', unitPrice: '100.000', taxRate: '16' }],
-    })).rejects.toThrow();
-    expect(await bills.listBills(ctx.db, actor)).toHaveLength(0);
+  it('ACCEPTS a line with no tax code at all', async () => {
+    const bill = await draft({
+      lines: [{ accountId: chart.expense, quantity: '1', unitPrice: '100.000' }],
+    });
+    expect(bill.taxTotal).toBe('0.000');
+    expect(bill.total).toBe('100.000');
+    /* No code means no tax — which is NOT the same as a zero-rated purchase,
+     * and the absent snapshot is how the two stay distinguishable. */
+    expect(bill.lines[0]!.taxSnapshot).toBeNull();
   });
 });
 

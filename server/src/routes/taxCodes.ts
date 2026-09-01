@@ -51,8 +51,15 @@ const createSchema = z.object({
   description: z.string().max(2000).optional(),
   category: z.string().max(40),
   calculationMethod: z.string().max(40),
+  /*
+   * Which documents the code may be used on (§3). A plain string, like category
+   * and method, so an unsupported value — a withholding direction — is refused
+   * by name rather than as "invalid enum value".
+   */
+  direction: z.string().max(40).optional(),
   rate: rateSchema.optional(),
   outputTaxAccountId: z.string().uuid().nullable().optional(),
+  inputTaxAccountId: z.string().uuid().nullable().optional(),
   effectiveFrom: isoDate,
   effectiveTo: isoDate.nullable().optional(),
 });
@@ -63,7 +70,10 @@ const updateSchema = z.object({
   description: z.string().max(2000).optional(),
   category: z.string().max(40).optional(),
   calculationMethod: z.string().max(40).optional(),
+  /* Accepted so a mismatch is REFUSED by name; direction is immutable. */
+  direction: z.string().max(40).optional(),
   outputTaxAccountId: z.string().uuid().nullable().optional(),
+  inputTaxAccountId: z.string().uuid().nullable().optional(),
   effectiveTo: isoDate.nullable().optional(),
 });
 
@@ -78,6 +88,8 @@ const rateVersionSchema = z.object({
   effectiveFrom: isoDate,
   effectiveTo: isoDate.nullable().optional(),
   outputTaxAccountId: z.string().uuid().nullable().optional(),
+  /** A per-version override, exactly as the output account has. */
+  inputTaxAccountId: z.string().uuid().nullable().optional(),
 });
 
 const listSchema = z.object({

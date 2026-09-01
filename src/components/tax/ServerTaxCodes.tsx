@@ -21,7 +21,7 @@ import {
   rateOn,
 } from '@/store/serverTaxCodeStore';
 import type {
-  ServerTaxCode, ServerTaxCategory, ServerTaxMethod,
+  ServerTaxCode, ServerTaxCategory, ServerTaxMethod, ServerTaxDirection,
 } from '@/services/api/taxCodesApi';
 import { Card, CardBody } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -46,7 +46,15 @@ const CATEGORIES: { value: ServerTaxCategory; label: string; hint: string }[] = 
  * Listed rather than hidden: a bookkeeper who needs reverse charge has to know
  * it is absent and why, not discover it by not finding it.
  */
+const DIRECTIONS: { value: ServerTaxDirection; label: string; hint: string }[] = [
+  { value: 'sales', label: 'Sales only', hint: 'Charged to customers on invoices.' },
+  { value: 'purchase', label: 'Purchases only', hint: 'Reclaimed from suppliers on bills.' },
+  { value: 'both', label: 'Sales and purchases', hint: 'One rate under one authority, used on both.' },
+];
+
 const NOT_YET: { label: string; reason: string }[] = [
+  { label: 'Partial recoverability', reason: 'The specification asks for it but describes a posting that contradicts the fields beside it, so input tax here is fully recoverable or the code charges nothing.' },
+  { label: 'Withholding directions', reason: 'Recognised at a payment or receipt stage with its own liability account, which the server does not hold.' },
   { label: 'Reverse charge', reason: 'Creates a self-assessed output and input tax at once; the account pair is not configured on the server.' },
   { label: 'Import tax', reason: 'Assessed at the border against accounts the server does not hold.' },
   { label: 'Withholding', reason: 'Recognised at a payment or receipt stage this slice does not cover.' },
@@ -172,6 +180,10 @@ export function ServerTaxCodes() {
                       <span className="text-slate-600 dark:text-slate-400">{code.name}</span>
                       <Badge tone={CATEGORY_TONE[code.category]}>{code.category}</Badge>
                       <Badge tone="slate">{code.calculationMethod}</Badge>
+                      <Badge tone="violet">
+                        {code.direction === 'both' ? 'sales + purchases'
+                          : code.direction === 'purchase' ? 'purchases' : 'sales'}
+                      </Badge>
                       {code.status !== 'active' ? <Badge tone="red">{code.status}</Badge> : null}
                     </div>
                     <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
@@ -180,12 +192,22 @@ export function ServerTaxCodes() {
                         {rateOn(code, today()) === null ? 'none in force' : `${trim(rateOn(code, today())!)}%`}
                       </span>
                       {chargesTax(code.category) ? (
-                        <> · Output tax to {accountLabel(code.outputTaxAccountId)}</>
+                        <>
+                          {code.direction !== 'purchase' ? <> · Output tax to {accountLabel(code.outputTaxAccountId)}</> : null}
+                          {code.direction !== 'sales' ? <> · Input tax to {accountLabel(code.inputTaxAccountId)}</> : null}
+                        </>
                       ) : (
                         <> · Charges no tax, so it posts to no account</>
                       )}
                     </p>
-                    {chargesTax(code.category) && !code.outputTaxAccountId ? (
+                    {chargesTax(code.category) && code.direction !== 'sales' && !code.inputTaxAccountId ? (
+                      <p className="mt-1 flex items-center gap-1.5 text-sm text-amber-700 dark:text-amber-400">
+                        <AlertTriangle className="h-4 w-4" />
+                        No input tax account. A bill using this code cannot be posted until one is
+                        set &mdash; recoverable input tax is money owed back to the business.
+                      </p>
+                    ) : null}
+                    {chargesTax(code.category) && code.direction !== 'purchase' && !code.outputTaxAccountId ? (
                       <p className="mt-1 flex items-center gap-1.5 text-sm text-amber-700 dark:text-amber-400">
                         <AlertTriangle className="h-4 w-4" />
                         No output tax account. An invoice using this code cannot be issued until one is set —
@@ -244,8 +266,9 @@ function TaxCodeForm({
   busy: boolean;
   onSubmit: (input: {
     code: string; name: string; category: ServerTaxCategory;
-    calculationMethod: ServerTaxMethod; rate?: string;
-    outputTaxAccountId?: string | null; effectiveFrom: string;
+    calculationMethod: ServerTaxMethod; direction: ServerTaxDirection; rate?: string;
+    outputTaxAccountId?: string | null; inputTaxAccountId?: string | null;
+    effectiveFrom: string;
   }) => void | Promise<void>;
   onCancel: () => void;
 }) {
@@ -253,8 +276,10 @@ function TaxCodeForm({
   const [name, setName] = useState('');
   const [category, setCategory] = useState<ServerTaxCategory>('standard');
   const [method, setMethod] = useState<ServerTaxMethod>('exclusive');
+  const [direction, setDirection] = useState<ServerTaxDirection>('sales');
   const [rate, setRate] = useState('16');
   const [accountId, setAccountId] = useState('');
+  const [inputAccountId, setInputAccountId] = useState('');
   const [effectiveFrom, setEffectiveFrom] = useState(today());
 
   const taxable = chargesTax(category);
@@ -285,6 +310,18 @@ function TaxCodeForm({
           </label>
 
           <label className="text-sm">
+            <span className="mb-1 block text-slate-600 dark:text-slate-400">Used on</span>
+            <Select
+              value={direction}
+              onChange={(e) => setDirection(e.target.value as ServerTaxDirection)}
+              options={DIRECTIONS.map((d) => ({ value: d.value, label: d.label }))}
+            />
+            <span className="mt-1 block text-xs text-slate-500 dark:text-slate-400">
+              {DIRECTIONS.find((d) => d.value === direction)?.hint}
+            </span>
+          </label>
+
+          <label className="text-sm">
             <span className="mb-1 block text-slate-600 dark:text-slate-400">Method</span>
             <Select
               value={method}
@@ -312,23 +349,45 @@ function TaxCodeForm({
             ) : null}
           </label>
 
-          <label className="text-sm sm:col-span-2">
-            <span className="mb-1 block text-slate-600 dark:text-slate-400">Output tax account</span>
-            <Select
-              value={accountId}
-              onChange={(e) => setAccountId(e.target.value)}
-              disabled={!taxable}
-              options={[
-                { value: '', label: taxable ? 'Choose an account…' : 'Not applicable' },
-                ...postableAccounts.map((a) => ({ value: a.id, label: `${a.code} · ${a.name}` })),
-              ]}
-            />
-            <span className="mt-1 block text-xs text-slate-500 dark:text-slate-400">
-              {taxable
-                ? 'Where tax collected is held. It is a liability owed to an authority, never revenue.'
-                : 'A category that charges nothing posts to no account.'}
-            </span>
-          </label>
+          {direction !== 'purchase' ? (
+            <label className="text-sm sm:col-span-2">
+              <span className="mb-1 block text-slate-600 dark:text-slate-400">Output tax account</span>
+              <Select
+                value={accountId}
+                onChange={(e) => setAccountId(e.target.value)}
+                disabled={!taxable}
+                options={[
+                  { value: '', label: taxable ? 'Choose a liability account…' : 'Not applicable' },
+                  ...postableAccounts.map((a) => ({ value: a.id, label: `${a.code} · ${a.name}` })),
+                ]}
+              />
+              <span className="mt-1 block text-xs text-slate-500 dark:text-slate-400">
+                {taxable
+                  ? 'Where tax collected is held. It is a liability owed to an authority, never revenue.'
+                  : 'A category that charges nothing posts to no account.'}
+              </span>
+            </label>
+          ) : null}
+
+          {direction !== 'sales' ? (
+            <label className="text-sm sm:col-span-2">
+              <span className="mb-1 block text-slate-600 dark:text-slate-400">Input tax account</span>
+              <Select
+                value={inputAccountId}
+                onChange={(e) => setInputAccountId(e.target.value)}
+                disabled={!taxable}
+                options={[
+                  { value: '', label: taxable ? 'Choose an asset account…' : 'Not applicable' },
+                  ...postableAccounts.map((a) => ({ value: a.id, label: `${a.code} · ${a.name}` })),
+                ]}
+              />
+              <span className="mt-1 block text-xs text-slate-500 dark:text-slate-400">
+                {taxable
+                  ? 'Where recoverable input tax is reclaimed. It is money the business expects back from an authority, so it is an asset — never a bank account.'
+                  : 'A category that charges nothing posts to no account.'}
+              </span>
+            </label>
+          ) : null}
 
           <label className="text-sm">
             <span className="mb-1 block text-slate-600 dark:text-slate-400">Effective from</span>
@@ -344,8 +403,10 @@ function TaxCodeForm({
               name: name.trim(),
               category,
               calculationMethod: taxable ? method : 'exclusive',
+              direction,
               rate: taxable ? rate : '0',
-              outputTaxAccountId: taxable ? (accountId || null) : null,
+              outputTaxAccountId: taxable && direction !== 'purchase' ? (accountId || null) : null,
+              inputTaxAccountId: taxable && direction !== 'sales' ? (inputAccountId || null) : null,
               effectiveFrom,
             })}
           >

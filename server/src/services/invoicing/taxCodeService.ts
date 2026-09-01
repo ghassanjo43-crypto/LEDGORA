@@ -36,6 +36,8 @@ import type {
   SalesTaxCategory,
   SalesTaxMethod,
   SalesTaxStatus,
+  TaxDirection,
+  TaxRecoverability,
 } from '../../db/schema.js';
 import { errors } from '../../lib/errors.js';
 import type { AccountingActor } from '../accounting/audit.js';
@@ -53,6 +55,39 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 export const SUPPORTED_CATEGORIES: readonly SalesTaxCategory[] =
   ['standard', 'reduced', 'zero-rated', 'exempt', 'out-of-scope'];
 export const SUPPORTED_METHODS: readonly SalesTaxMethod[] = ['exclusive', 'inclusive'];
+export const SUPPORTED_DIRECTIONS: readonly TaxDirection[] = ['sales', 'purchase', 'both'];
+
+/**
+ * The directions §3 defines that this server cannot post.
+ *
+ * Withholding is recognised at a payment or receipt stage with its own
+ * liability account, and none of that exists here. A direction the server can
+ * store but never honour is worse than one it refuses.
+ */
+const REFUSED_DIRECTIONS: Record<string, string> = {
+  'withholding-receivable': 'Withholding is recognised at a receipt stage with its own account, '
+    + 'and that is not configured on the server.',
+  'withholding-payable': 'Withholding is recognised at a payment stage with its own liability '
+    + 'account, and that is not configured on the server.',
+};
+
+/**
+ * How input tax is treated. Only full recoverability is defined.
+ *
+ * §11 asks for partial recoverability but shows a "possible" posting that
+ * contradicts the fields beside it — it capitalises the non-recoverable tax
+ * into the expense while also defining a separate account for it — and the
+ * browser implements no split at all. Approximating either reading would put a
+ * number in the ledger nobody specified.
+ */
+export const RECOVERABILITY: TaxRecoverability = 'recoverable';
+
+export const PARTIAL_RECOVERY_UNSUPPORTED =
+  'Partial or non-recoverable input tax is not supported. The specification asks for it but '
+  + 'describes only a possible posting, and that posting contradicts the fields beside it — it '
+  + 'capitalises the non-recoverable portion into the expense while also naming a separate account '
+  + 'for it. Until one of those is chosen deliberately, input tax here is fully recoverable or the '
+  + 'code charges nothing at all. Nothing has been saved.';
 
 /**
  * The methods and categories the browser knows and this server does not, with
@@ -85,6 +120,7 @@ export interface TaxRateVersionRecord {
   effectiveFrom: string;
   effectiveTo: string | null;
   outputTaxAccountId: string | null;
+  inputTaxAccountId: string | null;
   createdAt: string | null;
 }
 
@@ -95,8 +131,10 @@ export interface TaxCodeRecord {
   description: string;
   category: SalesTaxCategory;
   calculationMethod: SalesTaxMethod;
+  direction: TaxDirection;
   status: SalesTaxStatus;
   outputTaxAccountId: string | null;
+  inputTaxAccountId: string | null;
   effectiveFrom: string;
   effectiveTo: string | null;
   version: number;
@@ -131,6 +169,7 @@ function toVersion(row: any): TaxRateVersionRecord {
     effectiveFrom: dateText(row.effective_from),
     effectiveTo: row.effective_to ? dateText(row.effective_to) : null,
     outputTaxAccountId: row.output_tax_account_id ?? null,
+    inputTaxAccountId: row.input_tax_account_id ?? null,
     createdAt: iso(row.created_at),
   };
 }
@@ -144,8 +183,10 @@ function toRecord(row: any, versions: TaxRateVersionRecord[]): TaxCodeRecord {
     description: row.description ?? '',
     category: row.category,
     calculationMethod: row.calculation_method,
+    direction: row.direction ?? 'sales',
     status: row.status,
     outputTaxAccountId: row.output_tax_account_id ?? null,
+    inputTaxAccountId: row.input_tax_account_id ?? null,
     effectiveFrom: dateText(row.effective_from),
     effectiveTo: row.effective_to ? dateText(row.effective_to) : null,
     version: Number(row.version),
@@ -161,7 +202,9 @@ export interface TaxCodeInput {
   description?: string;
   category?: string;
   calculationMethod?: string;
+  direction?: string;
   outputTaxAccountId?: string | null;
+  inputTaxAccountId?: string | null;
   effectiveFrom?: string;
   effectiveTo?: string | null;
   /** The opening rate, for a create. Later changes go through a rate version. */
@@ -187,6 +230,27 @@ function assertCategory(value: string | undefined): SalesTaxCategory {
     );
   }
   return value as SalesTaxCategory;
+}
+
+function assertDirection(value: string | undefined): TaxDirection {
+  /* Absent means SALES, which is what every code created before purchase tax
+   * existed already is — recording that rather than deciding something new. */
+  if (!value) return 'sales';
+  const refusal = REFUSED_DIRECTIONS[value];
+  if (refusal) {
+    throw errors.validation(
+      `${refusal} Nothing has been saved. Supported directions are: ${SUPPORTED_DIRECTIONS.join(', ')}.`,
+      { fieldErrors: { direction: 'Choose a supported direction.' } },
+    );
+  }
+  if (!SUPPORTED_DIRECTIONS.includes(value as TaxDirection)) {
+    throw errors.validation(
+      `"${value}" is not a tax direction this server recognises. Supported directions are: `
+      + `${SUPPORTED_DIRECTIONS.join(', ')}.`,
+      { fieldErrors: { direction: 'Choose a supported direction.' } },
+    );
+  }
+  return value as TaxDirection;
 }
 
 function assertMethod(value: string | undefined): SalesTaxMethod {
@@ -261,22 +325,74 @@ async function assertOutputAccount(
   accountId: string,
   field = 'outputTaxAccountId',
 ): Promise<void> {
+  return assertTaxAccount(trx, actor, accountId, {
+    field, requiredType: 'liability', label: 'output tax account',
+  });
+}
+
+/**
+ * A tax control account, judged by the same rule the ledger uses.
+ *
+ * OUTPUT tax is a liability — money collected for an authority. INPUT tax is an
+ * asset — money the business expects back from one. An input account posted to a
+ * liability would show a recoverable amount as something owed, which balances
+ * and is wrong in every statement it appears in.
+ *
+ * A CASH-classified asset is refused outright: recoverable tax is a claim, not
+ * money in a bank, and posting it there would overstate the balance.
+ */
+async function assertTaxAccount(
+  trx: Executor,
+  actor: AccountingActor,
+  accountId: string,
+  options: { field: string; requiredType: 'liability' | 'asset'; label: string },
+): Promise<void> {
   const accounts = await loadAccountsForPosting(trx, actor.organizationId, actor.companyId, [accountId]);
   const account = accounts.get(accountId);
   if (!account) {
     throw errors.validation(
-      'That output tax account does not exist in these books. Tax collected is held for an '
+      `That ${options.label} does not exist in these books. Tax is held for or reclaimed from an `
       + 'authority, so it must post to an account this company actually owns.',
-      { fieldErrors: { [field]: 'Choose an account from this company\'s chart.' } },
+      { fieldErrors: { [options.field]: "Choose an account from this company's chart." } },
+    );
+  }
+  if (account.accountType !== options.requiredType) {
+    throw errors.validation(
+      `An ${options.label} must be ${options.requiredType === 'liability' ? 'a liability' : 'an asset'} `
+      + `account. ${account.accountCode} (${account.accountName}) is ${account.accountType}. `
+      + (options.requiredType === 'asset'
+        ? 'Recoverable input tax is money the business expects back from an authority, which is an asset.'
+        : 'Tax collected on an authority’s behalf is owed until remitted, which is a liability.'),
+      { fieldErrors: { [options.field]: `Choose ${options.requiredType === 'liability' ? 'a liability' : 'an asset'} account.` } },
+    );
+  }
+  if (options.requiredType === 'asset'
+      && account.cashClassification && account.cashClassification !== 'none') {
+    throw errors.validation(
+      `${account.accountCode} (${account.accountName}) is a cash or bank account. Recoverable input `
+      + 'tax is a claim on an authority, not money in a bank; posting it there would overstate the '
+      + 'balance. Nothing has been saved.',
+      { fieldErrors: { [options.field]: 'Choose a non-cash asset account.' } },
     );
   }
   const verdict = assessPostingAccount(account, account.hasChildren);
   if (!verdict.eligible) {
     throw errors.validation(
-      `That output tax account cannot receive postings: ${verdict.message}`,
-      { fieldErrors: { [field]: 'Choose an active, postable account.' } },
+      `That ${options.label} cannot receive postings: ${verdict.message}`,
+      { fieldErrors: { [options.field]: 'Choose an active, postable account.' } },
     );
   }
+}
+
+async function assertInputAccount(
+  trx: Executor,
+  actor: AccountingActor,
+  accountId: string,
+  field = 'inputTaxAccountId',
+): Promise<void> {
+  return assertTaxAccount(trx, actor, accountId, {
+    field, requiredType: 'asset', label: 'input tax account',
+  });
 }
 
 /* ══ Reads ═════════════════════════════════════════════════════════════════ */
@@ -394,9 +510,12 @@ async function lockCode(
   actor: AccountingActor,
   id: string,
   expectedVersion: number | undefined,
-): Promise<{ id: string; version: number; status: SalesTaxStatus; category: SalesTaxCategory }> {
-  const { rows } = await sql<{ id: string; version: number; status: SalesTaxStatus; category: SalesTaxCategory }>`
-    SELECT id, version, status, category FROM tax_codes
+): Promise<{ id: string; version: number; status: SalesTaxStatus; category: SalesTaxCategory; direction: TaxDirection }> {
+  const { rows } = await sql<{
+    id: string; version: number; status: SalesTaxStatus;
+    category: SalesTaxCategory; direction: TaxDirection;
+  }>`
+    SELECT id, version, status, category, direction FROM tax_codes
      WHERE organization_id = ${actor.organizationId}
        AND company_id = ${actor.companyId}
        AND id = ${id}
@@ -436,6 +555,7 @@ export async function createTaxCode(
 
   const category = assertCategory(input.category);
   const method = assertMethod(input.calculationMethod);
+  const direction = assertDirection(input.direction);
   const effectiveFrom = assertDate(input.effectiveFrom, 'effectiveFrom');
   const effectiveTo = input.effectiveTo ? assertDate(input.effectiveTo, 'effectiveTo') : null;
   if (effectiveTo && effectiveTo < effectiveFrom) {
@@ -459,13 +579,32 @@ export async function createTaxCode(
    * point: an account here would imply a credit that must never be posted.
    */
   const outputTaxAccountId = input.outputTaxAccountId?.trim() || null;
-  if (!taxable && outputTaxAccountId) {
+  const inputTaxAccountId = input.inputTaxAccountId?.trim() || null;
+  if (!taxable && (outputTaxAccountId || inputTaxAccountId)) {
     throw errors.validation(
-      `A ${category} supply posts no tax, so it has no output tax account.`,
+      `A ${category} supply posts no tax, so it has neither an output nor an input tax account.`,
       { fieldErrors: { outputTaxAccountId: 'Remove the account for this category.' } },
     );
   }
+  /*
+   * An account is required only for the side the code FACES. A purchase-only
+   * code has no output account to configure, and demanding one would make a
+   * legitimate code unsaveable.
+   */
+  if (direction === 'purchase' && outputTaxAccountId) {
+    throw errors.validation(
+      'A purchase-only tax code never charges output tax, so it has no output tax account.',
+      { fieldErrors: { outputTaxAccountId: 'Remove it, or make the code apply to sales too.' } },
+    );
+  }
+  if (direction === 'sales' && inputTaxAccountId) {
+    throw errors.validation(
+      'A sales-only tax code never reclaims input tax, so it has no input tax account.',
+      { fieldErrors: { inputTaxAccountId: 'Remove it, or make the code apply to purchases too.' } },
+    );
+  }
   if (outputTaxAccountId) await assertOutputAccount(db, actor, outputTaxAccountId);
+  if (inputTaxAccountId) await assertInputAccount(db, actor, inputTaxAccountId);
 
   return db.transaction().execute(async (trx) => {
     const duplicate = await trx
@@ -490,8 +629,10 @@ export async function createTaxCode(
       description: input.description ?? '',
       category,
       calculation_method: method,
+      direction,
       status: 'active',
       output_tax_account_id: outputTaxAccountId,
+      input_tax_account_id: inputTaxAccountId,
       effective_from: effectiveFrom,
       effective_to: effectiveTo,
       created_by: actor.userId,
@@ -508,13 +649,14 @@ export async function createTaxCode(
       effective_from: effectiveFrom,
       effective_to: effectiveTo,
       output_tax_account_id: outputTaxAccountId,
+      input_tax_account_id: inputTaxAccountId,
       created_by: actor.userId,
     } as never).execute();
 
     await writeAudit(trx, actor, {
       taxCodeId: created.id,
       action: 'TAX_CODE_CREATED',
-      detail: { code, category, method, rate: Money.toDecimalString(rate), effectiveFrom },
+      detail: { code, category, method, direction, rate: Money.toDecimalString(rate), effectiveFrom },
       resultingVersion: 1,
     });
 
@@ -562,15 +704,37 @@ export async function updateTaxCode(
     }
     if (input.calculationMethod) assertMethod(input.calculationMethod);
 
-    const outputTaxAccountId = input.outputTaxAccountId?.trim() || null;
-    const taxable = chargesTax(current.category);
-    if (!taxable && outputTaxAccountId) {
+    /*
+     * DIRECTION is not editable, for the reason the category is not: every line
+     * already posted under this code froze it, and flipping a sales code to
+     * purchases would describe those documents wrongly.
+     */
+    if (input.direction && input.direction !== current.direction) {
       throw errors.validation(
-        `A ${current.category} supply posts no tax, so it has no output tax account.`,
+        'A tax code’s direction cannot be changed. Documents already posted under it froze '
+        + 'which way it faced, and editing it here would describe them wrongly. Create a new code '
+        + 'and archive this one.',
+        { fieldErrors: { direction: 'Create a new tax code instead.' } },
+      );
+    }
+
+    const outputTaxAccountId = input.outputTaxAccountId?.trim() || null;
+    const inputTaxAccountId = input.inputTaxAccountId?.trim() || null;
+    const taxable = chargesTax(current.category);
+    if (!taxable && (outputTaxAccountId || inputTaxAccountId)) {
+      throw errors.validation(
+        `A ${current.category} supply posts no tax, so it has neither an output nor an input tax account.`,
         { fieldErrors: { outputTaxAccountId: 'Remove the account for this category.' } },
       );
     }
+    if (current.direction === 'purchase' && outputTaxAccountId) {
+      throw errors.validation('A purchase-only tax code has no output tax account.');
+    }
+    if (current.direction === 'sales' && inputTaxAccountId) {
+      throw errors.validation('A sales-only tax code has no input tax account.');
+    }
     if (outputTaxAccountId) await assertOutputAccount(trx, actor, outputTaxAccountId);
+    if (inputTaxAccountId) await assertInputAccount(trx, actor, inputTaxAccountId);
 
     const effectiveTo = input.effectiveTo ? assertDate(input.effectiveTo, 'effectiveTo') : null;
 
@@ -578,6 +742,7 @@ export async function updateTaxCode(
       name,
       description: input.description ?? '',
       output_tax_account_id: outputTaxAccountId,
+      input_tax_account_id: inputTaxAccountId,
       effective_to: effectiveTo,
       version: current.version + 1,
       updated_by: actor.userId,
@@ -591,7 +756,7 @@ export async function updateTaxCode(
     await writeAudit(trx, actor, {
       taxCodeId: id,
       action: 'TAX_CODE_UPDATED',
-      detail: { name, outputTaxAccountId, effectiveTo },
+      detail: { name, outputTaxAccountId, inputTaxAccountId, effectiveTo },
       previousVersion: current.version,
       resultingVersion: current.version + 1,
     });
@@ -648,7 +813,11 @@ export async function addRateVersion(
   db: Kysely<Database>,
   actor: AccountingActor,
   taxCodeId: string,
-  input: { rate?: string; effectiveFrom?: string; effectiveTo?: string | null; outputTaxAccountId?: string | null; expectedVersion?: number },
+  input: {
+    rate?: string; effectiveFrom?: string; effectiveTo?: string | null;
+    outputTaxAccountId?: string | null; inputTaxAccountId?: string | null;
+    expectedVersion?: number;
+  },
 ): Promise<TaxCodeRecord> {
   const effectiveFrom = assertDate(input.effectiveFrom, 'effectiveFrom');
   const effectiveTo = input.effectiveTo ? assertDate(input.effectiveTo, 'effectiveTo') : null;
@@ -674,10 +843,18 @@ export async function addRateVersion(
     }
 
     const outputTaxAccountId = input.outputTaxAccountId?.trim() || null;
-    if (!taxable && outputTaxAccountId) {
-      throw errors.validation(`A ${current.category} supply posts no tax, so it has no output tax account.`);
+    const inputTaxAccountId = input.inputTaxAccountId?.trim() || null;
+    if (!taxable && (outputTaxAccountId || inputTaxAccountId)) {
+      throw errors.validation(`A ${current.category} supply posts no tax, so it has no tax account.`);
+    }
+    if (current.direction === 'purchase' && outputTaxAccountId) {
+      throw errors.validation('A purchase-only tax code has no output tax account.');
+    }
+    if (current.direction === 'sales' && inputTaxAccountId) {
+      throw errors.validation('A sales-only tax code has no input tax account.');
     }
     if (outputTaxAccountId) await assertOutputAccount(trx, actor, outputTaxAccountId);
+    if (inputTaxAccountId) await assertInputAccount(trx, actor, inputTaxAccountId);
 
     /* Existing versions, under the code's lock so two concurrent adds cannot
      * both believe they are the only one. */
@@ -725,6 +902,7 @@ export async function addRateVersion(
       effective_from: effectiveFrom,
       effective_to: effectiveTo,
       output_tax_account_id: outputTaxAccountId,
+      input_tax_account_id: inputTaxAccountId,
       created_by: actor.userId,
     } as never).execute();
 
@@ -758,13 +936,20 @@ export interface ResolvedTax {
   name: string;
   category: SalesTaxCategory;
   method: SalesTaxMethod;
+  direction: TaxDirection;
+  /** Only ever `recoverable`; see `PARTIAL_RECOVERY_UNSUPPORTED`. */
+  recoverability: TaxRecoverability;
   rate: Money.Amount;
   rateVersionId: string;
   effectiveFrom: string;
   effectiveTo: string | null;
   /** Null for the three zero-tax categories, which post nothing. */
   outputTaxAccountId: string | null;
+  inputTaxAccountId: string | null;
 }
+
+/** Which document is asking. §3 forbids using a code on the wrong one. */
+export type TaxUsage = 'sales' | 'purchase';
 
 /**
  * The rate applying to a document on its tax date.
@@ -788,6 +973,7 @@ export async function resolveTaxForDate(
   actor: AccountingActor,
   taxCodeId: string,
   taxPointDate: string,
+  usage: TaxUsage = 'sales',
 ): Promise<ResolvedTax> {
   const code = await db
     .selectFrom('tax_codes')
@@ -804,16 +990,34 @@ export async function resolveTaxForDate(
       { fieldErrors: { taxCodeId: 'Choose a tax code from this company.' } },
     );
   }
+  /*
+   * §3: "Do not show purchase-only codes on sales invoices or sales-only codes
+   * on supplier bills." Enforced HERE rather than only in a picker, because a
+   * screen that filters is an affordance and this is a rule — reclaiming input
+   * tax under a code that only ever charged output tax is a filing error.
+   */
+  const direction: TaxDirection = code.direction ?? 'sales';
+  const document = usage === 'sales' ? 'invoice' : 'bill';
+  /* "a invoice" reads as a typo and undermines an otherwise careful message. */
+  const article = usage === 'sales' ? 'an' : 'a';
+  if (direction !== 'both' && direction !== usage) {
+    throw errors.validation(
+      `Tax code ${code.code} applies to ${direction} documents, so it cannot be used on `
+      + `${article} ${document}. Choose a ${usage} code, or change this one to apply to both.`,
+      { fieldErrors: { taxCodeId: `Choose a code that applies to ${usage}.` } },
+    );
+  }
+
   if (code.status === 'archived') {
     throw errors.validation(
-      `Tax code ${code.code} is archived and cannot be put on a new invoice. Invoices already `
-      + 'issued under it keep it, and their figures are unaffected.',
+      `Tax code ${code.code} is archived and cannot be put on a new ${document}. Documents already `
+      + 'posted under it keep it, and their figures are unaffected.',
       { fieldErrors: { taxCodeId: 'Choose an active tax code.' } },
     );
   }
   if (code.status === 'inactive') {
     throw errors.validation(
-      `Tax code ${code.code} is inactive and cannot be put on a new invoice.`,
+      `Tax code ${code.code} is inactive and cannot be put on a new ${document}.`,
       { fieldErrors: { taxCodeId: 'Choose an active tax code.' } },
     );
   }
@@ -847,15 +1051,20 @@ export async function resolveTaxForDate(
   if (!applicable) {
     throw errors.validation(
       `Tax code ${code.code} has no rate in force on ${taxPointDate}. A rate is effective-dated so `
-      + 'historical invoices keep the rate they charged; there is no rate to apply on this date, '
+      + `historical ${document}s keep the rate they carried; there is no rate to apply on this date, `
       + 'and the server will not fall back to a different period\'s.',
       { fieldErrors: { taxCodeId: 'Add a rate covering this date, or choose another code.' } },
     );
   }
 
   const taxable = chargesTax(code.category);
+  /* The rate VERSION's account wins over the code's, on both sides. A rate
+   * change that moved to a new control account must not restate the old one. */
   const outputTaxAccountId = taxable
     ? (applicable.output_tax_account_id ?? code.output_tax_account_id ?? null)
+    : null;
+  const inputTaxAccountId = taxable
+    ? (applicable.input_tax_account_id ?? code.input_tax_account_id ?? null)
     : null;
 
   return {
@@ -864,12 +1073,40 @@ export async function resolveTaxForDate(
     name: code.name,
     category: code.category,
     method: code.calculation_method,
+    direction,
+    recoverability: RECOVERABILITY,
     rate: Money.toAmount(String(applicable.rate), 'rate'),
     rateVersionId: applicable.id,
     effectiveFrom: dateText(applicable.effective_from),
     effectiveTo: applicable.effective_to ? dateText(applicable.effective_to) : null,
     outputTaxAccountId,
+    inputTaxAccountId,
   };
+}
+
+/**
+ * The INPUT account check that must happen at posting, not only at configuration.
+ *
+ * An account eligible when the code was set up can be archived, blocked,
+ * deactivated or given a child before the bill is posted. Debiting one the
+ * ledger would refuse from any other door is exactly the inconsistency this
+ * catches — and it is the mirror of `assertOutputAccountPostable`.
+ */
+export async function assertInputAccountPostable(
+  trx: Executor,
+  actor: AccountingActor,
+  resolved: ResolvedTax,
+): Promise<string> {
+  if (!resolved.inputTaxAccountId) {
+    throw errors.validation(
+      `Tax code ${resolved.code} charges tax but has no input tax account, so this bill cannot say `
+      + 'where the tax it reclaims is held. Recoverable input tax is money the business expects '
+      + 'back from an authority — set the account on the tax code and post again. Nothing has been saved.',
+      { fieldErrors: { taxCodeId: 'Set an input tax account on this tax code.' } },
+    );
+  }
+  await assertInputAccount(trx, actor, resolved.inputTaxAccountId, 'taxCodeId');
+  return resolved.inputTaxAccountId;
 }
 
 /**

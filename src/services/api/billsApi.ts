@@ -29,8 +29,38 @@ export interface ServerBillLine {
   discountAmount: string;
   /** quantity x unitPrice, BEFORE discount. */
   lineSubtotal: string;
-  /** What the account is debited. */
+  /** The discounted line amount, tax-bearing, before any split. */
   lineNet: string;
+  /** What the line's own account was debited, net of tax. */
+  taxableAmount: string;
+  taxAmount: string;
+  /** taxable + tax — what the supplier is owed for this line. */
+  grossAmount: string;
+  taxCodeId: string | null;
+  /** The FROZEN snapshot; null on a draft and on a pre-P3 posted bill. */
+  taxSnapshot: ServerBillTaxSnapshot | null;
+}
+
+export interface ServerBillTaxSnapshot {
+  taxCodeId: string;
+  code: string;
+  name: string;
+  direction: string;
+  category: string;
+  calculationMethod: string;
+  /** Always `recoverable`; partial recovery is refused by the server. */
+  recoverability: string;
+  rate: string;
+  rateVersionId: string | null;
+  effectiveFrom: string | null;
+  effectiveTo: string | null;
+  taxPointDate: string | null;
+  taxableAmount: string;
+  taxAmount: string;
+  recoverableTaxAmount: string;
+  grossAmount: string;
+  inputTaxAccountId: string | null;
+  capturedAt: string | null;
 }
 
 export interface ServerBill {
@@ -49,8 +79,10 @@ export interface ServerBill {
   /** The GROSS sum of the lines, before discount. */
   subtotal: string;
   discountTotal: string;
+  taxTotal: string;
   total: string;
   payableAccountId: string | null;
+  inputTaxAccountId: string | null;
   journalEntryId: string | null;
   reversalJournalEntryId: string | null;
   reversalReason: string | null;
@@ -68,6 +100,14 @@ export interface ServerBillLineInput {
   unitPrice?: string;
   discountType?: 'percentage' | 'amount' | null;
   discountValue?: string | null;
+  /*
+   * The tax CODE, and nothing else about the tax.
+   *
+   * There is deliberately no rate, amount, base, category, method,
+   * recoverability or snapshot here: the server resolves every one from this
+   * code and the bill's posting date, and refuses the request if any arrives.
+   */
+  taxCodeId?: string | null;
 }
 
 export interface BillWriteInput {

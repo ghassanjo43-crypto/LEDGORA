@@ -41,10 +41,15 @@ import type { AccountingActor } from '../accounting/audit.js';
 import { assessPostingAccount } from '../accounting/accountEligibility.js';
 import { loadAccountsForPosting, type AccountRecord } from '../accounting/accountService.js';
 import { monetaryDecimalsFor } from '../accounting/currencyPrecision.js';
-import { toCalendarDate } from '../accounting/calendarDate.js';
+import { toCalendarDate, toCalendarDateOrNull } from '../accounting/calendarDate.js';
 import * as Money from '../accounting/money.js';
 import { postSourceJournalIn } from '../accounting/sourcePostingService.js';
 import { reverseJournalIn } from '../accounting/journalService.js';
+import * as SalesTax from '../accounting/salesTax.js';
+import {
+  resolveTaxForDate, assertInputAccountPostable, PARTIAL_RECOVERY_UNSUPPORTED,
+  type ResolvedTax,
+} from '../invoicing/taxCodeService.js';
 
 type Trx = Transaction<Database>;
 type Executor = Kysely<Database> | Trx;
@@ -66,12 +71,35 @@ const EDITABLE: readonly SupplierBillStatus[] = ['draft'];
 
 /* ══ Refusals ══════════════════════════════════════════════════════════════ */
 
-const UNSUPPORTED_TAX =
-  'This bill carries purchase tax, and purchase tax is not calculated on the server yet. '
-  + 'Input tax is not output tax pointed the other way — it is recoverable, subject to its own '
-  + 'rules and its own accounts — so the sales tax model is deliberately not reused for it. '
-  + 'Server-authoritative purchase tax is the next Purchasing step; until then a durable bill must '
-  + 'carry none. Nothing has been saved.';
+/**
+ * Figures a client may SEND but never decides.
+ *
+ * P2 refused purchase tax outright because the server could not compute it. P3
+ * can — from a code these books own, facing purchases, at a rate effective on
+ * the bill's own posting date — so the refusal MOVES rather than disappearing:
+ * what is refused is the client telling the server what the answer is.
+ *
+ * A rate, an amount, a base, a category, a method, a recoverability, an
+ * applicability, a rate-version id, an account or a snapshot arriving in the
+ * request is not a hint to validate. It is an attempt to author the figure a
+ * tax authority will be shown. Only `taxCodeId` is accepted.
+ */
+const CLIENT_OWNED_TAX_FIELDS: Record<string, string> = {
+  taxRate: 'a rate',
+  taxAmount: 'an amount',
+  taxableAmount: 'a taxable base',
+  taxCategory: 'a category',
+  taxCalculationMethod: 'a calculation method',
+  taxDirection: 'an applicability',
+  taxRecoverability: 'a recoverability',
+  recoverableTaxAmount: 'a recoverable amount',
+  nonRecoverableTaxAmount: 'a non-recoverable amount',
+  taxRateVersionId: 'a rate version',
+  taxAccountId: 'an account',
+  taxSnapshot: 'a snapshot',
+  taxInclusive: 'a tax-inclusive marker',
+  reverseCharge: 'a reverse-charge marker',
+};
 
 const UNSUPPORTED_WITHHOLDING =
   'This bill withholds tax. Withholding is recognised at a payment or a posting stage with its own '
@@ -115,16 +143,6 @@ function refuseUnverifiable(field: string, value: unknown): void {
  * exempt is exactly the mistake a server-resolved treatment would prevent, and
  * accepting it would quietly convert a taxable purchase into a tax-free one.
  */
-const TAX_FIELDS: Record<string, string> = {
-  taxCodeId: 'a tax code',
-  taxRate: 'a tax rate',
-  taxAmount: 'a tax amount',
-  taxableAmount: 'a taxable amount',
-  taxSnapshot: 'a tax snapshot',
-  taxInclusive: 'a tax-inclusive marker',
-  reverseCharge: 'a reverse-charge marker',
-};
-
 const WITHHOLDING_FIELDS = ['withholdingTaxRate', 'withholdingTaxAmount'];
 
 /* ══ Input shapes ══════════════════════════════════════════════════════════ */
@@ -132,6 +150,8 @@ const WITHHOLDING_FIELDS = ['withholdingTaxRate', 'withholdingTaxAmount'];
 export interface BillLineInput {
   description?: string;
   accountId: string;
+  /** The tax CODE, and nothing else about the tax. */
+  taxCodeId?: string | null;
   /** Decimal STRINGS throughout. See `money.ts` for why these are never numbers. */
   quantity?: string;
   unit?: string;
@@ -185,8 +205,45 @@ export interface BillLineRecord {
   discountAmount: string;
   /** quantity x unitPrice, before discount. */
   lineSubtotal: string;
-  /** What the account is debited. */
+  /** The discounted line amount, tax-bearing, before any split. */
   lineNet: string;
+  /** What the line's own account was debited, net of tax. */
+  taxableAmount: string;
+  taxAmount: string;
+  /** taxable + tax — what the supplier is owed for this line. */
+  grossAmount: string;
+  taxCodeId: string | null;
+  /**
+   * The FROZEN snapshot, present only once the bill is posted WITH a tax code.
+   *
+   * Null on a draft, and null on a bill posted before purchase tax existed —
+   * `capturedAt` is how a deliberate zero-tax posting is told from neither.
+   */
+  taxSnapshot: BillLineTaxSnapshot | null;
+}
+
+/** Everything needed to reproduce and audit one line's purchase tax. */
+export interface BillLineTaxSnapshot {
+  taxCodeId: string;
+  code: string;
+  name: string;
+  direction: string;
+  category: string;
+  calculationMethod: string;
+  /** Always `recoverable`; partial recovery is refused. */
+  recoverability: string;
+  rate: string;
+  rateVersionId: string | null;
+  effectiveFrom: string | null;
+  effectiveTo: string | null;
+  /** The date the rate was resolved on — this bill's posting date. */
+  taxPointDate: string | null;
+  taxableAmount: string;
+  taxAmount: string;
+  recoverableTaxAmount: string;
+  grossAmount: string;
+  inputTaxAccountId: string | null;
+  capturedAt: string | null;
 }
 
 export interface BillRecord {
@@ -203,8 +260,10 @@ export interface BillRecord {
   memo: string;
   subtotal: string;
   discountTotal: string;
+  taxTotal: string;
   total: string;
   payableAccountId: string | null;
+  inputTaxAccountId: string | null;
   journalEntryId: string | null;
   reversalJournalEntryId: string | null;
   reversalReason: string | null;
@@ -238,6 +297,30 @@ function toLine(row: any, decimals: number): BillLineRecord {
     discountAmount: display(row.discount_amount, decimals),
     lineSubtotal: display(row.line_subtotal, decimals),
     lineNet: display(row.line_net, decimals),
+    taxableAmount: display(row.taxable_amount ?? row.line_net, decimals),
+    taxAmount: display(row.tax_amount ?? '0', decimals),
+    grossAmount: display(row.gross_amount ?? row.line_net, decimals),
+    taxCodeId: row.tax_code_id ?? null,
+    taxSnapshot: row.tax_snapshot_at && row.tax_code_id ? {
+      taxCodeId: row.tax_code_id,
+      code: row.tax_code_code ?? '',
+      name: row.tax_code_name ?? '',
+      direction: row.tax_direction ?? '',
+      category: row.tax_category ?? '',
+      calculationMethod: row.tax_calculation_method ?? '',
+      recoverability: row.tax_recoverability ?? '',
+      rate: display(row.tax_rate ?? '0', decimals),
+      rateVersionId: row.tax_rate_version_id ?? null,
+      effectiveFrom: toCalendarDateOrNull(row.tax_rate_effective_from),
+      effectiveTo: toCalendarDateOrNull(row.tax_rate_effective_to),
+      taxPointDate: toCalendarDateOrNull(row.tax_point_date),
+      taxableAmount: display(row.taxable_amount ?? '0', decimals),
+      taxAmount: display(row.tax_amount ?? '0', decimals),
+      recoverableTaxAmount: display(row.recoverable_tax_amount ?? '0', decimals),
+      grossAmount: display(row.gross_amount ?? '0', decimals),
+      inputTaxAccountId: row.tax_account_id ?? null,
+      capturedAt: iso(row.tax_snapshot_at),
+    } : null,
   };
 }
 
@@ -258,8 +341,10 @@ function toBill(row: any, lines: any[]): BillRecord {
     memo: row.memo,
     subtotal: display(row.subtotal, decimals),
     discountTotal: display(row.discount_total, decimals),
+    taxTotal: display(row.tax_total ?? '0', decimals),
     total: display(row.total, decimals),
     payableAccountId: row.payable_account_id,
+    inputTaxAccountId: row.input_tax_account_id ?? null,
     journalEntryId: row.journal_entry_id,
     reversalJournalEntryId: row.reversal_journal_entry_id,
     reversalReason: row.reversal_reason,
@@ -277,18 +362,38 @@ function assertWithinBoundary(input: BillInput): void {
     const at = index + 1;
     const raw = line as unknown as Record<string, unknown>;
 
-    for (const [field, what] of Object.entries(TAX_FIELDS)) {
+    for (const [field, what] of Object.entries(CLIENT_OWNED_TAX_FIELDS)) {
       const value = raw[field];
       if (value === undefined || value === null || value === '') continue;
-      throw errors.validation(UNSUPPORTED_TAX, {
-        fieldErrors: { [`lines.${at}.${field}`]: `Remove ${what} from this line.` },
-      });
+      /*
+       * A ZERO is refused with everything else. "0" from a client that believed
+       * the purchase was exempt is exactly the mistake a server-resolved
+       * category exists to prevent, and accepting it would quietly convert a
+       * taxable purchase into a tax-free one.
+       */
+      throw errors.validation(
+        `This bill supplies ${what} for its tax on line ${at}. Purchase tax is calculated by the `
+        + 'server from the tax code and the bill date, so a figure sent with the request would be '
+        + 'the client deciding what a tax authority is shown. Send the tax code alone. '
+        + 'Nothing has been saved.',
+        { fieldErrors: { [`lines.${at}.${field}`]: 'Remove this — the server derives it from the tax code.' } },
+      );
     }
     for (const field of WITHHOLDING_FIELDS) {
       const value = raw[field];
       if (value === undefined || value === null || value === '') continue;
       throw errors.validation(UNSUPPORTED_WITHHOLDING, {
         fieldErrors: { [`lines.${at}.${field}`]: 'Remove the withholding from this line.' },
+      });
+    }
+    /*
+     * Partial recoverability is refused by NAME, not folded into the list
+     * above, because it is the one field the specification asks for and cannot
+     * describe consistently.
+     */
+    if (raw.recoverabilityPercent !== undefined && raw.recoverabilityPercent !== null) {
+      throw errors.validation(PARTIAL_RECOVERY_UNSUPPORTED, {
+        fieldErrors: { [`lines.${at}.recoverabilityPercent`]: 'Remove it — input tax here is fully recoverable.' },
       });
     }
 
@@ -421,8 +526,15 @@ interface ComputedLine {
   discountAmount: Money.Amount;
   /** quantity x unitPrice, before discount. */
   lineSubtotal: Money.Amount;
-  /** What the account is debited. */
+  /** The discounted line amount — tax-bearing, before any split. */
   lineNet: Money.Amount;
+  /** What the SERVER resolved, or null when the line names no code. */
+  tax: ResolvedTax | null;
+  /** What the line's own account is debited. */
+  taxableAmount: Money.Amount;
+  taxAmount: Money.Amount;
+  /** taxable + tax — what the supplier is owed for this line. */
+  grossAmount: Money.Amount;
 }
 
 function amount(value: string | null | undefined, field: string): Money.Amount {
@@ -454,15 +566,33 @@ function amount(value: string | null | undefined, field: string): Money.Amount {
  * is the established browser behaviour; a NEGATIVE one is refused, because it
  * is not a discount.
  */
-function computeTotals(
+async function computeTotals(
+  trx: Executor,
+  actor: AccountingActor,
   lines: BillLineInput[],
-  decimals: number,
-): {
+  options: { decimals: number; taxPointDate: string },
+): Promise<{
   computed: ComputedLine[];
   subtotal: Money.Amount;
   discountTotal: Money.Amount;
+  taxTotal: Money.Amount;
   total: Money.Amount;
-} {
+}> {
+  const { decimals, taxPointDate } = options;
+
+  /*
+   * Resolved ONCE per distinct code, so a ten-line bill cannot end up with two
+   * answers for one code because a rate version changed between two queries.
+   * `'purchase'` is the usage: a sales-only code is refused here, by §3.
+   */
+  const codeIds = [...new Set(
+    lines.map((line) => line.taxCodeId).filter((id): id is string => Boolean(id)),
+  )];
+  const resolved = new Map<string, ResolvedTax>();
+  for (const codeId of codeIds) {
+    resolved.set(codeId, await resolveTaxForDate(trx, actor, codeId, taxPointDate, 'purchase'));
+  }
+
   const computed: ComputedLine[] = lines.map((line, index) => {
     const at = index + 1;
     const quantity = amount(line.quantity ?? '0', `line ${at} quantity`);
@@ -497,12 +627,56 @@ function computeTotals(
     if (discountAmount > gross) discountAmount = gross;
 
     const lineNet = gross - discountAmount;
-    return { input: line, discountAmount, lineSubtotal: gross, lineNet };
+
+    /*
+     * The tax, from the code the line names and nothing else. A line with no
+     * code bears no tax, and that is NOT the same as a zero-rated purchase —
+     * which is why the category is only ever recorded when a code supplied it.
+     */
+    const tax = line.taxCodeId ? resolved.get(line.taxCodeId) ?? null : null;
+    if (!tax) {
+      return {
+        input: line, discountAmount, lineSubtotal: gross, lineNet,
+        tax: null, taxableAmount: lineNet, taxAmount: Money.ZERO, grossAmount: lineNet,
+      };
+    }
+
+    /*
+     * The DISCOUNTED line amount is the tax base — discount first, then tax,
+     * which is the order `calculateInvoiceLine` established and S2c kept.
+     *
+     * EXCLUSIVE: `lineNet` is the net; tax is added on top and the supplier is
+     * owed more. INCLUSIVE: `lineNet` is what the supplier is owed; the tax is
+     * extracted from inside it and the expense is the remainder. Getting that
+     * backwards overcharges the supplier by exactly the rate.
+     */
+    const result = SalesTax.calculateTaxLine({
+      lineAmount: lineNet,
+      rate: tax.rate,
+      category: tax.category,
+      method: tax.method,
+      decimals,
+    });
+
+    return {
+      input: line,
+      discountAmount,
+      lineSubtotal: gross,
+      lineNet,
+      tax,
+      taxableAmount: result.taxableAmount,
+      taxAmount: result.taxAmount,
+      grossAmount: result.grossAmount,
+    };
   });
 
   const subtotal = Money.sum(computed.map((c) => c.lineSubtotal));
   const discountTotal = Money.sum(computed.map((c) => c.discountAmount));
-  return { computed, subtotal, discountTotal, total: subtotal - discountTotal };
+  const taxTotal = Money.sum(computed.map((c) => c.taxAmount));
+  /* What the supplier is owed: every line's gross. For an exclusive line that
+   * is net + tax; for an inclusive one it is the amount originally entered. */
+  const total = Money.sum(computed.map((c) => c.grossAmount));
+  return { computed, subtotal, discountTotal, taxTotal, total };
 }
 
 /* ══ Accounts ══════════════════════════════════════════════════════════════ */
@@ -902,6 +1076,17 @@ async function replaceLines(
       discount_amount: Money.toDecimalString(line.discountAmount),
       line_subtotal: Money.toDecimalString(line.lineSubtotal),
       line_net: Money.toDecimalString(line.lineNet),
+      /*
+       * The code and the figures the SERVER resolved, never the ones the
+       * request carried — those are refused at the boundary. The snapshot
+       * columns beside these stay empty until posting, because until then
+       * nothing is frozen.
+       */
+      tax_code_id: value.taxCodeId ?? null,
+      tax_rate: line.tax ? Money.toDecimalString(line.tax.rate) : '0',
+      taxable_amount: Money.toDecimalString(line.taxableAmount),
+      tax_amount: Money.toDecimalString(line.taxAmount),
+      gross_amount: Money.toDecimalString(line.grossAmount),
     } as never).execute();
   }
 }
@@ -931,7 +1116,14 @@ export async function createDraft(
     assertFunctionalCurrency(input.currency, currency);
     const decimals = monetaryDecimalsFor(currency);
 
-    const { computed, subtotal, discountTotal, total } = computeTotals(input.lines!, decimals);
+    /*
+     * The tax point is the bill's POSTING date — what the ledger posts on and
+     * what period locks are enforced against. Resolving tax on anything else
+     * would let the rate and the accounting period disagree about when the
+     * purchase happened.
+     */
+    const { computed, subtotal, discountTotal, taxTotal, total } =
+      await computeTotals(trx, actor, input.lines!, { decimals, taxPointDate: dates.postingDate });
     const billNumber = await allocateBillNumber(trx, actor, input.issuingEntityId!, dates.billDate);
 
     const created = await trx.insertInto('bills').values({
@@ -949,6 +1141,7 @@ export async function createDraft(
       memo: input.memo ?? '',
       subtotal: Money.toDecimalString(subtotal),
       discount_total: Money.toDecimalString(discountTotal),
+      tax_total: Money.toDecimalString(taxTotal),
       total: Money.toDecimalString(total),
       created_by: actor.userId,
       updated_by: actor.userId,
@@ -1033,7 +1226,13 @@ export async function updateDraft(
 
     const decimals = monetaryDecimalsFor(current.currency);
     assertFunctionalCurrency(input.currency, current.currency);
-    const { computed, subtotal, discountTotal, total } = computeTotals(input.lines!, decimals);
+    /*
+     * A DRAFT recalculates on every save, and only a draft. Leaving one on a
+     * superseded rate would post tax nobody charges any more; a POSTED bill
+     * never reaches here, because `EDITABLE` stops it above.
+     */
+    const { computed, subtotal, discountTotal, taxTotal, total } =
+      await computeTotals(trx, actor, input.lines!, { decimals, taxPointDate: dates.postingDate });
 
     await trx.updateTable('bills').set({
       supplier_id: input.supplierId ?? current.supplier_id,
@@ -1044,6 +1243,7 @@ export async function updateDraft(
       memo: input.memo ?? '',
       subtotal: Money.toDecimalString(subtotal),
       discount_total: Money.toDecimalString(discountTotal),
+      tax_total: Money.toDecimalString(taxTotal),
       total: Money.toDecimalString(total),
       version: current.version + 1,
       updated_by: actor.userId,
@@ -1130,6 +1330,32 @@ async function assertSupplierReferenceFree(
   }
 }
 
+/** Input tax owed per control account, with the codes that contributed. */
+function groupTaxByAccount(
+  lines: ComputedLine[],
+  inputAccounts: Map<string, string>,
+): { accountId: string; amount: Money.Amount; codes: string[] }[] {
+  const byAccount = new Map<string, { amount: Money.Amount; codes: Set<string> }>();
+  for (const line of lines) {
+    if (!line.tax || Money.isZero(line.taxAmount)) continue;
+    const accountId = inputAccounts.get(line.tax.taxCodeId);
+    if (!accountId) continue;
+    const entry = byAccount.get(accountId) ?? { amount: Money.ZERO, codes: new Set<string>() };
+    entry.amount = Money.add(entry.amount, line.taxAmount);
+    entry.codes.add(line.tax.code);
+    byAccount.set(accountId, entry);
+  }
+  return [...byAccount.entries()].map(([accountId, entry]) => ({
+    accountId, amount: entry.amount, codes: [...entry.codes].sort(),
+  }));
+}
+
+/** The one input account this bill used, or null when it used several. */
+function singleInputAccountOf(inputAccounts: Map<string, string>): string | null {
+  const accounts = new Set(inputAccounts.values());
+  return accounts.size === 1 ? [...accounts][0]! : null;
+}
+
 /**
  * Post a bill: one transaction, or nothing.
  *
@@ -1198,6 +1424,8 @@ export async function postBill(
     );
 
     const decimals = monetaryDecimalsFor(current.currency);
+    /* The authoritative tax date: the same date the ledger posts on. */
+    const postingDateForTax = toCalendarDate(current.posting_date);
 
     /*
      * Recomputed from the stored line inputs, not read back from the stored
@@ -1206,13 +1434,29 @@ export async function postBill(
      * posted. Recomputing makes the entry, the stored totals and the lines one
      * answer by construction.
      */
-    const computed = computeTotals(lines.map((line) => ({
+    const computed = await computeTotals(trx, actor, lines.map((line) => ({
       accountId: line.account_id,
+      taxCodeId: line.tax_code_id,
       quantity: String(line.quantity),
       unitPrice: String(line.unit_price),
       discountType: line.discount_type,
       discountValue: line.discount_value === null ? null : String(line.discount_value),
-    })), decimals);
+    })), { decimals, taxPointDate: postingDateForTax });
+
+    /*
+     * The input account for every taxable code, re-checked HERE. One eligible
+     * when the code was configured can be archived, blocked or given a child
+     * before the bill is posted.
+     */
+    const inputAccounts = new Map<string, string>();
+    for (const line of computed.computed) {
+      if (!line.tax || !SalesTax.chargesTax(line.tax.category)) continue;
+      if (inputAccounts.has(line.tax.taxCodeId)) continue;
+      inputAccounts.set(
+        line.tax.taxCodeId,
+        await assertInputAccountPostable(trx, actor, line.tax),
+      );
+    }
 
     if (!Money.isPositive(computed.total)) {
       throw errors.validation(
@@ -1236,13 +1480,32 @@ export async function postBill(
       reference: current.supplier_invoice_number || current.bill_number,
       description: `Bill ${current.bill_number} — ${legalName}`,
       lines: [
-        /* Dr each line's NET amount to the account it names. */
+        /*
+         * Dr each line's own account for its NET amount.
+         *
+         * For an EXCLUSIVE line that is the amount entered; for an INCLUSIVE one
+         * it is the amount left after the tax is extracted — the difference is
+         * not the business's cost, it is a claim on an authority.
+         */
         ...computed.computed.map((line, index) => ({
           accountId: lines[index]!.account_id,
-          debit: Money.toDecimalString(line.lineNet),
+          debit: Money.toDecimalString(line.taxableAmount),
           memo: lines[index]!.description || current.bill_number,
         })).filter((line) => line.debit !== Money.toDecimalString(Money.ZERO)),
-        /* Cr the supplier's payable for what is owed. */
+        /*
+         * Dr recoverable input tax, grouped per account.
+         *
+         * One leg per control account rather than one per line: several lines
+         * sharing a code produce one debit, and two codes mapped to different
+         * accounts stay apart — which is what makes a control-account
+         * reconciliation possible at all.
+         */
+        ...groupTaxByAccount(computed.computed, inputAccounts).map(({ accountId, amount: taxAmount, codes }) => ({
+          accountId,
+          debit: Money.toDecimalString(taxAmount),
+          memo: `Input tax ${codes.join(', ')} — ${current.bill_number}`,
+        })),
+        /* Cr the supplier's payable for what is owed, tax included. */
         {
           accountId: payableAccountId,
           credit: Money.toDecimalString(computed.total),
@@ -1250,6 +1513,57 @@ export async function postBill(
         },
       ],
     });
+
+    /*
+     * ══ The snapshot freezes HERE ══════════════════════════════════════════
+     *
+     * Denormalised onto the line for the reason the invoice snapshot is:
+     * `tax_code_id` alone would make a posted bill depend on mutable
+     * configuration, so archiving the code, end-dating the rate or moving its
+     * control account would change what the document says it was charged — and
+     * the supplier's copy would not change with it.
+     *
+     * Every fact needed to reproduce the figure is copied: the code's identity
+     * and name, which way it faced, the category, the method, the recoverability
+     * treatment, the rate, WHICH rate version it came from, the base, the tax,
+     * the recoverable amount, the gross, the account it debited and the date the
+     * rate was resolved on.
+     */
+    const capturedAt = new Date();
+    for (const [index, line] of computed.computed.entries()) {
+      const row = lines[index]!;
+      const tax = line.tax;
+      await trx.updateTable('bill_lines').set({
+        taxable_amount: Money.toDecimalString(line.taxableAmount),
+        tax_amount: Money.toDecimalString(line.taxAmount),
+        /* Fully recoverable, always: partial recovery is refused at the
+         * boundary, so the recoverable amount IS the tax. */
+        recoverable_tax_amount: Money.toDecimalString(line.taxAmount),
+        gross_amount: Money.toDecimalString(line.grossAmount),
+        line_net: Money.toDecimalString(line.lineNet),
+        ...(tax ? {
+          tax_rate: Money.toDecimalString(SalesTax.effectiveRate(tax.rate, tax.category)),
+          tax_rate_version_id: tax.rateVersionId,
+          tax_code_code: tax.code,
+          tax_code_name: tax.name,
+          tax_direction: tax.direction,
+          tax_category: tax.category,
+          tax_calculation_method: tax.method,
+          tax_recoverability: tax.recoverability,
+          tax_rate_effective_from: tax.effectiveFrom,
+          tax_rate_effective_to: tax.effectiveTo,
+          tax_point_date: postingDateForTax,
+          tax_account_id: inputAccounts.get(tax.taxCodeId) ?? null,
+          tax_snapshot_at: capturedAt,
+        } : {
+          tax_rate: '0',
+        }),
+      } as never)
+        .where('organization_id', '=', actor.organizationId)
+        .where('company_id', '=', actor.companyId)
+        .where('id', '=', row.id)
+        .execute();
+    }
 
     await trx.updateTable('bills').set({
       status: 'posted',
@@ -1259,7 +1573,11 @@ export async function postBill(
       payable_account_id: payableAccountId,
       subtotal: Money.toDecimalString(computed.subtotal),
       discount_total: Money.toDecimalString(computed.discountTotal),
+      tax_total: Money.toDecimalString(computed.taxTotal),
       total: Money.toDecimalString(computed.total),
+      /* The single input account when unambiguous; null when several were used,
+       * because then no one account can honestly name this bill's input tax. */
+      input_tax_account_id: singleInputAccountOf(inputAccounts),
       posted_at: new Date(),
       version: current.version + 1,
       updated_by: actor.userId,
@@ -1273,7 +1591,11 @@ export async function postBill(
     await writeAudit(trx, actor, {
       billId: id, action: 'BILL_POSTED',
       previousVersion: current.version, resultingVersion: current.version + 1,
-      detail: { journalEntryId: journal.id, payableAccountId, total: Money.toDecimalString(computed.total) },
+      detail: {
+        journalEntryId: journal.id, payableAccountId,
+        total: Money.toDecimalString(computed.total),
+        taxTotal: Money.toDecimalString(computed.taxTotal),
+      },
     });
 
     return loadBill(trx, actor, id);

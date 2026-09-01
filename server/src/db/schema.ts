@@ -1205,6 +1205,9 @@ export interface BillsTable {
   total: Generated<string>;
   /** The payable actually credited, frozen at posting. */
   payable_account_id: string | null;
+  tax_total: Generated<string>;
+  /** The single input account used, when unambiguous; null when several were. */
+  input_tax_account_id: string | null;
   journal_entry_id: string | null;
   reversal_journal_entry_id: string | null;
   reversal_reason: string | null;
@@ -1234,8 +1237,35 @@ export interface BillLinesTable {
   discount_amount: Generated<string>;
   /** quantity x unit_price, BEFORE discount — the audited meaning. */
   line_subtotal: Generated<string>;
-  /** line_subtotal - discount_amount. What the account is debited. */
+  /** line_subtotal - discount_amount. The tax-bearing amount before any split. */
   line_net: Generated<string>;
+  /*
+   * The FROZEN purchase-tax snapshot, written at posting and never recomputed.
+   *
+   * Null throughout on a bill posted before P3, and `tax_snapshot_at` is how
+   * that is told apart from a bill deliberately posted at zero tax.
+   */
+  tax_code_id: string | null;
+  tax_rate_version_id: string | null;
+  tax_code_code: string | null;
+  tax_code_name: string | null;
+  tax_direction: TaxDirection | null;
+  tax_category: SalesTaxCategory | null;
+  tax_calculation_method: SalesTaxMethod | null;
+  tax_recoverability: TaxRecoverability | null;
+  tax_rate: Generated<string>;
+  tax_rate_effective_from: string | null;
+  tax_rate_effective_to: string | null;
+  /** The date the rate was resolved on — this bill's `posting_date`. */
+  tax_point_date: string | null;
+  /** What the line's own account is debited, net of any tax. */
+  taxable_amount: Generated<string>;
+  tax_amount: Generated<string>;
+  recoverable_tax_amount: Generated<string>;
+  /** What the supplier is owed for this line: taxable + tax. */
+  gross_amount: Generated<string>;
+  tax_account_id: string | null;
+  tax_snapshot_at: Timestamp | null;
   created_at: Generated<Timestamp>;
 }
 
@@ -1423,6 +1453,26 @@ export type SalesTaxMethod = 'exclusive' | 'inclusive';
 
 export type SalesTaxStatus = 'active' | 'inactive' | 'archived';
 
+/**
+ * Which documents a tax code may be used on (§3).
+ *
+ * "Do not show purchase-only codes on sales invoices or sales-only codes on
+ * supplier bills." Enforced on the server in both directions, because a screen
+ * that merely filters is an affordance, not a rule.
+ */
+export type TaxDirection = 'sales' | 'purchase' | 'both';
+
+/**
+ * How input tax is treated.
+ *
+ * Only `recoverable` exists. §11 asks for partial recoverability but describes
+ * a "possible" posting that contradicts the fields beside it — capitalising the
+ * non-recoverable tax into the expense while also defining a separate account
+ * for it — and the browser implements no split at all. A stored treatment
+ * nobody has defined is one a journal cannot honour, so the rest is refused.
+ */
+export type TaxRecoverability = 'recoverable';
+
 export interface TaxCodesTable {
   id: Generated<string>;
   organization_id: string;
@@ -1440,6 +1490,21 @@ export interface TaxCodesTable {
    * reconciliation that has to separate them impossible.
    */
   output_tax_account_id: string | null;
+  /**
+   * Which way this code faces (§3).
+   *
+   * One code, one rate history, one authority — a business that charges 16% and
+   * reclaims 16% is looking at the same tax. Splitting it into separate sales
+   * and purchase codes would give it two rate histories and two chances to
+   * drift apart on the day the rate changes.
+   *
+   * `withholding-receivable` and `withholding-payable` are in §3's union and
+   * absent here: withholding is recognised at a payment stage with its own
+   * liability account, none of which exists on the server.
+   */
+  direction: Generated<TaxDirection>;
+  /** Where recoverable input tax is debited. Mirrors the output account. */
+  input_tax_account_id: string | null;
   effective_from: string;
   effective_to: string | null;
   version: Generated<number>;
@@ -1466,6 +1531,8 @@ export interface TaxRateVersionsTable {
   effective_from: string;
   effective_to: string | null;
   output_tax_account_id: string | null;
+  /** A per-version override, exactly as the output account has. */
+  input_tax_account_id: string | null;
   created_by: string | null;
   created_at: Generated<Timestamp>;
 }

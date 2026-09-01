@@ -18,6 +18,14 @@ import { api } from './client';
 export type ServerTaxCategory = 'standard' | 'reduced' | 'zero-rated' | 'exempt' | 'out-of-scope';
 export type ServerTaxMethod = 'exclusive' | 'inclusive';
 export type ServerTaxStatus = 'active' | 'inactive' | 'archived';
+/**
+ * Which documents a code may be used on (§3).
+ *
+ * Withholding directions exist in the specification and not here: withholding is
+ * recognised at a payment stage with its own liability account, and none of that
+ * is on the server.
+ */
+export type ServerTaxDirection = 'sales' | 'purchase' | 'both';
 
 export interface ServerTaxRateVersion {
   id: string;
@@ -27,6 +35,8 @@ export interface ServerTaxRateVersion {
   effectiveFrom: string;
   effectiveTo: string | null;
   outputTaxAccountId: string | null;
+  /** A per-version override, exactly as the output account has. */
+  inputTaxAccountId: string | null;
   createdAt: string | null;
 }
 
@@ -37,8 +47,11 @@ export interface ServerTaxCode {
   description: string;
   category: ServerTaxCategory;
   calculationMethod: ServerTaxMethod;
+  direction: ServerTaxDirection;
   status: ServerTaxStatus;
   outputTaxAccountId: string | null;
+  /** Where recoverable input tax is debited. Null on a sales-only code. */
+  inputTaxAccountId: string | null;
   effectiveFrom: string;
   effectiveTo: string | null;
   version: number;
@@ -61,8 +74,10 @@ export interface TaxCodeCreateInput {
   description?: string;
   category: ServerTaxCategory;
   calculationMethod: ServerTaxMethod;
+  direction?: ServerTaxDirection;
   rate?: string;
   outputTaxAccountId?: string | null;
+  inputTaxAccountId?: string | null;
   effectiveFrom: string;
   effectiveTo?: string | null;
 }
@@ -71,6 +86,7 @@ export interface TaxCodeUpdateInput {
   name: string;
   description?: string;
   outputTaxAccountId?: string | null;
+  inputTaxAccountId?: string | null;
   effectiveTo?: string | null;
 }
 
@@ -79,6 +95,7 @@ export interface RateVersionInput {
   effectiveFrom: string;
   effectiveTo?: string | null;
   outputTaxAccountId?: string | null;
+  inputTaxAccountId?: string | null;
 }
 
 export const taxCodesApi = {

@@ -667,7 +667,7 @@ async function computeTotals(
   )];
   const resolved = new Map<string, ResolvedTax>();
   for (const codeId of codeIds) {
-    resolved.set(codeId, await resolveTaxForDate(trx, actor, codeId, taxPointDate));
+    resolved.set(codeId, await resolveTaxForDate(trx, actor, codeId, taxPointDate, 'sales'));
   }
 
   const computed: ComputedLine[] = lines.map((line, index) => {
@@ -1192,7 +1192,7 @@ async function freezeLineTax(
   )];
   const resolved = new Map<string, ResolvedTax>();
   for (const codeId of codeIds) {
-    const tax = await resolveTaxForDate(trx, actor, codeId, issueDate);
+    const tax = await resolveTaxForDate(trx, actor, codeId, issueDate, 'sales');
     /*
      * The account is re-checked HERE, not only when the code was configured. An
      * account can be archived, blocked, deactivated or given a child between

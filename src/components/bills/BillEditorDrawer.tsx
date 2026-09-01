@@ -1,9 +1,10 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Plus, Trash2, Send, Save, Eye, X, Printer, CheckCircle2, Info, Upload } from 'lucide-react';
 import type { BusinessEntity } from '@/types';
 import type { Bill, BillLine, BillType } from '@/types/bill';
 import { useStore } from '@/store/useStore';
 import { useSuppliers } from '@/services/parties/useSuppliers';
+import { useServerTaxCodeStore, taxCodeBackend, rateOn } from '@/store/serverTaxCodeStore';
 import { useBillStore, makeEmptyBillLine } from '@/store/billStore';
 import { calculateBillLine, calculateBillTotals } from '@/lib/billCalculations';
 import { checkDuplicateSupplierInvoiceNumber } from '@/lib/billTax';
@@ -90,6 +91,33 @@ export function BillEditorDrawer({ open, billId, onClose }: Props) {
   const [supplierInvoiceNumber, setSupplierInvoiceNumber] = useState(bill?.supplierInvoiceNumber ?? '');
   const [billType, setBillType] = useState<BillType>(bill?.billType ?? 'expense');
   const [billDate, setBillDate] = useState(bill?.billDate ?? '');
+
+  /*
+   * On server books the purchase tax comes from a controlled code, and the
+   * browser seed is not offered at all: a code invented in a tab is one no bill
+   * can be posted against, so showing it would produce a refusal for something
+   * the user is looking at.
+   */
+  const serverTax = taxCodeBackend() === 'server';
+  const serverTaxCodes = useServerTaxCodeStore((s) => s.taxCodes);
+  const serverTaxError = useServerTaxCodeStore((s) => s.loadError);
+  const serverTaxLoaded = useServerTaxCodeStore((s) => s.loaded);
+  const loadServerTaxCodes = useServerTaxCodeStore((s) => s.load);
+  const selectableOn = useServerTaxCodeStore((s) => s.selectableOn);
+
+  useEffect(() => {
+    if (serverTax && !serverTaxLoaded) void loadServerTaxCodes();
+  }, [serverTax, serverTaxLoaded, loadServerTaxCodes]);
+
+  /*
+   * PURCHASE-applicable codes only, and only those effective on the bill's own
+   * date. Offering anything else produces a server refusal at save time for a
+   * code sitting on the screen.
+   */
+  const purchaseCodes = useMemo(
+    () => (serverTax ? selectableOn(billDate, 'purchase') : []),
+    [serverTax, selectableOn, billDate, serverTaxCodes],
+  );
   const [dueDate, setDueDate] = useState(bill?.dueDate ?? '');
   const [poRef, setPoRef] = useState(bill?.purchaseOrderId ?? '');
   const [notes, setNotes] = useState(bill?.notes ?? '');
@@ -231,7 +259,40 @@ export function BillEditorDrawer({ open, billId, onClose }: Props) {
                     <Field label="Quantity"><Input type="number" step="0.01" value={line.quantity} onChange={(e) => setLine(line.id, { quantity: Number(e.target.value) })} disabled={readOnly} className="text-right" /></Field>
                     <Field label="Unit price"><Input type="number" step={moneyStep} data-money="true" value={line.unitPrice} onChange={(e) => setLine(line.id, { unitPrice: Number(e.target.value) })} disabled={readOnly} className="text-right" /></Field>
                     <Field label="Discount %"><Input type="number" step="0.01" value={line.discountValue ?? 0} onChange={(e) => setLine(line.id, { discountType: 'percentage', discountValue: Number(e.target.value) })} disabled={readOnly} className="text-right" /></Field>
-                    <Field label="Tax %"><Input type="number" step="0.01" value={line.taxRate} onChange={(e) => setLine(line.id, { taxRate: Number(e.target.value) })} disabled={readOnly} className="text-right" /></Field>
+                    {serverTax ? (
+                      <Field label="Tax code">
+                        <select
+                          value={line.taxCodeId ?? ''}
+                          onChange={(e) => setLine(line.id, { taxCodeId: e.target.value || undefined })}
+                          disabled={readOnly}
+                          className="h-9 w-full rounded-md border border-slate-300 bg-white px-2 text-sm dark:border-slate-700 dark:bg-slate-900"
+                        >
+                          {/* "No tax" is NOT zero-rated. A purchase with no code
+                              is untaxed; a zero-rated one is taxed at 0% and
+                              reported. */}
+                          <option value="">No tax code</option>
+                          {purchaseCodes.map((code) => {
+                            const rate = rateOn(code, billDate);
+                            return (
+                              <option key={code.id} value={code.id}>
+                                {code.code} — {code.name}
+                                {rate === null ? ' (no rate on this date)' : ` (${rate.replace(/0+$/, '').replace(/\.$/, '')}%)`}
+                              </option>
+                            );
+                          })}
+                        </select>
+                        {serverTaxError ? (
+                          <p className="mt-1 text-xs text-red-600 dark:text-red-400">{serverTaxError}</p>
+                        ) : purchaseCodes.length === 0 ? (
+                          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                            No purchase tax codes apply on this date. Add one under Tax, marked for
+                            purchases, to reclaim input tax.
+                          </p>
+                        ) : null}
+                      </Field>
+                    ) : (
+                      <Field label="Tax %"><Input type="number" step="0.01" value={line.taxRate} onChange={(e) => setLine(line.id, { taxRate: Number(e.target.value) })} disabled={readOnly} className="text-right" /></Field>
+                    )}
                     <Field label="Withholding %"><Input type="number" step="0.01" value={line.withholdingTaxRate ?? 0} onChange={(e) => setLine(line.id, { withholdingTaxRate: Number(e.target.value) })} disabled={readOnly} className="text-right" /></Field>
                     <div className="rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-800/50"><p className="text-xs font-medium text-slate-500">Calculated line total</p><output aria-label={`Line ${i + 1} total`} className="mt-1 block text-right font-mono text-base font-semibold text-slate-900 dark:text-slate-100">{money(c.lineTotal)}</output></div>
                   </div>

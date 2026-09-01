@@ -148,6 +148,46 @@ describe('exclusive tax', () => {
   });
 });
 
+/* ══ Applicability: the mirror of the bill rule ═══════════════════════════ */
+
+describe('which documents a code may be used on', () => {
+  /*
+   * §3 forbids this in both directions. Purchasing P3 added `direction`, and a
+   * purchase-only code on a sales invoice would charge a customer output tax
+   * under a code that only ever existed to reclaim input tax.
+   */
+  it('refuses a PURCHASE-only code on an invoice', async () => {
+    const inputAccount = await accounts.createAccount(ctx.db, actor, {
+      accountCode: '1360', accountName: 'Input tax recoverable', accountType: 'asset',
+    });
+    const purchaseOnly = await makeCode({
+      code: 'VATIN', direction: 'purchase',
+      outputTaxAccountId: null, inputTaxAccountId: inputAccount.id,
+    });
+
+    await expect(draft({
+      lines: [{ accountId: chart.sales, quantity: '1', unitPrice: '100.000', taxCodeId: purchaseOnly.id }],
+    })).rejects.toThrow(/applies to purchase documents, so it cannot be used on an invoice/i);
+  });
+
+  it('still accepts a sales code, and one that applies to both', async () => {
+    const salesOnly = await makeCode({ code: 'VATOUT', direction: 'sales' });
+    expect((await draft({
+      lines: [{ accountId: chart.sales, quantity: '1', unitPrice: '100.000', taxCodeId: salesOnly.id }],
+    })).taxTotal).toBe('16.000');
+
+    const inputAccount = await accounts.createAccount(ctx.db, actor, {
+      accountCode: '1361', accountName: 'Input tax', accountType: 'asset',
+    });
+    const both = await makeCode({
+      code: 'VATBOTH', direction: 'both', inputTaxAccountId: inputAccount.id,
+    });
+    expect((await draft({
+      lines: [{ accountId: chart.sales, quantity: '1', unitPrice: '100.000', taxCodeId: both.id }],
+    })).taxTotal).toBe('16.000');
+  });
+});
+
 /* ══ Inclusive ═════════════════════════════════════════════════════════════ */
 
 describe('inclusive tax', () => {

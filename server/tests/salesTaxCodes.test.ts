@@ -122,7 +122,7 @@ describe('legally distinct categories', () => {
   it('refuses a zero-tax category that names an output account', async () => {
     /* An account here would imply a credit that must never be posted. */
     await expect(create({ code: 'EX1', category: 'exempt', rate: '0', outputTaxAccountId: chart.output }))
-      .rejects.toThrow(/posts no tax, so it has no output tax account/i);
+      .rejects.toThrow(/posts no tax, so it has neither an output nor an input tax account/i);
   });
 
   it('refuses a zero-tax category carrying a rate', async () => {
@@ -281,7 +281,7 @@ describe('archiving and deactivation', () => {
     const error = await taxCodes.resolveTaxForDate(ctx.db, actor, code.id, '2026-06-01')
       .then(() => null, (e) => e as Error);
     expect(error!.message).toMatch(/archived and cannot be put on a new invoice/i);
-    expect(error!.message).toMatch(/already issued under it keep it/i);
+    expect(error!.message).toMatch(/already posted under it keep it/i);
   });
 
   it('refuses an inactive code on a new document', async () => {

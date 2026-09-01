@@ -52,8 +52,8 @@ const serverBill = (over: Record<string, unknown> = {}) => ({
   status: 'posted', issuingEntityId: 'entity-main', supplierId: 'sup-1',
   billDate: '2026-03-01', postingDate: '2026-03-01', dueDate: '2026-03-31',
   currency: 'JOD', memo: '',
-  subtotal: '1000.000', discountTotal: '100.000', total: '900.000',
-  payableAccountId: 'acct-payable', journalEntryId: 'je-1',
+  subtotal: '1000.000', discountTotal: '100.000', taxTotal: '0.000', total: '900.000',
+  payableAccountId: 'acct-payable', inputTaxAccountId: null, journalEntryId: 'je-1',
   reversalJournalEntryId: null, reversalReason: null,
   postedAt: '2026-03-01T00:00:00.000Z', reversedAt: null, version: 2,
   lines: [{
@@ -61,6 +61,8 @@ const serverBill = (over: Record<string, unknown> = {}) => ({
     quantity: '1.000000', unit: '', unitPrice: '1000.000',
     discountType: 'percentage', discountValue: '10.000',
     discountAmount: '100.000', lineSubtotal: '1000.000', lineNet: '900.000',
+    taxableAmount: '900.000', taxAmount: '0.000', grossAmount: '900.000',
+    taxCodeId: null, taxSnapshot: null,
   }],
   ...over,
 });
@@ -218,9 +220,11 @@ describe('a server bill as the screens see it', () => {
     expect(bill.lines[0]!.lineTotal).toBe(900);
   });
 
-  it('reports NO tax, NO payments and NO credits, because P2 holds none', () => {
+  it('reports the SERVER tax, and no payments or credits', () => {
     const bill = toBrowserBill(serverBill() as never);
 
+    /* Zero here because this fixture names no tax code — not because the
+     * mapper drops tax. A taxed bill is covered in `purchaseTaxCutover`. */
     expect(bill.taxTotal).toBe(0);
     expect(bill.withholdingTaxTotal).toBe(0);
     expect(bill.additionalChargesTotal).toBe(0);

@@ -52,6 +52,15 @@ const lineSchema = z.object({
   unitPrice: decimal.optional(),
   discountType: z.enum(['percentage', 'amount']).nullable().optional(),
   discountValue: decimal.nullable().optional(),
+  /*
+   * The tax CODE, and nothing else about the tax.
+   *
+   * There is deliberately no rate, amount, base, category, method,
+   * recoverability or snapshot here — every one is refused by the service, and
+   * `passthrough` is what lets an older client's attempt REACH that refusal
+   * instead of being silently stripped.
+   */
+  taxCodeId: z.string().uuid().nullable().optional(),
 }).passthrough();
 
 const billBody = {

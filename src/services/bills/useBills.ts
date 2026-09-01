@@ -21,10 +21,15 @@ import { useServerBills, billsAreServerAuthoritative } from './billBackend';
  *
  * ══ What is deliberately empty ═══════════════════════════════════════════════
  *
- * Tax, withholding, charges, payments, credits, attachments, template and every
- * browser-only dimension are zero or absent, because P2 holds none of them. A
- * plausible-looking value here would be this mapper inventing accounting the
- * server refused to record.
+ * Withholding, charges, payments, credits, attachments, template and every
+ * browser-only dimension are zero or absent, because the server holds none of
+ * them. A plausible-looking value here would be this mapper inventing
+ * accounting the server refused to record.
+ *
+ * Purchase TAX is different: P3 made it server-authoritative, so it is read
+ * from the bill — from each line's frozen snapshot once posted — and never
+ * recomputed here. The browser calculator is not authoritative for a
+ * server-held bill.
  */
 export function toBrowserBill(bill: ServerBill): Bill {
   const lines: BillLine[] = bill.lines.map((line, index) => ({
@@ -38,12 +43,17 @@ export function toBrowserBill(bill: ServerBill): Bill {
     discountType: (line.discountType as BillLine['discountType']) ?? undefined,
     discountValue: line.discountValue === null ? undefined : Number(line.discountValue),
     discountAmount: Number(line.discountAmount),
-    /* No tax on a P2 bill: the server refuses one outright. */
-    taxRate: 0,
-    taxableAmount: Number(line.lineNet),
-    taxAmount: 0,
+    /*
+     * The SERVER's figures. A posted line reads them from its frozen snapshot;
+     * a draft reads what the last save resolved. Nothing here recomputes tax —
+     * the browser calculator is not authoritative for a server-held bill.
+     */
+    taxCodeId: line.taxCodeId ?? undefined,
+    taxRate: Number(line.taxSnapshot?.rate ?? 0),
+    taxableAmount: Number(line.taxableAmount),
+    taxAmount: Number(line.taxAmount),
     lineSubtotal: Number(line.lineSubtotal),
-    lineTotal: Number(line.lineNet),
+    lineTotal: Number(line.grossAmount),
     sortOrder: index + 1,
   }));
 
@@ -68,7 +78,9 @@ export function toBrowserBill(bill: ServerBill): Bill {
     lines,
     subtotal: Number(bill.subtotal),
     discountTotal: Number(bill.discountTotal),
-    taxTotal: 0,
+    taxTotal: Number(bill.taxTotal),
+    /* Withholding has no server treatment and is refused, so it is zero as a
+     * fact about the slice rather than as a placeholder. */
     withholdingTaxTotal: 0,
     additionalChargesTotal: 0,
     grandTotal: total,
@@ -80,6 +92,7 @@ export function toBrowserBill(bill: ServerBill): Bill {
      */
     balanceDue: bill.status === 'reversed' ? 0 : total,
     accountsPayableAccountId: bill.payableAccountId ?? '',
+    inputTaxAccountId: bill.inputTaxAccountId ?? undefined,
     templateId: '',
     templateVersionId: '',
     templateResolutionSource: 'entity-default',

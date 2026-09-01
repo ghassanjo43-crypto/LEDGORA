@@ -135,6 +135,7 @@ describe('migration 027', () => {
      * 028 arrived.
      */
     for (const expected of [
+      '035_purchase_tax',
       '034_supplier_bills',
       '033_supplier_profiles',
       '032_sales_tax_codes',
