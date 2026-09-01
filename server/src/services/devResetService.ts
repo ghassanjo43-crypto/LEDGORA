@@ -311,6 +311,38 @@ const RESET_PLAN: readonly PlanEntry[] = [
    * then the party itself. BOTH role profiles carry foreign keys to `accounts`,
    * so they must go before them.
    */
+  /*
+   * Supplier bills, children first. The lines carry foreign keys to `accounts`
+   * and the header to `business_parties`, so the whole group goes before both.
+   */
+  {
+    table: 'bill_audit_events',
+    action: 'scoped_delete',
+    order: 29.02,
+    label: 'Bill audit events',
+    why: 'The history of a supplier bill; meaningless once the bill is gone.',
+  },
+  {
+    table: 'bill_lines',
+    action: 'scoped_delete',
+    order: 29.04,
+    label: 'Bill lines',
+    why: 'Owned through their bill. References accounts, so they go before them.',
+  },
+  {
+    table: 'bills',
+    action: 'scoped_delete',
+    order: 29.06,
+    label: 'Supplier bills',
+    why: 'The purchase ledger. References suppliers and accounts, so it goes before both.',
+  },
+  {
+    table: 'bill_numbering',
+    action: 'scoped_delete',
+    order: 29.08,
+    label: 'Bill numbering',
+    why: 'The held bill sequence for a tenant company.',
+  },
   {
     table: 'business_party_audit_events',
     action: 'scoped_delete',

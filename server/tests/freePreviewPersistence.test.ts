@@ -40,13 +40,16 @@ import {
  * durable business write — fail-closed — so a path that has since become real
  * would test the route instead of the classifier, and would collide with it
  * when registered here. `/api/customers` was such a placeholder until the
- * business-party directory shipped; `/api/counterparties` replaces it.
+ * business-party directory shipped; `/api/counterparties` replaces it. `/api/bills`
+ * was another until Purchasing P2 shipped the supplier-bill routes;
+ * `/api/bills-business` replaces it, and the real path is covered by its own
+ * classification test below.
  */
 const BUSINESS_PATHS = [
   '/api/journal-entries',
   '/api/counterparties',
   '/api/suppliers',
-  '/api/bills',
+  '/api/bills-business',
   '/api/payments',
   '/api/receipts',
   '/api/documents',
@@ -346,6 +349,43 @@ describe('once the payment is approved', () => {
 });
 
 /* ── 16–17: who the guard does not apply to ──────────────────────────────── */
+
+describe('supplier bills are business writes', () => {
+  /*
+   * `/api/bills` became a REAL route with Purchasing P2. It records what a
+   * company owes and posts to the ledger, so every one of its mutating paths is
+   * a durable business write — and unlike `/api/invoices` it carries no
+   * lifecycle resource, so nothing under it is exempt.
+   */
+  it('classifies every bill write as durable', () => {
+    expect(isDurableBusinessWrite('POST', '/api/bills')).toBe(true);
+    expect(isDurableBusinessWrite('PATCH', '/api/bills/abc')).toBe(true);
+    expect(isDurableBusinessWrite('DELETE', '/api/bills/abc')).toBe(true);
+    expect(isDurableBusinessWrite('POST', '/api/bills/abc/post')).toBe(true);
+    expect(isDurableBusinessWrite('POST', '/api/bills/abc/reverse')).toBe(true);
+
+    /* Reading what is owed is never blocked. */
+    expect(isDurableBusinessWrite('GET', '/api/bills')).toBe(false);
+  });
+
+  it('refuses a Free Preview customer a supplier bill', async () => {
+    const preview = await previewCustomer();
+
+    const created = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/bills',
+      headers: authHeaders(preview.cookies),
+      payload: {
+        issuingEntityId: 'entity-main', supplierId: '11111111-1111-1111-1111-111111111111',
+        billDate: '2026-06-01', dueDate: '2026-07-01',
+        lines: [{ accountId: '22222222-2222-2222-2222-222222222222', quantity: '1', unitPrice: '10' }],
+      },
+    });
+    /* Refused for the SUBSCRIPTION, before any supplier or account is looked
+     * at — a preview customer cannot put a permanent liability in their books. */
+    expect(created.statusCode).toBe(403);
+  });
+});
 
 describe('sales invoices are business writes, not lifecycle', () => {
   /*

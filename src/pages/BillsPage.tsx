@@ -4,6 +4,8 @@ import type { BillStatus, BillType } from '@/types/bill';
 import { useStore } from '@/store/useStore';
 import { useEntityStore } from '@/store/useEntityStore';
 import { useBillStore } from '@/store/billStore';
+import { useBills } from '@/services/bills/useBills';
+import { useSuppliers } from '@/services/parties/useSuppliers';
 import { useBillEditor } from '@/store/billEditorStore';
 import { usePaymentStore } from '@/store/paymentStore';
 import { usePaymentEditor } from '@/store/paymentEditorStore';
@@ -39,7 +41,14 @@ function isOverdue(b: { dueDate: string; balanceDue: number; status: BillStatus 
 
 export function BillsPage() {
   const entities = useEntityStore((s) => s.entities);
-  const bills = useBillStore((s) => s.bills);
+  /*
+   * The LEDGER, which is the server's for a durable subscriber and the local
+   * store for Free Demo. Reading `useBillStore` directly here would show a
+   * durable workspace bills the books do not have.
+   */
+  const { bills, serverBacked, error: billsError, stranded } = useBills();
+  /* Supplier names come from the P1 directory for the same reason. */
+  const { suppliers } = useSuppliers();
   const store = useBillStore();
   const createDraft = useBillStore((s) => s.createDraft);
   const consumeEditorRequest = useBillEditor((s) => s.consume);
@@ -66,7 +75,10 @@ export function BillsPage() {
 
   useEffect(() => { const r = consumeEditorRequest(); if (r) setEditorId(r); }, [consumeEditorRequest]);
 
-  const supplierName = (id: string): string => entities.find((e) => e.id === id)?.legalName ?? '—';
+  const supplierName = (id: string): string =>
+    suppliers.find((e) => e.id === id)?.legalName
+    ?? entities.find((e) => e.id === id)?.legalName
+    ?? '—';
   const money = (n: number, cur: string): string => formatCurrency(n, cur);
 
   const rows = useMemo(() => {
@@ -116,8 +128,32 @@ export function BillsPage() {
         <div className="relative min-w-[180px] flex-1"><Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search bill, supplier invoice or supplier…" className="h-9" /></div>
       </div>
 
+      {billsError ? (
+        <Card><CardBody className="text-sm">
+          <p className="font-medium text-red-700 dark:text-red-400">Could not load the bills.</p>
+          <p className="text-slate-600 dark:text-slate-400">{billsError}</p>
+          {/* Deliberately no local fallback: demo bills in a real payables list
+              would credit a supplier the books do not have. */}
+        </CardBody></Card>
+      ) : null}
+
+      {stranded > 0 ? (
+        <Card><CardBody className="space-y-2 text-sm">
+          <p className="font-medium text-amber-800 dark:text-amber-300">
+            {stranded} bill{stranded === 1 ? '' : 's'} remain in this browser and are not in these books.
+          </p>
+          <p className="text-slate-600 dark:text-slate-400">
+            This company&rsquo;s bills are held on the server, and these were never imported.
+            Importing them automatically would mean deciding which supplier and expense account each
+            one names, whether its purchase tax can simply be dropped, and whether an already-posted
+            one should post again — decisions that would put entries in the ledger nobody chose. They
+            are left for you to re-enter; the browser copies are untouched.
+          </p>
+        </CardBody></Card>
+      ) : null}
+
       {rows.length === 0 ? (
-        <Card><CardBody><EmptyState icon={ReceiptEuro} title="No bills yet" description="Record a supplier bill — it stays a draft until you post it, which credits Trade Payables. Pay it or raise a supplier credit afterwards." /></CardBody></Card>
+        <Card><CardBody><EmptyState icon={ReceiptEuro} title="No bills yet" description={serverBacked ? 'Record a supplier bill — it stays a draft until you post it, which debits the expense and credits the supplier’s payable. Payments come in a later step.' : 'Record a supplier bill — it stays a draft until you post it, which credits Trade Payables. Pay it or raise a supplier credit afterwards.'} /></CardBody></Card>
       ) : (
         <Card className="overflow-hidden"><div className="overflow-x-auto">
           <table className="min-w-full text-sm">

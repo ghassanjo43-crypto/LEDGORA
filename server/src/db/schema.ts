@@ -783,6 +783,10 @@ export interface Database {
   business_party_addresses: BusinessPartyAddressesTable;
   business_party_customer_profiles: BusinessPartyCustomerProfilesTable;
   business_party_supplier_profiles: BusinessPartySupplierProfilesTable;
+  bills: BillsTable;
+  bill_lines: BillLinesTable;
+  bill_numbering: BillNumberingTable;
+  bill_audit_events: BillAuditEventsTable;
   business_party_audit_events: BusinessPartyAuditEventsTable;
   invoices: InvoicesTable;
   invoice_lines: InvoiceLinesTable;
@@ -1167,6 +1171,99 @@ export interface BusinessPartySupplierProfilesTable {
   preferred_payment_method: Generated<string>;
   created_at: Generated<Timestamp>;
   updated_at: Generated<Timestamp>;
+}
+
+/**
+ * What P2 supports, and nothing more.
+ *
+ * The browser lifecycle also has submitted, approved, partially-paid, paid,
+ * void and superseded. Each needs a workflow this slice does not bring — an
+ * approval chain, a settlement path, an amendment model — and a status the
+ * server can write but never reach honestly is worse than one it refuses.
+ */
+export type SupplierBillStatus = 'draft' | 'posted' | 'reversed';
+
+export interface BillsTable {
+  id: Generated<string>;
+  organization_id: string;
+  company_id: string;
+  issuing_entity_id: string;
+  /** A real P1 supplier in these books, by composite key. */
+  supplier_id: string;
+  bill_number: string;
+  /** The supplier's own reference. Required before posting, NOT unique. */
+  supplier_invoice_number: Generated<string>;
+  status: Generated<SupplierBillStatus>;
+  bill_date: string;
+  /** What the ledger posts on, and what period locks are enforced against. */
+  posting_date: string;
+  due_date: string;
+  currency: string;
+  memo: Generated<string>;
+  subtotal: Generated<string>;
+  discount_total: Generated<string>;
+  total: Generated<string>;
+  /** The payable actually credited, frozen at posting. */
+  payable_account_id: string | null;
+  journal_entry_id: string | null;
+  reversal_journal_entry_id: string | null;
+  reversal_reason: string | null;
+  posted_at: Timestamp | null;
+  reversed_at: Timestamp | null;
+  version: Generated<number>;
+  created_by: string | null;
+  updated_by: string | null;
+  created_at: Generated<Timestamp>;
+  updated_at: Generated<Timestamp>;
+}
+
+export interface BillLinesTable {
+  id: Generated<string>;
+  organization_id: string;
+  company_id: string;
+  bill_id: string;
+  line_number: number;
+  description: Generated<string>;
+  /** The account DEBITED — expense or non-inventory asset. */
+  account_id: string;
+  quantity: Generated<string>;
+  unit: Generated<string>;
+  unit_price: Generated<string>;
+  discount_type: 'percentage' | 'amount' | null;
+  discount_value: string | null;
+  discount_amount: Generated<string>;
+  /** quantity x unit_price, BEFORE discount — the audited meaning. */
+  line_subtotal: Generated<string>;
+  /** line_subtotal - discount_amount. What the account is debited. */
+  line_net: Generated<string>;
+  created_at: Generated<Timestamp>;
+}
+
+export interface BillNumberingTable {
+  organization_id: string;
+  company_id: string;
+  issuing_entity_id: string;
+  prefix: Generated<string>;
+  include_year: Generated<boolean>;
+  sequence_length: Generated<number>;
+  /** Held, never derived: a counted sequence reuses a number after a deletion. */
+  next_sequence: Generated<number>;
+  created_at: Generated<Timestamp>;
+  updated_at: Generated<Timestamp>;
+}
+
+export interface BillAuditEventsTable {
+  id: Generated<string>;
+  organization_id: string;
+  company_id: string;
+  bill_id: string;
+  action: string;
+  detail: ColumnType<unknown, string | null, string | null>;
+  previous_version: number | null;
+  resulting_version: number | null;
+  actor_user_id: string | null;
+  actor_name: Generated<string>;
+  at: Generated<Timestamp>;
 }
 
 export interface BusinessPartyAuditEventsTable {

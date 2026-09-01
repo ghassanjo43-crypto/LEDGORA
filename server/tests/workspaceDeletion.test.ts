@@ -139,6 +139,11 @@ describe('what the server actually stores for a tenant', () => {
       'journal_lines',
       'journal_entry_versions',
       'accounting_audit_events',
+      /* Purchasing P2 brought the purchase ledger onto the server. */
+      'bills',
+      'bill_lines',
+      'bill_numbering',
+      'bill_audit_events',
     ];
     for (const table of accountingTables) {
       expect(names, `${table} is part of the Phase A foundation`).toContain(table);
@@ -154,7 +159,7 @@ describe('what the server actually stores for a tenant', () => {
      * The modules that have NOT migrated yet must still be absent, so this keeps
      * working as a tripwire for the remaining Phase A milestones.
      */
-    for (const table of ['business_invoices', 'bills', 'receipts', 'credit_notes', 'stock_movements']) {
+    for (const table of ['business_invoices', 'receipts', 'credit_notes', 'stock_movements']) {
       expect(names, `${table} arrives in a later milestone; extend the purge when it does`).not.toContain(table);
     }
 

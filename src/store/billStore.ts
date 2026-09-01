@@ -29,6 +29,7 @@ import { useInventoryStore, inventoryEnabled } from '@/store/inventoryStore';
 import { generateId, nowIso } from '@/lib/utils';
 import type { OrganizationRole } from '@/types/roles';
 import { assertTransactionDocumentPermission } from '@/lib/transactionDocumentPermissions';
+import { billsAreServerAuthoritative } from '@/services/bills/billBackend';
 import { resolveDocumentAmendmentPermission, type AmendmentPermissionResult } from '@/lib/amendmentPermissions';
 import { permissionInput, readAmendmentContext } from '@/lib/amendmentContext';
 import { currentAmendmentPolicy } from './amendmentPolicyStore';
@@ -130,6 +131,25 @@ export function makeEmptyBillLine(billId: string, sortOrder: number): BillLine {
 
 const POSTABLE: Bill['status'][] = ['draft', 'submitted', 'approved'];
 
+/**
+ * The refusal that keeps a durable subscriber's bills out of this store.
+ *
+ * A local write here APPEARS to save, and the next load replaces the cache
+ * without a word — so the bill is gone with nothing to retry. "Could not save"
+ * is recoverable; "saved somewhere that does not count" is not. It is the same
+ * rule the customer, supplier and invoice stores already follow.
+ *
+ * Free Demo is untouched: its bills are the originals and live nowhere else.
+ */
+const SERVER_BILLS_MESSAGE =
+  'Bills are saved on the server for this workspace. Use the bills screen, which writes through '
+  + 'the server rather than this browser.';
+
+function refusesDurableBillWrite(): BillActionResult | null {
+  if (!billsAreServerAuthoritative()) return null;
+  return { ok: false, error: SERVER_BILLS_MESSAGE };
+}
+
 interface BillState {
   bills: Bill[];
   numbering: Record<string, BillNumberingConfig>;
@@ -199,6 +219,8 @@ export const useBillStore = create<BillState>()(
       },
 
       createDraft: (input) => {
+        const refused = refusesDurableBillWrite();
+        if (refused) return refused;
         /*
          * The authorization point for starting a bill.
          *
@@ -251,6 +273,8 @@ export const useBillStore = create<BillState>()(
       },
 
       updateDraft: (id, patch, opts) => {
+        const refused = refusesDurableBillWrite();
+        if (refused) return refused;
         const { bills } = get();
         const existing = bills.find((b) => b.id === id);
         if (!existing) return { ok: false, error: 'Bill not found.' };
@@ -291,6 +315,8 @@ export const useBillStore = create<BillState>()(
       },
 
       deleteDraft: (id) => {
+        const refused = refusesDurableBillWrite();
+        if (refused) return refused;
         const { bills } = get();
         const existing = bills.find((b) => b.id === id);
         if (!existing) return { ok: false, error: 'Bill not found.' };
@@ -300,6 +326,8 @@ export const useBillStore = create<BillState>()(
       },
 
       duplicateBill: (id) => {
+        const refused = refusesDurableBillWrite();
+        if (refused) return refused;
         const { bills } = get();
         const src = bills.find((b) => b.id === id);
         if (!src) return { ok: false, error: 'Bill not found.' };
@@ -346,6 +374,8 @@ export const useBillStore = create<BillState>()(
       },
 
       postBill: (id, opts) => {
+        const refused = refusesDurableBillWrite();
+        if (refused) return refused;
         const { bills } = get();
         const existing = bills.find((b) => b.id === id);
         if (!existing) return { ok: false, error: 'Bill not found.' };
@@ -536,6 +566,8 @@ export const useBillStore = create<BillState>()(
       },
 
       reverseBill: (id, reason) => {
+        const refused = refusesDurableBillWrite();
+        if (refused) return refused;
         const { bills } = get();
         const existing = bills.find((b) => b.id === id);
         if (!existing) return { ok: false, error: 'Bill not found.' };

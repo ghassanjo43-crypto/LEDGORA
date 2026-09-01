@@ -33,6 +33,7 @@ import { toAccount } from './accountMapping';
 import { toJournalEntry } from './journalMapping';
 import { loadCustomers } from '@/services/parties/customerDirectory';
 import { loadSuppliers } from '@/services/parties/supplierDirectory';
+import { loadBills } from '@/services/bills/billBackend';
 import { useInvoiceStore } from '@/store/invoiceStore';
 import { useServerTaxCodeStore } from '@/store/serverTaxCodeStore';
 
@@ -137,6 +138,13 @@ export async function hydrateBooks(): Promise<{ ok: boolean; error?: string }> {
      * than blanking a bookkeeper's accounts.
      */
     void loadSuppliers();
+
+    /*
+     * And the bills, on the same terms: a payables screen that cannot list them
+     * is still a usable ledger, and it reports its own failure rather than
+     * blanking a bookkeeper's accounts.
+     */
+    void loadBills();
 
     /*
      * And the invoices, from the same books. Not awaited into the verdict for

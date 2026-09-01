@@ -44,6 +44,7 @@ import * as businessParties from './migrations/030_business_parties.js';
 import * as invoiceCustomerFk from './migrations/031_invoice_customer_fk.js';
 import * as salesTaxCodes from './migrations/032_sales_tax_codes.js';
 import * as supplierProfiles from './migrations/033_supplier_profiles.js';
+import * as supplierBills from './migrations/034_supplier_bills.js';
 
 const MIGRATIONS: Record<string, Migration> = {
   '001_initial_schema': initialSchema,
@@ -79,6 +80,7 @@ const MIGRATIONS: Record<string, Migration> = {
   '031_invoice_customer_fk': invoiceCustomerFk,
   '032_sales_tax_codes': salesTaxCodes,
   '033_supplier_profiles': supplierProfiles,
+  '034_supplier_bills': supplierBills,
 };
 
 class StaticMigrationProvider implements MigrationProvider {

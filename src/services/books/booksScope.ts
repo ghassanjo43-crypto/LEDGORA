@@ -32,6 +32,7 @@ import { useStore } from '@/store/useStore';
 import { useJournalStore } from '@/store/journalStore';
 import { clearCustomerCache } from '@/services/parties/customerDirectory';
 import { clearSupplierCache } from '@/services/parties/supplierDirectory';
+import { clearBillCache } from '@/services/bills/billBackend';
 import { useInvoiceStore } from '@/store/invoiceStore';
 import { useServerTaxCodeStore } from '@/store/serverTaxCodeStore';
 import { useCompanyStore } from '@/store/companyStore';
@@ -106,6 +107,9 @@ export function enterCompanyScope(reference: string | null): void {
   /* And the suppliers, for exactly the same reason: the previous company's
    * suppliers in a bill picker is how somebody bills the wrong party. */
   clearSupplierCache();
+  /* And the bills: the previous company's payables on screen is how somebody
+   * pays the wrong supplier. */
+  clearBillCache();
 
   /*
    * And the invoices, for the same reason: on server books they are a cache of
