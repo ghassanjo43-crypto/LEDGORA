@@ -34,6 +34,7 @@ import { clearCustomerCache } from '@/services/parties/customerDirectory';
 import { clearSupplierCache } from '@/services/parties/supplierDirectory';
 import { clearBillCache } from '@/services/bills/billBackend';
 import { clearPaymentCache } from '@/services/payments/paymentBackend';
+import { clearInventoryCache } from '@/services/inventory/inventoryBackend';
 import { useInvoiceStore } from '@/store/invoiceStore';
 import { useServerTaxCodeStore } from '@/store/serverTaxCodeStore';
 import { useCompanyStore } from '@/store/companyStore';
@@ -114,6 +115,9 @@ export function enterCompanyScope(reference: string | null): void {
   /* And the payments, with the outstanding schedule they carry: another
    * company's settled bills on screen is how somebody pays one twice. */
   clearPaymentCache();
+  /* And the item, unit and warehouse registers: the previous company's
+   * catalogue in a picker is how somebody prices the wrong product. */
+  clearInventoryCache();
 
   /*
    * And the invoices, for the same reason: on server books they are a cache of

@@ -800,6 +800,11 @@ export interface Database {
   tax_codes: TaxCodesTable;
   tax_rate_versions: TaxRateVersionsTable;
   tax_code_audit_events: TaxCodeAuditEventsTable;
+  units_of_measure: UnitsOfMeasureTable;
+  warehouses: WarehousesTable;
+  inventory_items: InventoryItemsTable;
+  inventory_settings: InventorySettingsTable;
+  inventory_audit_events: InventoryAuditEventsTable;
 }
 
 
@@ -1697,4 +1702,134 @@ export interface InvoiceAuditEventsTable {
   detail: Generated<string>;
   actor_user_id: string | null;
   occurred_at: Timestamp;
+}
+
+/* ══ Inventory I1 — master data only ══════════════════════════════════════════
+ *
+ * Items, units, warehouses and the accounting profile a later slice posts
+ * through. There is no quantity here and no value: a balance is the sum of
+ * posted movements, and a stored on-hand column would be a second answer that
+ * drifts from the ledger the first time anything fails halfway.
+ */
+
+/** quantity | weight | volume | length | area | time | custom */
+export type UnitCategory = string;
+/** active | inactive | archived */
+export type MasterDataStatus = string;
+
+export interface UnitsOfMeasureTable {
+  id: Generated<string>;
+  organization_id: string;
+  company_id: string;
+  code: string;
+  name: string;
+  symbol: Generated<string>;
+  category: UnitCategory;
+  /**
+   * QUANTITY precision, deliberately independent of currency precision. A
+   * kilogram is weighed to three places in books that round money to two.
+   */
+  decimal_places: Generated<number>;
+  status: Generated<MasterDataStatus>;
+  /** Seeded reference data: archivable only once nothing references it. */
+  is_system: Generated<boolean>;
+  version: Generated<number>;
+  created_by: string | null;
+  updated_by: string | null;
+  created_at: Generated<Timestamp>;
+  updated_at: Generated<Timestamp>;
+}
+
+export interface WarehousesTable {
+  id: Generated<string>;
+  organization_id: string;
+  company_id: string;
+  code: string;
+  name: string;
+  description: Generated<string>;
+  /** main | raw-material | wip | finished-goods | returns | quarantine | scrap | site | transit | virtual */
+  warehouse_type: Generated<string>;
+  location: Generated<string>;
+  status: Generated<MasterDataStatus>;
+  version: Generated<number>;
+  created_by: string | null;
+  updated_by: string | null;
+  created_at: Generated<Timestamp>;
+  updated_at: Generated<Timestamp>;
+}
+
+export interface InventoryItemsTable {
+  id: Generated<string>;
+  organization_id: string;
+  company_id: string;
+  /** The identifier a bookkeeper types. The product calls it "Item code / SKU". */
+  item_code: string;
+  barcode: string | null;
+  name: string;
+  name_secondary: Generated<string>;
+  description: Generated<string>;
+  /** One of the eleven established types; the CHECK is authoritative. */
+  item_type: string;
+  is_inventory_tracked: Generated<boolean>;
+  is_purchasable: Generated<boolean>;
+  is_sellable: Generated<boolean>;
+  /** none | lot | serial — master configuration only; tracking lands in I2. */
+  tracking_mode: Generated<string>;
+  valuation_method: Generated<string>;
+  base_unit_id: string;
+  /** Defaults a form copies onto a line. Never an authoritative posted figure. */
+  default_selling_price: string | null;
+  default_purchase_price: string | null;
+  standard_cost: string | null;
+  sales_description: Generated<string>;
+  purchase_description: Generated<string>;
+  sales_tax_code_id: string | null;
+  purchase_tax_code_id: string | null;
+  inventory_account_id: string | null;
+  cogs_account_id: string | null;
+  sales_account_id: string | null;
+  purchase_account_id: string | null;
+  inventory_adjustment_account_id: string | null;
+  status: Generated<MasterDataStatus>;
+  version: Generated<number>;
+  created_by: string | null;
+  updated_by: string | null;
+  created_at: Generated<Timestamp>;
+  updated_at: Generated<Timestamp>;
+}
+
+export interface InventorySettingsTable {
+  organization_id: string;
+  company_id: string;
+  default_valuation_method: Generated<string>;
+  default_warehouse_id: string | null;
+  default_inventory_account_id: string | null;
+  default_cogs_account_id: string | null;
+  default_sales_account_id: string | null;
+  /** Where a NON-STOCK item's purchase goes: an expense, not an asset. */
+  default_purchase_account_id: string | null;
+  inventory_gain_account_id: string | null;
+  inventory_loss_account_id: string | null;
+  stock_in_transit_account_id: string | null;
+  version: Generated<number>;
+  created_by: string | null;
+  updated_by: string | null;
+  created_at: Generated<Timestamp>;
+  updated_at: Generated<Timestamp>;
+}
+
+export interface InventoryAuditEventsTable {
+  id: Generated<string>;
+  organization_id: string;
+  company_id: string;
+  /** item | warehouse | unit | settings */
+  subject_type: string;
+  subject_id: string | null;
+  action: string;
+  resulting_version: number | null;
+  detail: Generated<string>;
+  actor_user_id: string | null;
+  actor_name: Generated<string>;
+  request_id: Generated<string>;
+  created_at: Generated<Timestamp>;
 }

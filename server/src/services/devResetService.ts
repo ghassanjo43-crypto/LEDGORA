@@ -348,6 +348,46 @@ const RESET_PLAN: readonly PlanEntry[] = [
    * Supplier bills, children first. The lines carry foreign keys to `accounts`
    * and the header to `business_parties`, so the whole group goes before both.
    */
+  /*
+   * Inventory master data, children first — see migration 037. Before the
+   * accounts, tax codes and units these rows reference with ON DELETE RESTRICT.
+   * No stock rows exist to reset: I1 creates none.
+   */
+  {
+    table: 'inventory_audit_events',
+    action: 'scoped_delete',
+    order: 28.82,
+    label: 'Inventory master-data audit events',
+    why: 'The history of a catalogue; meaningless once the catalogue is gone.',
+  },
+  {
+    table: 'inventory_settings',
+    action: 'scoped_delete',
+    order: 28.84,
+    label: 'Inventory accounting profile',
+    why: 'References accounts and a warehouse, so it goes before both.',
+  },
+  {
+    table: 'inventory_items',
+    action: 'scoped_delete',
+    order: 28.86,
+    label: 'Items',
+    why: 'The catalogue. References units, tax codes and accounts, so it goes before them.',
+  },
+  {
+    table: 'warehouses',
+    action: 'scoped_delete',
+    order: 28.88,
+    label: 'Warehouses',
+    why: 'Deleted after the settings row that may point at one.',
+  },
+  {
+    table: 'units_of_measure',
+    action: 'scoped_delete',
+    order: 28.9,
+    label: 'Units of measure',
+    why: 'Deleted after the items that name them.',
+  },
   {
     table: 'bill_audit_events',
     action: 'scoped_delete',

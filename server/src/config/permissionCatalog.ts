@@ -286,6 +286,31 @@ export const PERMISSION_SUBJECTS: PermissionSubject[] = [
     actions: [...READ, ...AUTHOR, 'delete'],
     description: 'Supplier master records and statements.',
   },
+  /*
+   * The shared item catalogue: products and services.
+   *
+   * Gated by `invoicing` and NOT by `inventory_basic`, because the product has
+   * always treated the catalogue as shared master data — the navigation puts
+   * Items in Master Data rather than the Inventory group, the route guard gives
+   * it no module requirement, and a Core subscriber can reach it. That is the
+   * right shape: you cannot raise an invoice line from a catalogue you cannot
+   * open, which is exactly why customers and vendors sit on the same module.
+   *
+   * Stock itself — warehouses, movements, valuation — stays on `inventory`.
+   * Holding this subject buys a name for something; it buys no stock at all.
+   *
+   * There is no `delete`: an item is named by documents already issued, so it
+   * is archived and never removed.
+   */
+  {
+    id: 'items',
+    label: 'Items',
+    group: 'Sales & purchases',
+    scope: 'organization',
+    requiredModule: 'invoicing',
+    actions: [...READ, ...AUTHOR],
+    description: 'Product and service catalogue shared by sales and purchasing.',
+  },
   {
     id: 'invoices',
     label: 'Invoices',
