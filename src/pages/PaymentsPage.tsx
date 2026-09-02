@@ -5,6 +5,11 @@ import { useStore } from '@/store/useStore';
 import { useEntityStore } from '@/store/useEntityStore';
 import { usePaymentStore } from '@/store/paymentStore';
 import { usePayments } from '@/services/payments/usePayments';
+import { paymentActions } from '@/services/payments/paymentActions';
+import { DurablePaymentDrawer } from '@/components/payments/DurablePaymentDrawer';
+import { DurableReallocateDialog } from '@/components/payments/DurableReallocateDialog';
+import { PayablesPanel } from '@/components/payments/PayablesPanel';
+import { useTransactionCurrency } from '@/lib/transactionCurrency';
 import { usePaymentEditor } from '@/store/paymentEditorStore';
 import { formatCurrency } from '@/lib/money';
 import { cn as cx } from '@/lib/utils';
@@ -36,12 +41,22 @@ export function PaymentsPage() {
   const store = usePaymentStore();
   const createDraft = usePaymentStore((s) => s.createDraft);
   const consumeEditorRequest = usePaymentEditor((s) => s.consume);
+  const consumeNewRequest = usePaymentEditor((s) => s.consumeNew);
+  const consumeNewSupplierRequest = usePaymentEditor((s) => s.consumeNewSupplier);
   const { notify } = useToast();
 
   const [editorId, setEditorId] = useState<string | null>(null);
+  /* Distinct from `editorId`: a durable payment that does not exist yet has no
+   * id to open the drawer on, and `null` would read as closed. */
+  const [creatingDurable, setCreatingDurable] = useState(false);
+  /** Seeds a blank durable editor with the supplier a bill named. */
+  const [newForSupplier, setNewForSupplier] = useState<string | null>(null);
   const [previewId, setPreviewId] = useState<string | null>(null);
   const [applyId, setApplyId] = useState<string | null>(null);
   const [reverseId, setReverseId] = useState<string | null>(null);
+  /* Two views over the same books: what has been paid, and what is still owed. */
+  const [tab, setTab] = useState<'payments' | 'payables'>('payments');
+  const companyCurrency = useTransactionCurrency();
 
   const [supplierFilter, setSupplierFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState<PaymentStatus | 'ALL'>('ALL');
@@ -49,6 +64,21 @@ export function PaymentsPage() {
   const [search, setSearch] = useState('');
 
   useEffect(() => { const r = consumeEditorRequest(); if (r) setEditorId(r); }, [consumeEditorRequest]);
+  /* A quick-create from elsewhere, arriving as "open a blank editor". */
+  useEffect(() => {
+    if (consumeNewRequest()) { setCreatingDurable(true); setEditorId(null); setTab('payments'); }
+  }, [consumeNewRequest]);
+  /* "Record payment" on a bill arrives here as a request for a BLANK durable
+   * editor seeded with the supplier — see `paymentEditorStore`. */
+  useEffect(() => {
+    const supplier = consumeNewSupplierRequest();
+    if (!supplier) return;
+    setSupplierFilter(supplier);
+    setNewForSupplier(supplier);
+    setCreatingDurable(true);
+    setEditorId(null);
+    setTab('payments');
+  }, [consumeNewSupplierRequest]);
 
   const partyName = (id: string | undefined): string => (id ? entities.find((e) => e.id === id)?.legalName ?? '—' : '—');
   const accName = (id: string | undefined): string => { const a = accounts.find((x) => x.id === id); return a ? `${a.code} · ${a.name}` : ''; };
@@ -69,9 +99,29 @@ export function PaymentsPage() {
   const statusOptions = [{ value: 'ALL', label: 'All statuses' }, ...(['draft', 'submitted', 'approved', 'posted', 'partially-allocated', 'fully-allocated', 'reversed'] as const).map((s) => ({ value: s, label: s }))];
   const typeOptions = [{ value: 'ALL', label: 'All types' }, ...(Object.keys(PAYMENT_TYPE_LABELS) as PaymentType[]).map((t) => ({ value: t, label: PAYMENT_TYPE_LABELS[t] }))];
 
-  const onNew = (): void => { const res = createDraft({ supplierId: supplierFilter || undefined }); if (res.ok && res.id) setEditorId(res.id); };
+  /*
+   * On server books a new payment has no record until it is saved: the server
+   * requires a supplier, a date, an amount and a paying account, none of which
+   * a blank draft could supply. The drawer opens unsaved and the first save
+   * creates it.
+   */
+  const onNew = (): void => {
+    if (serverBacked) { setNewForSupplier(supplierFilter || null); setCreatingDurable(true); setEditorId(null); return; }
+    const res = createDraft({ supplierId: supplierFilter || undefined });
+    if (res.ok && res.id) setEditorId(res.id);
+  };
   const act = (fn: () => { ok: boolean; error?: string }, success: string): void => { const res = fn(); if (res.ok) notify(success, 'success'); else notify(res.error ?? 'Action failed.', 'error'); };
+  /** The same, for the durable path, whose actions are asynchronous. */
+  const actAsync = async (fn: () => Promise<{ ok: boolean; error?: string }>, success: string): Promise<void> => {
+    const res = await fn();
+    if (res.ok) notify(success, 'success');
+    /* The SERVER's words, verbatim. */
+    else notify(res.error ?? 'Action failed.', 'error');
+  };
 
+  /* The DURABLE record for the reallocation dialog: the mapped server payment,
+   * never the browser store's copy. */
+  const durablePayment = applyId ? payments.find((p) => p.id === applyId) : undefined;
   const previewPayment = previewId ? store.getPayment(previewId) : undefined;
   const previewSnap = previewId ? store.previewSnapshot(previewId) : null;
   const applyPayment = applyId ? store.getPayment(applyId) : undefined;
@@ -84,6 +134,34 @@ export function PaymentsPage() {
         <Button onClick={onNew}><Plus className="h-4 w-4" /> New payment</Button>
       </PageActions>
 
+      {serverBacked && (
+        <div className="mb-4 flex gap-1 rounded-xl border border-slate-200/80 bg-white p-1 shadow-card dark:border-slate-800 dark:bg-slate-900" role="tablist" aria-label="Payments views">
+          {([['payments', 'Payments made'], ['payables', 'What is owed']] as const).map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              role="tab"
+              aria-selected={tab === key}
+              onClick={() => setTab(key)}
+              className={cx(
+                'focus-ring rounded-lg px-3 py-1.5 text-sm font-medium',
+                tab === key
+                  ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900'
+                  : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800',
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {serverBacked && tab === 'payables' ? (
+        /* Every figure below is the server's. Nothing on that panel is netted,
+           bucketed or summed in the browser. */
+        <PayablesPanel currency={companyCurrency.code} />
+      ) : (
+      <>
       <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-slate-200/80 bg-white p-3 shadow-card dark:border-slate-800 dark:bg-slate-900">
         <Select className="h-9 w-auto max-w-[180px]" options={supplierOptions} value={supplierFilter} onChange={(e) => setSupplierFilter(e.target.value)} aria-label="Supplier" />
         <Select className="h-9 w-auto" options={typeOptions} value={typeFilter} onChange={(e) => setTypeFilter(e.target.value as PaymentType | 'ALL')} aria-label="Type" />
@@ -147,19 +225,44 @@ export function PaymentsPage() {
                       <Dropdown label="Actions" align="right" trigger={(o) => (
                         <span className={cx('inline-flex h-8 items-center gap-1 rounded-lg border border-slate-200 px-2 text-xs text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300', o && 'bg-slate-50')}>Actions <ChevronDown className="h-3 w-3" /></span>
                       )}>
-                        {(() => { const editable = ['draft', 'submitted', 'approved'].includes(p.status); return (
-                          <MenuItem onClick={() => (editable ? setEditorId(p.id) : setPreviewId(p.id))}>{editable ? <><Pencil className="h-4 w-4" /> Edit</> : <><Eye className="h-4 w-4" /> View</>}</MenuItem>
-                        ); })()}
-                        <MenuItem onClick={() => setPreviewId(p.id)}><Printer className="h-4 w-4" /> Preview / print</MenuItem>
-                        {p.status === 'draft' && <MenuItem onClick={() => act(() => store.submitPayment(p.id), 'Payment submitted.')}><Send className="h-4 w-4" /> Submit</MenuItem>}
-                        {(p.status === 'draft' || p.status === 'submitted') && <MenuItem onClick={() => act(() => store.approvePayment(p.id), 'Payment approved.')}><CheckCircle2 className="h-4 w-4" /> Approve</MenuItem>}
-                        {['draft', 'submitted', 'approved'].includes(p.status) && <MenuItem onClick={() => act(() => store.postPayment(p.id), 'Payment posted.')}><Send className="h-4 w-4" /> Post</MenuItem>}
+                        {(() => {
+                          /* On server books the drawer IS the view: a posted
+                             payment opens read-only with its allocations, and
+                             posting happens there because the allocations
+                             travel with it. */
+                          const editable = serverBacked
+                            ? p.status === 'draft'
+                            : ['draft', 'submitted', 'approved'].includes(p.status);
+                          if (serverBacked) {
+                            return (
+                              <MenuItem onClick={() => setEditorId(p.id)}>
+                                {editable ? <><Pencil className="h-4 w-4" /> Edit</> : <><Eye className="h-4 w-4" /> View</>}
+                              </MenuItem>
+                            );
+                          }
+                          return (
+                            <MenuItem onClick={() => (editable ? setEditorId(p.id) : setPreviewId(p.id))}>{editable ? <><Pencil className="h-4 w-4" /> Edit</> : <><Eye className="h-4 w-4" /> View</>}</MenuItem>
+                          );
+                        })()}
+                        {!serverBacked && <MenuItem onClick={() => setPreviewId(p.id)}><Printer className="h-4 w-4" /> Preview / print</MenuItem>}
+                        {/* Submit and approve are hidden on server books rather
+                            than left to refuse: there is no approval workflow
+                            on the server. */}
+                        {!serverBacked && p.status === 'draft' && <MenuItem onClick={() => act(() => store.submitPayment(p.id), 'Payment submitted.')}><Send className="h-4 w-4" /> Submit</MenuItem>}
+                        {!serverBacked && (p.status === 'draft' || p.status === 'submitted') && <MenuItem onClick={() => act(() => store.approvePayment(p.id), 'Payment approved.')}><CheckCircle2 className="h-4 w-4" /> Approve</MenuItem>}
+                        {!serverBacked && ['draft', 'submitted', 'approved'].includes(p.status) && <MenuItem onClick={() => act(() => store.postPayment(p.id), 'Payment posted.')}><Send className="h-4 w-4" /> Post</MenuItem>}
+                        {/* Reallocation replaces the WHOLE set. There is no
+                            partial detach, because that would leave unapplied
+                            cash the books have no account for. */}
+                        {serverBacked && p.status === 'fully-allocated' && <MenuItem onClick={() => setApplyId(p.id)}><Link2 className="h-4 w-4" /> Reallocate</MenuItem>}
                         {/* Never on server books: a posted payment is fully allocated, so there
                             is no unapplied balance to apply and no state in which there could be. */}
                         {!serverBacked && ['posted', 'partially-allocated'].includes(p.status) && p.unappliedAmount > 0.005 && p.supplierId && <MenuItem onClick={() => setApplyId(p.id)}><Link2 className="h-4 w-4" /> Apply payment</MenuItem>}
-                        <MenuItem onClick={() => act(() => store.duplicatePayment(p.id), 'Payment duplicated.')}><Copy className="h-4 w-4" /> Duplicate</MenuItem>
+                        {!serverBacked && <MenuItem onClick={() => act(() => store.duplicatePayment(p.id), 'Payment duplicated.')}><Copy className="h-4 w-4" /> Duplicate</MenuItem>}
                         {p.journalEntryId && p.status !== 'reversed' && <MenuItem onClick={() => setReverseId(p.id)}><Ban className="h-4 w-4" /> Reverse</MenuItem>}
-                        {p.status === 'draft' && <MenuItem onClick={() => act(() => store.deleteDraft(p.id), 'Draft deleted.')}><Trash2 className="h-4 w-4" /> Delete draft</MenuItem>}
+                        {serverBacked
+                          ? p.status === 'draft' && <MenuItem onClick={() => { void actAsync(() => paymentActions().remove(p.id), 'Draft deleted.'); }}><Trash2 className="h-4 w-4" /> Delete draft</MenuItem>
+                          : p.status === 'draft' && <MenuItem onClick={() => act(() => store.deleteDraft(p.id), 'Draft deleted.')}><Trash2 className="h-4 w-4" /> Delete draft</MenuItem>}
                       </Dropdown>
                     </td>
                   </tr>
@@ -169,8 +272,25 @@ export function PaymentsPage() {
           </div>
         </Card>
       )}
+      </>
+      )}
 
-      {editorId && <PaymentEditorDrawer open paymentId={editorId} onClose={() => setEditorId(null)} />}
+      {/*
+        Two editors, one per engine. The durable drawer carries the allocation
+        table, because a posted payment is fully allocated and the two are one
+        decision; Free Demo keeps its own, where unapplied cash is allowed.
+      */}
+      {serverBacked
+        ? (editorId || creatingDurable) && (
+            <DurablePaymentDrawer
+              open
+              paymentId={editorId}
+              seedSupplierId={newForSupplier}
+              onSaved={(id) => { setEditorId(id); setCreatingDurable(false); setNewForSupplier(null); }}
+              onClose={() => { setEditorId(null); setCreatingDurable(false); setNewForSupplier(null); }}
+            />
+          )
+        : editorId && <PaymentEditorDrawer open paymentId={editorId} onClose={() => setEditorId(null)} />}
 
       {previewId && previewPayment && previewSnap && (
         <div className="fixed inset-0 z-50 flex flex-col bg-slate-900/50 backdrop-blur-sm print:static print:bg-white">
@@ -185,8 +305,31 @@ export function PaymentsPage() {
         </div>
       )}
 
-      {applyId && applyPayment && <PaymentApplyDialog payment={applyPayment} onClose={() => setApplyId(null)} />}
-      {reverseId && <PaymentReverseDialog onCancel={() => setReverseId(null)} onConfirm={(reason) => { act(() => store.reversePayment(reverseId, reason), 'Payment reversed.'); setReverseId(null); }} />}
+      {/* Durable: a complete atomic replacement. Demo: applying an unapplied
+          balance, which only the browser engine can hold. */}
+      {applyId && serverBacked && durablePayment && (
+        <DurableReallocateDialog payment={durablePayment} onClose={() => setApplyId(null)} />
+      )}
+      {applyId && !serverBacked && applyPayment && (
+        <PaymentApplyDialog payment={applyPayment} onClose={() => setApplyId(null)} />
+      )}
+      {reverseId && (
+        <PaymentReverseDialog
+          onCancel={() => setReverseId(null)}
+          onConfirm={(reason) => {
+            const id = reverseId;
+            setReverseId(null);
+            if (serverBacked) {
+              void actAsync(
+                () => paymentActions().reverse(id, reason),
+                'Payment reversed. The cash is back and the bills have reopened.',
+              );
+            } else {
+              act(() => store.reversePayment(id, reason), 'Payment reversed.');
+            }
+          }}
+        />
+      )}
     </>
   );
 }

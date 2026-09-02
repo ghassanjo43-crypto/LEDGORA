@@ -29,6 +29,8 @@ import { useHasModule } from '@/store/entitlementHooks';
 import { useInvoiceStore } from '@/store/invoiceStore';
 import { useBillStore } from '@/store/billStore';
 import { usePaymentStore } from '@/store/paymentStore';
+import { billsAreServerAuthoritative } from '@/services/bills/billBackend';
+import { paymentsAreServerAuthoritative } from '@/services/payments/paymentBackend';
 import { useInvoiceEditor } from '@/store/invoiceEditorStore';
 import { useBillEditor } from '@/store/billEditorStore';
 import { usePaymentEditor } from '@/store/paymentEditorStore';
@@ -81,6 +83,8 @@ function useQuickCreate(go: (view: ViewKey) => void) {
   const createInvoice = useInvoiceStore((s) => s.createDraft);
   const createBill = useBillStore((s) => s.createDraft);
   const createPayment = usePaymentStore((s) => s.createDraft);
+  const requestNewBill = useBillEditor((s) => s.requestNew);
+  const requestNewPayment = usePaymentEditor((s) => s.requestNew);
   const requestOpenInvoice = useInvoiceEditor((s) => s.requestOpen);
   const requestOpenBill = useBillEditor((s) => s.requestOpen);
   const requestOpenPayment = usePaymentEditor((s) => s.requestOpen);
@@ -142,8 +146,18 @@ function useQuickCreate(go: (view: ViewKey) => void) {
     // for a payment rather than for a specific bill to be paid.
     canPayment: hasPurchases && roleCanCreateDocument(role, 'payment'),
     newInvoice: start(() => createInvoice({}), requestOpenInvoice, 'invoices', 'Could not create the invoice.'),
-    newBill: start(() => createBill(), requestOpenBill, 'bills', 'Could not create the bill.'),
-    recordPayment: start(() => createPayment(), requestOpenPayment, 'payments', 'Could not create the payment.'),
+    /*
+     * On server books there is no draft to point at until the first save: the
+     * server needs a supplier, dates and a real account before a bill or a
+     * payment can exist. So durable quick-create navigates and asks for a
+     * BLANK editor, rather than creating a placeholder the server would refuse.
+     */
+    newBill: billsAreServerAuthoritative()
+      ? (): void => { requestNewBill(); go('bills'); }
+      : start(() => createBill(), requestOpenBill, 'bills', 'Could not create the bill.'),
+    recordPayment: paymentsAreServerAuthoritative()
+      ? (): void => { requestNewPayment(); go('payments'); }
+      : start(() => createPayment(), requestOpenPayment, 'payments', 'Could not create the payment.'),
   };
 }
 

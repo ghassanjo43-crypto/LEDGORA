@@ -5,6 +5,8 @@ import { useStore } from '@/store/useStore';
 import { useEntityStore } from '@/store/useEntityStore';
 import { useBillStore } from '@/store/billStore';
 import { useBills } from '@/services/bills/useBills';
+import { billActions } from '@/services/bills/billActions';
+import { DurableBillDrawer } from '@/components/bills/DurableBillDrawer';
 import { useSuppliers } from '@/services/parties/useSuppliers';
 import { useBillEditor } from '@/store/billEditorStore';
 import { usePaymentStore } from '@/store/paymentStore';
@@ -52,8 +54,10 @@ export function BillsPage() {
   const store = useBillStore();
   const createDraft = useBillStore((s) => s.createDraft);
   const consumeEditorRequest = useBillEditor((s) => s.consume);
+  const consumeNewRequest = useBillEditor((s) => s.consumeNew);
   const createPaymentForBill = usePaymentStore((s) => s.createPaymentForBill);
   const requestPaymentEditor = usePaymentEditor((s) => s.requestOpen);
+  const requestNewPaymentForSupplier = usePaymentEditor((s) => s.requestNewForSupplier);
   const setActiveView = useStore((s) => s.setActiveView);
   const { notify } = useToast();
   const users = useAuthStore((s) => s.users);
@@ -63,6 +67,9 @@ export function BillsPage() {
   const canTransition = isPlatformAdminFullAccess() || roleCanTransitionBills(role);
 
   const [editorId, setEditorId] = useState<string | null>(null);
+  /* Distinct from `editorId`: a durable bill that does not exist yet has no id
+   * to open the drawer on, and `null` would be indistinguishable from closed. */
+  const [creatingDurable, setCreatingDurable] = useState(false);
   const [previewId, setPreviewId] = useState<string | null>(null);
   const [creditId, setCreditId] = useState<string | null>(null);
   const [reverseId, setReverseId] = useState<string | null>(null);
@@ -74,6 +81,10 @@ export function BillsPage() {
   const [search, setSearch] = useState('');
 
   useEffect(() => { const r = consumeEditorRequest(); if (r) setEditorId(r); }, [consumeEditorRequest]);
+  /* A quick-create from elsewhere, arriving as "open a blank editor". */
+  useEffect(() => {
+    if (consumeNewRequest()) { setCreatingDurable(true); setEditorId(null); }
+  }, [consumeNewRequest]);
 
   const supplierName = (id: string): string =>
     suppliers.find((e) => e.id === id)?.legalName
@@ -97,10 +108,39 @@ export function BillsPage() {
   const statusOptions = [{ value: 'ALL', label: 'All statuses' }, ...(['draft', 'submitted', 'approved', 'posted', 'partially-paid', 'paid', 'superseded', 'reversed'] as const).map((s) => ({ value: s, label: s }))];
   const typeOptions = [{ value: 'ALL', label: 'All types' }, ...(Object.keys(BILL_TYPE_LABELS) as BillType[]).map((t) => ({ value: t, label: BILL_TYPE_LABELS[t] }))];
 
-  const onNew = (): void => { const res = createDraft({ supplierId: supplierFilter || undefined }); if (res.ok && res.id) setEditorId(res.id); };
+  /*
+   * On server books a new bill has no record until it is saved: the server
+   * requires a supplier, dates and at least one line with a real account, and
+   * an empty placeholder draft would be a document nobody could post. So the
+   * drawer opens unsaved and the first save creates it.
+   */
+  const onNew = (): void => {
+    if (serverBacked) { setCreatingDurable(true); setEditorId(null); return; }
+    const res = createDraft({ supplierId: supplierFilter || undefined });
+    if (res.ok && res.id) setEditorId(res.id);
+  };
   const act = (fn: () => { ok: boolean; error?: string }, success: string): void => { const res = fn(); if (res.ok) notify(success, 'success'); else notify(res.error ?? 'Action failed.', 'error'); };
+  /** The same, for the durable path, whose actions are asynchronous. */
+  const actAsync = async (fn: () => Promise<{ ok: boolean; error?: string }>, success: string): Promise<void> => {
+    const res = await fn();
+    if (res.ok) notify(success, 'success');
+    /* The SERVER's words, verbatim — a blocking payment, a locked period and a
+     * stale version each say something different. */
+    else notify(res.error ?? 'Action failed.', 'error');
+  };
   /** Record Payment routes to the Payments module: prefill a payment draft for this bill and open it. */
   const onRecordPayment = (billId: string): void => {
+    if (serverBacked) {
+      /* No draft to point at yet: a durable payment does not exist until the
+       * server has a supplier, a date, an amount and a paying account. So the
+       * Payments screen is asked for a blank editor seeded with the supplier,
+       * where the bill can then be allocated in full. */
+      const bill = bills.find((b) => b.id === billId);
+      if (!bill) { notify('That bill is no longer in these books.', 'error'); return; }
+      requestNewPaymentForSupplier(bill.supplierId);
+      setActiveView('payments');
+      return;
+    }
     const res = createPaymentForBill(billId);
     if (res.ok && res.id) { requestPaymentEditor(res.id); setActiveView('payments'); }
     else notify(res.error ?? 'Could not start a payment.', 'error');
@@ -179,18 +219,28 @@ export function BillsPage() {
                   <td className="px-3 py-2 text-right">
                     <Dropdown label="Actions" align="right" trigger={(o) => (<span className={cx('inline-flex h-8 items-center gap-1 rounded-lg border border-slate-200 px-2 text-xs text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300', o && 'bg-slate-50')}>Actions <ChevronDown className="h-3 w-3" /></span>)}>
                       {b.status === 'draft' && canEdit ? <MenuItem onClick={() => setEditorId(b.id)}><Pencil className="h-4 w-4" /> Edit</MenuItem> : <MenuItem onClick={() => setPreviewId(b.id)}><Eye className="h-4 w-4" /> View</MenuItem>}
-                      {b.status === 'submitted' && canTransition && <MenuItem onClick={() => returnToDraft(b.id, false)}><Pencil className="h-4 w-4" /> Recall submission</MenuItem>}
-                      {b.status === 'approved' && canTransition && <MenuItem onClick={() => returnToDraft(b.id, true)}><Pencil className="h-4 w-4" /> Reopen as draft</MenuItem>}
-                      <MenuItem onClick={() => setPreviewId(b.id)}><Printer className="h-4 w-4" /> Preview / print</MenuItem>
-                      {b.status === 'draft' && <MenuItem onClick={() => act(() => store.submitBill(b.id), 'Bill submitted.')}><Send className="h-4 w-4" /> Submit</MenuItem>}
-                      {(b.status === 'draft' || b.status === 'submitted') && <MenuItem onClick={() => act(() => store.approveBill(b.id), 'Bill approved.')}><CheckCircle2 className="h-4 w-4" /> Approve</MenuItem>}
-                      {['draft', 'submitted', 'approved'].includes(b.status) && <MenuItem onClick={() => act(() => store.postBill(b.id), 'Bill posted to Trade Payables.')}><Send className="h-4 w-4" /> Post</MenuItem>}
+                      {!serverBacked && b.status === 'submitted' && canTransition && <MenuItem onClick={() => returnToDraft(b.id, false)}><Pencil className="h-4 w-4" /> Recall submission</MenuItem>}
+                      {!serverBacked && b.status === 'approved' && canTransition && <MenuItem onClick={() => returnToDraft(b.id, true)}><Pencil className="h-4 w-4" /> Reopen as draft</MenuItem>}
+                      {!serverBacked && <MenuItem onClick={() => setPreviewId(b.id)}><Printer className="h-4 w-4" /> Preview / print</MenuItem>}
+                      {/* Submit and approve are hidden on server books rather
+                          than left to refuse: there is no approval workflow on
+                          the server, and offering a transition it can never
+                          honour is offering a refusal. */}
+                      {!serverBacked && b.status === 'draft' && <MenuItem onClick={() => act(() => store.submitBill(b.id), 'Bill submitted.')}><Send className="h-4 w-4" /> Submit</MenuItem>}
+                      {!serverBacked && (b.status === 'draft' || b.status === 'submitted') && <MenuItem onClick={() => act(() => store.approveBill(b.id), 'Bill approved.')}><CheckCircle2 className="h-4 w-4" /> Approve</MenuItem>}
+                      {serverBacked
+                        ? b.status === 'draft' && <MenuItem onClick={() => { void actAsync(() => billActions().post(b.id), 'Bill posted. The expense and the payable are in the ledger.'); }}><Send className="h-4 w-4" /> Post</MenuItem>
+                        : ['draft', 'submitted', 'approved'].includes(b.status) && <MenuItem onClick={() => act(() => store.postBill(b.id), 'Bill posted to Trade Payables.')}><Send className="h-4 w-4" /> Post</MenuItem>}
                       {['posted', 'partially-paid'].includes(b.status) && <MenuItem onClick={() => onRecordPayment(b.id)}><Banknote className="h-4 w-4" /> Record payment</MenuItem>}
-                      {['posted', 'partially-paid'].includes(b.status) && <MenuItem onClick={() => setCreditId(b.id)}><ReceiptText className="h-4 w-4" /> Create supplier credit</MenuItem>}
-                      <MenuItem onClick={() => act(() => store.duplicateBill(b.id), 'Bill duplicated.')}><Copy className="h-4 w-4" /> Duplicate</MenuItem>
-                      <AmendMenuItem documentType="bill" documentId={b.id} />
+                      {!serverBacked && ['posted', 'partially-paid'].includes(b.status) && <MenuItem onClick={() => setCreditId(b.id)}><ReceiptText className="h-4 w-4" /> Create supplier credit</MenuItem>}
+                      {serverBacked && b.status === 'draft' && <MenuItem onClick={() => { void actAsync(() => billActions().remove(b.id), 'Draft deleted.'); }}><Trash2 className="h-4 w-4" /> Delete draft</MenuItem>}
+                      {!serverBacked && <MenuItem onClick={() => act(() => store.duplicateBill(b.id), 'Bill duplicated.')}><Copy className="h-4 w-4" /> Duplicate</MenuItem>}
+                      {/* Amending restates a posted document and has no server
+                          path; on server books a bill is corrected by reversing
+                          it and recording a new one. */}
+                      {!serverBacked && <AmendMenuItem documentType="bill" documentId={b.id} />}
                       {b.journalEntryId && b.status !== 'reversed' && b.status !== 'superseded' && <MenuItem onClick={() => setReverseId(b.id)}><Ban className="h-4 w-4" /> Reverse</MenuItem>}
-                      {b.status === 'draft' && <MenuItem onClick={() => act(() => store.deleteDraft(b.id), 'Draft deleted.')}><Trash2 className="h-4 w-4" /> Delete draft</MenuItem>}
+                      {!serverBacked && b.status === 'draft' && <MenuItem onClick={() => act(() => store.deleteDraft(b.id), 'Draft deleted.')}><Trash2 className="h-4 w-4" /> Delete draft</MenuItem>}
                     </Dropdown>
                   </td>
                 </tr>
@@ -203,7 +253,20 @@ export function BillsPage() {
       {/* Outside the table: a row's Actions menu unmounts on click. */}
       <AmendmentDrawerHost />
 
-      {editorId && <BillEditorDrawer open billId={editorId} onClose={() => setEditorId(null)} />}
+      {/*
+        Two editors, one per engine. The durable drawer shows only what the
+        server can hold; Free Demo keeps its own, where none of it is refused.
+      */}
+      {serverBacked
+        ? (editorId || creatingDurable) && (
+            <DurableBillDrawer
+              open
+              billId={editorId}
+              onSaved={(id) => { setEditorId(id); setCreatingDurable(false); }}
+              onClose={() => { setEditorId(null); setCreatingDurable(false); }}
+            />
+          )
+        : editorId && <BillEditorDrawer open billId={editorId} onClose={() => setEditorId(null)} />}
 
       {previewId && previewBill && previewSnap && (
         <>
@@ -221,7 +284,22 @@ export function BillsPage() {
       )}
 
       {creditId && creditBill && <BillSupplierCreditDialog bill={creditBill} onClose={() => setCreditId(null)} />}
-      {reverseId && <BillReverseDialog onCancel={() => setReverseId(null)} onConfirm={(reason) => { act(() => store.reverseBill(reverseId, reason), 'Bill reversed.'); setReverseId(null); }} />}
+      {reverseId && (
+        <BillReverseDialog
+          onCancel={() => setReverseId(null)}
+          onConfirm={(reason) => {
+            const id = reverseId;
+            setReverseId(null);
+            if (serverBacked) {
+              /* The server refuses a bill a posted payment settles, and names
+               * the blocking payments. That message is shown as it arrives. */
+              void actAsync(() => billActions().reverse(id, reason), 'Bill reversed.');
+            } else {
+              act(() => store.reverseBill(id, reason), 'Bill reversed.');
+            }
+          }}
+        />
+      )}
     </>
   );
 }
