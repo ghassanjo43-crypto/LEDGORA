@@ -34,6 +34,13 @@ import {
   type ServerWarehouse,
   type ItemWriteInput,
   type WarehouseWriteInput,
+  stockApi,
+  type ServerStockDocument,
+  type StockDocumentInput,
+  type StockDocumentKind,
+  type StockOnHandRow,
+  type ValuationRow,
+  type ReconciliationRow,
 } from '@/services/api/inventoryApi';
 
 export type InventoryBackend = 'browser' | 'server';
@@ -244,3 +251,141 @@ export const IMPORT_REQUIRED =
   'Items in this browser cannot be imported automatically. The server would have to decide which '
   + 'account, which tax code and which unit each one means, and those ids came from a catalogue it '
   + 'never held. Re-enter the ones you still need; nothing here has been deleted.';
+
+/* ══ I2 — the movement ledger, on the server ════════════════════════════════
+ *
+ * There is no browser fallback here on purpose. A durable subscriber whose
+ * quantities came from `inventoryStore` would be reading a number the books
+ * have never seen, and the moment they acted on it — issuing stock that is not
+ * there, or trusting a valuation — the mistake would already be in the ledger.
+ * When the server cannot answer, these read EMPTY and the screen says so.
+ */
+
+interface StockStoreShape {
+  documentState: RegisterState;
+  documents: ServerStockDocument[];
+  documentError: string | null;
+
+  onHandState: RegisterState;
+  onHand: StockOnHandRow[];
+
+  valuationState: RegisterState;
+  valuation: ValuationRow[];
+  valuationTotal: string;
+
+  reconciliation: { rows: ReconciliationRow[]; balanced: boolean } | null;
+}
+
+export const useServerStock = create<StockStoreShape>(() => ({
+  documentState: 'idle',
+  documents: [],
+  documentError: null,
+  onHandState: 'idle',
+  onHand: [],
+  valuationState: 'idle',
+  valuation: [],
+  valuationTotal: '0',
+  reconciliation: null,
+}));
+
+export function clearStockCache(): void {
+  useServerStock.setState({
+    documentState: 'idle', documents: [], documentError: null,
+    onHandState: 'idle', onHand: [],
+    valuationState: 'idle', valuation: [], valuationTotal: '0',
+    reconciliation: null,
+  });
+}
+
+export async function loadStockDocuments(
+  options: { kind?: StockDocumentKind } = {},
+): Promise<void> {
+  if (!inventoryIsServerAuthoritative()) return;
+  const generation = booksGeneration();
+  useServerStock.setState({ documentState: 'loading', documentError: null });
+  try {
+    const documents = await stockApi.listDocuments({ kind: options.kind, limit: 100 });
+    if (!isCurrentGeneration(generation)) return;
+    useServerStock.setState({ documentState: 'ready', documents, documentError: null });
+  } catch (cause) {
+    if (!isCurrentGeneration(generation)) return;
+    useServerStock.setState({
+      documentState: 'unavailable',
+      documents: [],
+      documentError: cause instanceof Error ? cause.message : 'Could not load stock documents.',
+    });
+  }
+}
+
+export async function loadStockPositions(): Promise<void> {
+  if (!inventoryIsServerAuthoritative()) return;
+  const generation = booksGeneration();
+  useServerStock.setState({ onHandState: 'loading', valuationState: 'loading' });
+  try {
+    const [onHand, valuation, reconciliation] = await Promise.all([
+      stockApi.stockOnHand(),
+      stockApi.valuation(),
+      stockApi.reconciliation(),
+    ]);
+    if (!isCurrentGeneration(generation)) return;
+    useServerStock.setState({
+      onHandState: 'ready',
+      onHand,
+      valuationState: 'ready',
+      valuation: valuation.rows,
+      valuationTotal: valuation.totalValue,
+      reconciliation: { rows: reconciliation.rows, balanced: reconciliation.balanced },
+    });
+  } catch {
+    if (!isCurrentGeneration(generation)) return;
+    /* Empty, never stale and never a browser figure. */
+    useServerStock.setState({
+      onHandState: 'unavailable', onHand: [],
+      valuationState: 'unavailable', valuation: [], valuationTotal: '0',
+      reconciliation: null,
+    });
+  }
+}
+
+export const stockGateway = {
+  post: async (
+    input: StockDocumentInput,
+  ): Promise<{ document: ServerStockDocument; created: boolean }> => {
+    const answer = await stockApi.post(input);
+    await Promise.all([loadStockDocuments(), loadStockPositions()]);
+    return answer;
+  },
+
+  reverse: async (
+    id: string, expectedVersion: number, reason: string,
+  ): Promise<ServerStockDocument> => {
+    const reversed = await stockApi.reverse(id, expectedVersion, reason);
+    await Promise.all([loadStockDocuments(), loadStockPositions()]);
+    return reversed;
+  },
+
+  stockCard: (itemId: string) => stockApi.stockCard(itemId),
+};
+
+/**
+ * A fresh idempotency key for one attempt at one document.
+ *
+ * Minted where the user presses the button, not inside the gateway: a retry of
+ * the SAME attempt must carry the SAME key, and a gateway that generated one
+ * per call would make every retry a new document — which is the failure the key
+ * exists to prevent.
+ */
+export function newIdempotencyKey(): string {
+  const random = globalThis.crypto?.randomUUID?.();
+  return random ?? `k-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
+export const COUNTS_UNSUPPORTED =
+  'Stock counts are not available yet. Counting is a controlled document with its own variance '
+  + 'posting and a freeze on the quantities while it is open, and none of that exists on the '
+  + 'server. Record the difference as an adjustment with a reason in the meantime.';
+
+export const OPENING_UNSUPPORTED =
+  'Opening stock balances are not available yet. The controlled opening-balance workflow posts '
+  + 'ledger lines and knows nothing about items or warehouses, so an opening quantity here would '
+  + 'have no agreed counterpart in the books. Receive the stock instead.';

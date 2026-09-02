@@ -669,6 +669,12 @@ async function deleteOneOrganization(
      */
     await sql`SET LOCAL ledgora.allow_legal_purge = 'on'`.execute(trx);
     /*
+     * And the stock ledger, for the same reason and on the same terms. Movements
+     * are immutable evidence in every other circumstance; a workspace being
+     * destroyed is the one circumstance where they must go with it.
+     */
+    await sql`SET LOCAL ledgora.allow_stock_purge = 'on'`.execute(trx);
+    /*
      * FOR UPDATE. Everything after this point sees a tenant no other
      * transaction can modify, which is what makes the recheck below meaningful
      * rather than a second guess at a moving target.

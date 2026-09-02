@@ -705,6 +705,14 @@ describe('the I1 boundary', () => {
 describe('migration 037', () => {
   it('rolls back cleanly when the registers are empty, and replays', async () => {
     const migrator = createMigrator(ctx.db);
+
+    /* 038 sits on top of 037 now, so it comes off first. Asserting the name
+     * rather than a count is what makes a later migration fail here loudly
+     * instead of silently rolling back something else. */
+    const movements = await migrator.migrateDown();
+    expect(movements.error).toBeUndefined();
+    expect(movements.results?.[0]?.migrationName).toBe('038_inventory_movements');
+
     const down = await migrator.migrateDown();
     expect(down.error).toBeUndefined();
     expect(down.results?.[0]?.migrationName).toBe('037_inventory_master_data');
@@ -734,7 +742,13 @@ describe('migration 037', () => {
     const created = await call('POST', '/api/inventory/items', user, itemPayload(unit));
     expect(created.statusCode, created.body).toBe(201);
 
-    const down = await createMigrator(ctx.db).migrateDown();
+    const migrator = createMigrator(ctx.db);
+    /* The movement ledger is empty, so 038 comes off without complaint; 037 is
+     * the one holding the catalogue this test is about. */
+    const movements = await migrator.migrateDown();
+    expect(movements.error).toBeUndefined();
+
+    const down = await migrator.migrateDown();
     expect(down.error).toBeDefined();
     expect(String((down.error as Error).message)).toMatch(/Refusing to roll back 037/);
 
@@ -748,7 +762,12 @@ describe('migration 037', () => {
     /* Reading the register seeds it; nothing else is created. */
     await call('GET', '/api/inventory/units', user);
 
-    const down = await createMigrator(ctx.db).migrateDown();
+    const migrator = createMigrator(ctx.db);
+    const movements = await migrator.migrateDown();
+    expect(movements.error).toBeUndefined();
+    expect(movements.results?.[0]?.migrationName).toBe('038_inventory_movements');
+
+    const down = await migrator.migrateDown();
     expect(down.error).toBeUndefined();
     expect(down.results?.[0]?.migrationName).toBe('037_inventory_master_data');
   });

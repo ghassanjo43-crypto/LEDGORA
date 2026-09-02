@@ -805,6 +805,9 @@ export interface Database {
   inventory_items: InventoryItemsTable;
   inventory_settings: InventorySettingsTable;
   inventory_audit_events: InventoryAuditEventsTable;
+  inventory_documents: InventoryDocumentsTable;
+  inventory_movements: InventoryMovementsTable;
+  inventory_document_numbering: InventoryDocumentNumberingTable;
 }
 
 
@@ -1811,6 +1814,8 @@ export interface InventorySettingsTable {
   inventory_gain_account_id: string | null;
   inventory_loss_account_id: string | null;
   stock_in_transit_account_id: string | null;
+  /** Where a standalone receipt's offset lands. Required before receiving. */
+  goods_received_not_invoiced_account_id: string | null;
   version: Generated<number>;
   created_by: string | null;
   updated_by: string | null;
@@ -1832,4 +1837,86 @@ export interface InventoryAuditEventsTable {
   actor_name: Generated<string>;
   request_id: Generated<string>;
   created_at: Generated<Timestamp>;
+}
+
+
+/* ══ Inventory I2 — the movement ledger ══════════════════════════════════════
+ *
+ * On-hand is the signed SUM of these rows; there is no stored balance anywhere.
+ * A posted movement is immutable — a database trigger permits exactly one
+ * change, `posted` → `reversed`, and refuses deletion outright.
+ */
+
+export interface InventoryDocumentsTable {
+  id: Generated<string>;
+  organization_id: string;
+  company_id: string;
+  document_number: string;
+  /** receipt | issue | transfer | adjustment */
+  kind: string;
+  /** When it happened in the warehouse. */
+  movement_date: string;
+  /** When it hits the books. Authoritative for sequencing and period locks. */
+  posting_date: string;
+  reference: Generated<string>;
+  memo: Generated<string>;
+  /** Required for an adjustment, by CHECK. */
+  reason: Generated<string>;
+  status: Generated<string>;
+  /** Null only for a transfer, which touches no ledger account. */
+  journal_entry_id: string | null;
+  /** A retry finds what it already made instead of making a second one. */
+  idempotency_key: string;
+  reversal_of_document_id: string | null;
+  reversed_by_document_id: string | null;
+  reversal_reason: Generated<string>;
+  version: Generated<number>;
+  created_by: string | null;
+  created_at: Generated<Timestamp>;
+  updated_at: Generated<Timestamp>;
+}
+
+export interface InventoryMovementsTable {
+  id: Generated<string>;
+  organization_id: string;
+  company_id: string;
+  document_id: string;
+  line_number: number;
+  /** receipt | issue | transfer-out | transfer-in | adjustment-in | adjustment-out */
+  movement_type: string;
+  item_id: string;
+  warehouse_id: string;
+  base_unit_id: string;
+  /** in | out — the sign lives here, never in the quantity. */
+  direction: string;
+  /** Always positive. Decimal STRING: an exact quantity is not a float. */
+  quantity: string;
+  unit_cost: string;
+  /** Drives BOTH the subledger value and the journal amount, so they agree. */
+  total_cost: string;
+  /** Frozen at posting: a later mapping change must not restate history. */
+  inventory_account_id: string;
+  offset_account_id: string | null;
+  item_code: Generated<string>;
+  item_name: Generated<string>;
+  warehouse_code: Generated<string>;
+  base_unit_code: Generated<string>;
+  movement_date: string;
+  posting_date: string;
+  status: Generated<string>;
+  reversal_of_movement_id: string | null;
+  reversed_by_movement_id: string | null;
+  created_by: string | null;
+  created_at: Generated<Timestamp>;
+}
+
+export interface InventoryDocumentNumberingTable {
+  organization_id: string;
+  company_id: string;
+  kind: string;
+  prefix: Generated<string>;
+  include_year: Generated<boolean>;
+  sequence_length: Generated<number>;
+  next_sequence: Generated<number>;
+  updated_at: Generated<Timestamp>;
 }

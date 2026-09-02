@@ -34,6 +34,7 @@ import {
   inventoryIsServerAuthoritative,
   serverItemById,
   serverWarehouseById,
+  stockGateway,
 } from './inventoryBackend';
 
 export interface InventoryActionResult {
@@ -220,5 +221,98 @@ export function inventoryActions(): InventoryActions {
     },
 
     canEditCategories: false,
+  };
+}
+
+/* ══ I2 — posting and reversing stock ══════════════════════════════════════ */
+
+export interface StockActionResult extends InventoryActionResult {
+  documentNumber?: string;
+  /** False when an idempotent retry found the document it had already made. */
+  created?: boolean;
+}
+
+export interface StockDocumentDraft {
+  kind: 'receipt' | 'issue' | 'transfer' | 'adjustment';
+  movementDate: string;
+  reference?: string;
+  memo?: string;
+  reason?: string;
+  sourceWarehouseId?: string;
+  destinationWarehouseId?: string;
+  lines: Array<{
+    itemId: string;
+    warehouseId?: string;
+    /** An exact decimal STRING. Never a browser number. */
+    quantity: string;
+    unitCost?: string | null;
+    expenseAccountId?: string | null;
+    direction?: 'in' | 'out';
+  }>;
+}
+
+export interface StockActions {
+  serverBacked: boolean;
+  /**
+   * Post one stock document.
+   *
+   * `idempotencyKey` belongs to the ATTEMPT, not to the call: a retry of the
+   * same attempt must send the same key, which is why the caller mints it and
+   * this does not.
+   */
+  post: (draft: StockDocumentDraft, idempotencyKey: string) => Promise<StockActionResult>;
+  reverse: (id: string, expectedVersion: number, reason: string) => Promise<StockActionResult>;
+  /** False in durable mode: neither has a server workflow. See the constants. */
+  canCount: boolean;
+  canOpenBalances: boolean;
+}
+
+export function stockActions(): StockActions {
+  if (!inventoryIsServerAuthoritative()) {
+    /*
+     * Free Demo keeps the browser posting engine untouched. It is reached
+     * through the store's own document actions, which the demo pages already
+     * call — this seam exists so a DURABLE screen never has to know that.
+     */
+    return {
+      serverBacked: false,
+      post: async () => ({
+        ok: false,
+        error: 'Free Demo posts stock through the browser engine, not this gateway.',
+      }),
+      reverse: async () => ({
+        ok: false,
+        error: 'Free Demo reverses stock through the browser engine, not this gateway.',
+      }),
+      canCount: true,
+      canOpenBalances: true,
+    };
+  }
+
+  return {
+    serverBacked: true,
+
+    post: async (draft, idempotencyKey) => {
+      try {
+        const { document, created } = await stockGateway.post({ ...draft, idempotencyKey });
+        return {
+          ok: true, id: document.id, documentNumber: document.documentNumber, created,
+        };
+      } catch (cause) {
+        return asResult(cause);
+      }
+    },
+
+    reverse: async (id, expectedVersion, reason) => {
+      try {
+        const reversed = await stockGateway.reverse(id, expectedVersion, reason);
+        return { ok: true, id: reversed.id, documentNumber: reversed.documentNumber };
+      } catch (cause) {
+        return asResult(cause);
+      }
+    },
+
+    canCount: false,
+    canOpenBalances: false,
   };
 }

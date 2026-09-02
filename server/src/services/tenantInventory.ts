@@ -378,6 +378,36 @@ export const TENANT_DEPENDENCIES: readonly TenantDependency[] = [
     rationale: 'The held bill sequence for a tenant company.',
   },
   {
+    table: 'inventory_movements',
+    ownershipKey: 'organization_id',
+    kind: 'authoritative',
+    disposition: 'delete',
+    order: 35.92,
+    label: 'Stock movements',
+    crossTenantReachable: false,
+    rationale: 'The immutable quantity ledger. References items, warehouses, units and accounts, so it goes before all of them.',
+  },
+  {
+    table: 'inventory_documents',
+    ownershipKey: 'organization_id',
+    kind: 'authoritative',
+    disposition: 'delete',
+    order: 35.94,
+    label: 'Stock documents',
+    crossTenantReachable: false,
+    rationale: 'Receipts, issues, transfers and adjustments. Deleted after the movements that belong to them.',
+  },
+  {
+    table: 'inventory_document_numbering',
+    ownershipKey: 'organization_id',
+    kind: 'authoritative',
+    disposition: 'delete',
+    order: 35.96,
+    label: 'Stock document numbering',
+    crossTenantReachable: false,
+    rationale: 'Per-company sequence counters; meaningless once the documents are gone.',
+  },
+  {
     table: 'inventory_audit_events',
     ownershipKey: 'organization_id',
     kind: 'authoritative',
@@ -688,6 +718,11 @@ export const DIRECTLY_OWNED_TABLES = [
   'bill_lines',
   'bills',
   'bill_numbering',
+  /* Inventory movements, children first — see migration 038. Before the
+   * documents they belong to and the master data they reference. */
+  'inventory_movements',
+  'inventory_documents',
+  'inventory_document_numbering',
   /* Inventory master data, children first — see migration 037. Before the
    * accounts, tax codes and units these rows reference with ON DELETE RESTRICT. */
   'inventory_audit_events',

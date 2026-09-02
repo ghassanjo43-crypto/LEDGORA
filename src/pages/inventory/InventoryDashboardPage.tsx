@@ -1,20 +1,14 @@
 import { useMemo } from 'react';
-import { useInventoryStore } from '@/store/inventoryStore';
-import { useJournalStore } from '@/store/journalStore';
 import { useStore } from '@/store/useStore';
-import { buildInventoryReconciliation } from '@/lib/inventoryReconciliation';
-import { ENTITY } from '@/lib/inventorySeed';
 import { MetricCard } from '@/components/ui/MetricCard';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { Boxes, PackageX, PackageCheck, Scale } from 'lucide-react';
-import { money, qty, useItemBalances, useSubledgerValue, useMovementLedger } from './InventoryShared';
+import { money, qty, useItemBalances, useSubledgerValue, useMovementLedger, useReconciliation } from './InventoryShared';
 
 export function InventoryDashboardPage() {
   const balances = useItemBalances();
   const subledger = useSubledgerValue();
-  const movements = useInventoryStore((s) => s.movements);
-  const entries = useJournalStore((s) => s.entries);
   const setActiveView = useStore((s) => s.setActiveView);
   const recentLedger = useMovementLedger();
 
@@ -26,10 +20,8 @@ export function InventoryDashboardPage() {
     return { activeCount: active.length, low, out, negative };
   }, [balances]);
 
-  const recon = useMemo(
-    () => buildInventoryReconciliation({ entityId: ENTITY, movements, journalEntries: entries }),
-    [movements, entries],
-  );
+  /* Server books reconcile server figures; Free Demo reconciles its own. */
+  const recon = useReconciliation();
 
   const topValue = useMemo(
     () => [...balances].filter((b) => b.inventoryValue > 0).sort((a, b) => b.inventoryValue - a.inventoryValue).slice(0, 6),

@@ -9,6 +9,112 @@ import { ENTITY } from '@/lib/inventorySeed';
 import type { StockMovement } from '@/types/inventory';
 import { movementItemIdentity, movementLocations, movementMatches, movementReference, movementTypeLabel, signedMovementQuantity } from '@/lib/stockMovementPresentation';
 import { money, qty, useMovementLedger, movementsToCsv, downloadCsv } from './InventoryShared';
+import { useStockDocuments } from '@/services/inventory/useStock';
+import { stockActions } from '@/services/inventory/inventoryActions';
+import { Alert } from '@/components/ui/Alert';
+
+/**
+ * The immutable movement ledger, from whichever engine holds it.
+ *
+ * On server books the browser store is not read at all: `useMovementLedger`
+ * returns nothing there, and this renders the SERVER's documents instead. A
+ * durable subscriber looking at demo movements would be reading another
+ * ledger's history under their own company's name.
+ */
+function DurableMovements() {
+  const { documents, loading, error } = useStockDocuments();
+  const [busy, setBusy] = useState('');
+  const [msg, setMsg] = useState<{ tone: 'error' | 'success'; text: string } | null>(null);
+  const [reason, setReason] = useState('');
+  const [reversing, setReversing] = useState<string | null>(null);
+
+  const reverse = async (id: string, version: number): Promise<void> => {
+    setBusy(id);
+    try {
+      const res = await stockActions().reverse(id, version, reason);
+      /* The SERVER's words: consumed stock, a locked period and a stale version
+       * each say something different. */
+      setMsg(res.ok
+        ? { tone: 'success', text: `Reversed as ${res.documentNumber}.` }
+        : { tone: 'error', text: res.error ?? 'Could not reverse.' });
+      if (res.ok) { setReversing(null); setReason(''); }
+    } finally {
+      setBusy('');
+    }
+  };
+
+  return <div className="space-y-4">
+    {error && <Alert variant="error">{error}</Alert>}
+    {msg && <Alert variant={msg.tone} onClose={() => setMsg(null)}>{msg.text}</Alert>}
+    <Card className="overflow-x-auto"><table className="w-full min-w-[1100px] text-sm">
+      <thead className="bg-slate-50 text-xs uppercase text-slate-500 dark:bg-slate-800/50"><tr>
+        {['Date', 'Document', 'Type', 'Item', 'Warehouse', 'Quantity', 'Unit cost', 'Value', 'Status', ''].map((heading) => (
+          <th key={heading} className={'px-3 py-2 ' + (['Quantity', 'Unit cost', 'Value'].includes(heading) ? 'text-right' : 'text-left')}>{heading}</th>
+        ))}
+      </tr></thead>
+      <tbody>
+        {documents.flatMap((document) => document.movements.map((movement) => (
+          <tr
+            key={movement.id}
+            className={'border-t border-slate-100 dark:border-slate-800 ' + (movement.status === 'reversed' ? 'text-slate-400 line-through' : '')}
+          >
+            <td className="px-3 py-2">{movement.postingDate}</td>
+            <td className="px-3 py-2">
+              <span className="font-medium">{document.documentNumber}</span>
+              <span className="block text-xs text-slate-400">{document.reference || document.kind}</span>
+            </td>
+            <td className="px-3 py-2">
+              <Badge tone={movement.direction === 'in' ? 'green' : 'amber'}>{movement.movementType}</Badge>
+            </td>
+            <td className="px-3 py-2"><span className="font-medium">{movement.itemCode}</span> — {movement.itemName}</td>
+            <td className="px-3 py-2">{movement.warehouseCode}</td>
+            <td className={'px-3 py-2 text-right font-mono ' + (movement.direction === 'in' ? 'text-emerald-600' : 'text-amber-700')}>
+              {movement.direction === 'in' ? '' : '−'}{movement.quantity} {movement.baseUnitCode}
+            </td>
+            <td className="px-3 py-2 text-right font-mono">{money(Number(movement.unitCost))}</td>
+            <td className="px-3 py-2 text-right font-mono">{money(Number(movement.totalCost))}</td>
+            <td className="px-3 py-2"><Badge tone={movement.status === 'posted' ? 'green' : 'slate'}>{movement.status}</Badge></td>
+            <td className="px-3 py-2 text-right">
+              {movement.lineNumber === 1 && document.status === 'posted' && (
+                <Button size="sm" variant="ghost" disabled={busy === document.id} onClick={() => setReversing(document.id)}>
+                  Reverse
+                </Button>
+              )}
+            </td>
+          </tr>
+        )))}
+        {documents.length === 0 && (
+          <tr><td colSpan={10} className="px-4 py-8 text-center text-slate-400">
+            {loading ? 'Loading…' : 'No stock movements.'}
+          </td></tr>
+        )}
+      </tbody>
+    </table></Card>
+
+    {reversing && (
+      <Card className="space-y-3 p-4">
+        <p className="text-sm text-slate-600 dark:text-slate-300">
+          Reversing restores the quantity and the value exactly, at the original cost, and withdraws
+          the journal. Nothing is deleted — both the original and its reversal stay on the record.
+        </p>
+        <label className="text-xs text-slate-500" htmlFor="reverse-reason">Reason (at least five characters)</label>
+        <Input id="reverse-reason" value={reason} onChange={(e) => setReason(e.target.value)} />
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" onClick={() => { setReversing(null); setReason(''); }}>Cancel</Button>
+          <Button
+            disabled={busy === reversing}
+            onClick={() => {
+              const document = documents.find((d) => d.id === reversing);
+              if (document) void reverse(document.id, document.version);
+            }}
+          >
+            Reverse document
+          </Button>
+        </div>
+      </Card>
+    )}
+  </div>;
+}
 
 export function StockMovementsPage() {
   const items = useInventoryStore((state) => state.items);
@@ -24,6 +130,10 @@ export function StockMovementsPage() {
   const [reference, setReference] = useState('');
   const [search, setSearch] = useState('');
   const ledger = useMovementLedger();
+  const { serverBacked } = useStockDocuments();
+
+  /* Server books get the server's ledger; the browser store is not read. */
+  if (serverBacked) return <DurableMovements />;
 
   const itemOptions = useMemo(() => Array.from(new Set(movements.filter((movement) => movement.entityId === ENTITY).map((movement) => movement.itemId))).map((id) => {
     const movement = movements.find((candidate) => candidate.entityId === ENTITY && candidate.itemId === id)!;

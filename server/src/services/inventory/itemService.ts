@@ -418,7 +418,7 @@ export async function updateItem(
   await db.transaction().execute(async (trx) => {
     const current = await trx
       .selectFrom('inventory_items')
-      .select(['id', 'version', 'status', 'item_code', 'item_type', 'is_inventory_tracked', 'valuation_method'])
+      .select(['id', 'version', 'status', 'item_code', 'item_type', 'is_inventory_tracked', 'valuation_method', 'base_unit_id'])
       .where('organization_id', '=', actor.organizationId)
       .where('company_id', '=', actor.companyId)
       .where('id', '=', id)
@@ -454,6 +454,19 @@ export async function updateItem(
           `Item ${current.item_code} already has ${movements} stock movement(s), so its valuation `
           + 'method can no longer change — the cost already posted was computed the old way.',
           { fieldErrors: { valuationMethod: 'Locked once stock has moved.' } },
+        );
+      }
+      /*
+       * And the base unit, for the same reason in a different currency: every
+       * posted quantity is a number OF that unit. Re-denominating the item
+       * would silently reinterpret each of them — ten kilograms becoming ten
+       * boxes — and no stock card could ever be read again.
+       */
+      if (input.baseUnitId !== current.base_unit_id) {
+        throw errors.validation(
+          `Item ${current.item_code} already has ${movements} stock movement(s), so its base unit `
+          + 'can no longer change — every quantity already posted is counted in the old one.',
+          { fieldErrors: { baseUnitId: 'Locked once stock has moved.' } },
         );
       }
     }
@@ -540,16 +553,29 @@ export async function setItemArchived(
 /**
  * How many posted stock movements name this item.
  *
- * Structurally zero in I1 — the table does not exist — and this is the seam I2
- * fills in. It returns 0 rather than throwing so the freeze rules above can be
- * written, tested and shipped now instead of being remembered later.
+ * The seam I1 left returning zero, now reading the ledger I2 built. Everything
+ * the freeze rules above were written against — tracked status and valuation
+ * method locking once stock has moved — starts refusing for real from here,
+ * without a line of those rules changing.
+ *
+ * Reversed movements still count. A reversal restores the position but does not
+ * unhappen the history: an item that has been received and reversed has a stock
+ * card, and re-typing it as a service would leave that card describing
+ * something that cannot have one.
  */
 export async function countMovementsFor(
-  _db: Kysely<Database>,
-  _actor: InventoryActor,
-  _itemId: string,
+  db: Kysely<Database>,
+  actor: InventoryActor,
+  itemId: string,
 ): Promise<number> {
-  return 0;
+  const row = await db
+    .selectFrom('inventory_movements')
+    .select((eb) => eb.fn.countAll<string>().as('n'))
+    .where('organization_id', '=', actor.organizationId)
+    .where('company_id', '=', actor.companyId)
+    .where('item_id', '=', itemId)
+    .executeTakeFirst();
+  return Number(row?.n ?? '0');
 }
 
 export async function countItems(

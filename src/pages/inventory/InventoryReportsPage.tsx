@@ -1,30 +1,23 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { useInventoryStore } from '@/store/inventoryStore';
-import { useJournalStore } from '@/store/journalStore';
 import { useStore } from '@/store/useStore';
-import { buildInventoryReconciliation } from '@/lib/inventoryReconciliation';
-import { ENTITY } from '@/lib/inventorySeed';
 import { Card } from '@/components/ui/Card';
 import { Alert } from '@/components/ui/Alert';
 import { Badge } from '@/components/ui/Badge';
 import { Input } from '@/components/ui/Input';
-import { money, qty, useItemBalances } from './InventoryShared';
+import { money, qty, useItemBalances, useReconciliation } from './InventoryShared';
 
 type Report = 'valuation' | 'reconciliation' | 'registers';
 
 export function InventoryReportsPage() {
   const [tab, setTab] = useState<Report>('reconciliation');
   const balances = useItemBalances();
-  const movements = useInventoryStore((s) => s.movements);
   const documents = useInventoryStore((s) => s.documents);
-  const entries = useJournalStore((s) => s.entries);
   const accounts = useStore((s) => s.accounts);
   const [asOf, setAsOf] = useState('');
 
-  const recon = useMemo(
-    () => buildInventoryReconciliation({ entityId: ENTITY, movements, journalEntries: entries, asOfDate: asOf || undefined }),
-    [movements, entries, asOf],
-  );
+  /* Server books reconcile server figures; Free Demo reconciles its own. */
+  const recon = useReconciliation(asOf);
   const accountName = (id: string): string => accounts.find((a) => a.id === id)?.code ?? id;
 
   return (
@@ -52,9 +45,9 @@ export function InventoryReportsPage() {
             <table className="w-full text-sm">
               <thead className="bg-slate-50 text-xs uppercase text-slate-500 dark:bg-slate-800/50"><tr><th className="px-4 py-2 text-left">Inventory account</th><th className="px-4 py-2 text-right">Subledger</th><th className="px-4 py-2 text-right">GL balance</th><th className="px-4 py-2 text-right">Difference</th></tr></thead>
               <tbody>
-                {recon.byAccount.map((r) => (
+                {recon.rows.map((r) => (
                   <tr key={r.accountId} className="border-t border-slate-100 dark:border-slate-800">
-                    <td className="px-4 py-2 font-medium">{accountName(r.accountId)}</td>
+                    <td className="px-4 py-2 font-medium">{recon.serverBacked ? r.label : accountName(r.accountId)}</td>
                     <td className="px-4 py-2 text-right">{money(r.subledgerValue)}</td>
                     <td className="px-4 py-2 text-right">{money(r.glBalance)}</td>
                     <td className={'px-4 py-2 text-right font-medium ' + (Math.abs(r.difference) > 0.005 ? 'text-red-600' : 'text-emerald-600')}>{money(r.difference)}</td>

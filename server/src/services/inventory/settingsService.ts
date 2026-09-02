@@ -42,6 +42,8 @@ export interface InventorySettingsInput {
   inventoryGainAccountId?: string | null;
   inventoryLossAccountId?: string | null;
   stockInTransitAccountId?: string | null;
+  /** Where a standalone receipt's offset lands. Required before receiving. */
+  goodsReceivedNotInvoicedAccountId?: string | null;
 }
 
 export interface InventorySettingsRecord extends Required<
@@ -61,6 +63,7 @@ const EMPTY: InventorySettingsRecord = {
   inventoryGainAccountId: null,
   inventoryLossAccountId: null,
   stockInTransitAccountId: null,
+  goodsReceivedNotInvoicedAccountId: null,
   version: 0,
 };
 
@@ -75,6 +78,7 @@ const hydrate = (row: any): InventorySettingsRecord => ({
   inventoryGainAccountId: row.inventory_gain_account_id ?? null,
   inventoryLossAccountId: row.inventory_loss_account_id ?? null,
   stockInTransitAccountId: row.stock_in_transit_account_id ?? null,
+  goodsReceivedNotInvoicedAccountId: row.goods_received_not_invoiced_account_id ?? null,
   version: Number(row.version),
 });
 
@@ -145,6 +149,15 @@ async function assertReferences(
   await assertAccountForRole(
     db, actor, 'transit', input.stockInTransitAccountId, 'stockInTransitAccountId',
   );
+  /*
+   * The receipt offset. Deliberately typeless -- a business may accrue goods
+   * received into a liability or hold them in a clearing asset -- but the
+   * shared rules still apply: same company, active, postable, never cash.
+   */
+  await assertAccountForRole(
+    db, actor, 'grni', input.goodsReceivedNotInvoicedAccountId,
+    'goodsReceivedNotInvoicedAccountId',
+  );
 }
 
 export async function updateSettings(
@@ -166,6 +179,7 @@ export async function updateSettings(
     inventory_gain_account_id: input.inventoryGainAccountId ?? null,
     inventory_loss_account_id: input.inventoryLossAccountId ?? null,
     stock_in_transit_account_id: input.stockInTransitAccountId ?? null,
+    goods_received_not_invoiced_account_id: input.goodsReceivedNotInvoicedAccountId ?? null,
     updated_by: actor.userId,
   };
 

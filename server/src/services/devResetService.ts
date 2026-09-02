@@ -348,6 +348,29 @@ const RESET_PLAN: readonly PlanEntry[] = [
    * Supplier bills, children first. The lines carry foreign keys to `accounts`
    * and the header to `business_parties`, so the whole group goes before both.
    */
+  /* Stock movements, children first — see migration 038. Before the documents
+   * and the master data they reference with ON DELETE RESTRICT. */
+  {
+    table: 'inventory_movements',
+    action: 'scoped_delete',
+    order: 28.72,
+    label: 'Stock movements',
+    why: 'The quantity ledger. References items, warehouses, units and accounts, so it goes first.',
+  },
+  {
+    table: 'inventory_documents',
+    action: 'scoped_delete',
+    order: 28.74,
+    label: 'Stock documents',
+    why: 'Deleted after the movements that belong to them.',
+  },
+  {
+    table: 'inventory_document_numbering',
+    action: 'scoped_delete',
+    order: 28.76,
+    label: 'Stock document numbering',
+    why: 'Sequence counters; meaningless once the documents are gone.',
+  },
   /*
    * Inventory master data, children first — see migration 037. Before the
    * accounts, tax codes and units these rows reference with ON DELETE RESTRICT.
@@ -937,6 +960,12 @@ export async function executeReset(
      * to.
      */
     await sql`SET LOCAL ledgora.allow_legal_purge = 'on'`.execute(trx);
+    /*
+     * And the stock ledger, for the same reason and on the same terms. Movements
+     * are immutable evidence in every other circumstance; a workspace being
+     * destroyed is the one circumstance where they must go with it.
+     */
+    await sql`SET LOCAL ledgora.allow_stock_purge = 'on'`.execute(trx);
 
     for (const entry of RESET_SEQUENCE) {
       if (entry.action === 'truncate') {

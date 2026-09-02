@@ -35,6 +35,8 @@ import * as items from '../services/inventory/itemService.js';
 import * as warehouses from '../services/inventory/warehouseService.js';
 import * as units from '../services/inventory/unitService.js';
 import * as settings from '../services/inventory/settingsService.js';
+import * as stock from '../services/inventory/stockDocumentService.js';
+import * as reports from '../services/inventory/stockReportService.js';
 
 const uuid = z.string().uuid();
 const optionalUuid = uuid.nullish();
@@ -84,6 +86,48 @@ const unitSchema = z.object({
   decimalPlaces: z.number().int().min(0).max(6).optional(),
 }).strict();
 
+/*
+ * Money and quantity arrive as TEXT and stay text. A JSON number has already
+ * lost the third decimal place by the time it reaches here, and a quantity is
+ * as exact a figure as an amount.
+ */
+const decimalString = z.string().regex(/^\d+(\.\d+)?$/, 'Enter a plain positive decimal.').max(40);
+
+const lineSchema = z.object({
+  itemId: uuid,
+  warehouseId: uuid.optional(),
+  quantity: decimalString,
+  unitCost: decimalString.nullish(),
+  expenseAccountId: optionalUuid,
+  direction: z.enum(['in', 'out']).optional(),
+}).strict();
+
+/**
+ * The document body.
+ *
+ * `.strict()` is doing real work: a caller sending a lot, a serial, a bin, an
+ * alternate unit, a currency or a bill reference is refused by name rather than
+ * having the field quietly dropped, which is how a client comes to believe this
+ * slice tracks something it does not.
+ */
+const documentSchema = z.object({
+  kind: z.enum(['receipt', 'issue', 'transfer', 'adjustment']),
+  movementDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  postingDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  reference: z.string().max(120).optional(),
+  memo: z.string().max(2000).optional(),
+  reason: z.string().max(500).optional(),
+  idempotencyKey: z.string().min(1).max(128),
+  sourceWarehouseId: uuid.optional(),
+  destinationWarehouseId: uuid.optional(),
+  lines: z.array(lineSchema).min(1).max(200),
+}).strict();
+
+const reverseStockSchema = z.object({
+  expectedVersion: z.number().int().min(1),
+  reason: z.string().min(1).max(500),
+}).strict();
+
 const settingsSchema = z.object({
   defaultValuationMethod: z.enum(['weighted-average', 'standard']).optional(),
   defaultWarehouseId: optionalUuid,
@@ -91,6 +135,7 @@ const settingsSchema = z.object({
   defaultCogsAccountId: optionalUuid,
   defaultSalesAccountId: optionalUuid,
   defaultPurchaseAccountId: optionalUuid,
+  goodsReceivedNotInvoicedAccountId: optionalUuid,
   inventoryGainAccountId: optionalUuid,
   inventoryLossAccountId: optionalUuid,
   stockInTransitAccountId: optionalUuid,
@@ -324,7 +369,97 @@ export async function inventoryRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
-  /* ── The accounting profile ─────────────────────────────────────────────── */
+  /* -- Stock documents ---------------------------------------------------- */
+
+  /*
+   * Posting moves the LEDGER, so it needs `post` rather than `edit` -- the same
+   * separation the general journal, invoices and bills already make. Reversing
+   * is the same class of act as voiding.
+   */
+  const postStock = requireOwnOrganizationPermission('inventory', 'post');
+  const voidStock = requireOwnOrganizationPermission('inventory', 'void');
+
+  app.get('/api/inventory/documents', { preHandler: onBooks(viewInventory) }, async (request, reply) => {
+    const query = request.query as { kind?: string; status?: string; search?: string; limit?: string };
+    return reply.send({
+      documents: await stock.listDocuments(app.db, actorOf(request), {
+        kind: query.kind as stock.DocumentKind | undefined,
+        status: query.status as 'posted' | 'reversed' | undefined,
+        search: query.search,
+        limit: query.limit ? Number(query.limit) : undefined,
+      }),
+    });
+  });
+
+  app.get(
+    '/api/inventory/documents/:id',
+    { preHandler: onBooks(viewInventory) },
+    async (request, reply) =>
+      reply.send({ document: await stock.getDocument(app.db, actorOf(request), idOf(request)) }),
+  );
+
+  app.post('/api/inventory/documents', { preHandler: onBooks(postStock) }, async (request, reply) => {
+    const body = parse(documentSchema, request.body ?? {});
+    const { document, created } = await stock.postDocument(app.db, actorOf(request), body);
+    /*
+     * 200 rather than 201 when the key had already posted: the caller's retry
+     * succeeded, and reporting it as a fresh creation would have them believe
+     * they now hold two documents.
+     */
+    return reply.code(created ? 201 : 200).send({ document, created });
+  });
+
+  app.post(
+    '/api/inventory/documents/:id/reverse',
+    { preHandler: onBooks(voidStock) },
+    async (request, reply) => {
+      const body = parse(reverseStockSchema, request.body ?? {});
+      return reply.send({
+        document: await stock.reverseDocument(
+          app.db, actorOf(request), idOf(request), body.expectedVersion, body.reason,
+        ),
+      });
+    },
+  );
+
+  /* -- Reads derived from the ledger, never from a cache ------------------- */
+
+  app.get('/api/inventory/stock-on-hand', { preHandler: onBooks(viewInventory) }, async (request, reply) => {
+    const query = request.query as {
+      itemId?: string; warehouseId?: string; asOfDate?: string; includeEmpty?: string;
+    };
+    return reply.send({
+      rows: await reports.stockOnHand(app.db, actorOf(request), {
+        itemId: query.itemId,
+        warehouseId: query.warehouseId,
+        asOfDate: query.asOfDate,
+        includeEmpty: query.includeEmpty === 'true',
+      }),
+    });
+  });
+
+  app.get('/api/inventory/valuation', { preHandler: onBooks(viewInventory) }, async (request, reply) => {
+    const query = request.query as { asOfDate?: string };
+    return reply.send(await reports.valuation(app.db, actorOf(request), { asOfDate: query.asOfDate }));
+  });
+
+  app.get(
+    '/api/inventory/items/:id/stock-card',
+    { preHandler: onBooks(viewInventory) },
+    async (request, reply) => {
+      const query = request.query as { warehouseId?: string; from?: string; to?: string };
+      return reply.send({
+        entries: await reports.stockCard(app.db, actorOf(request), idOf(request), query),
+      });
+    },
+  );
+
+  app.get('/api/inventory/reconciliation', { preHandler: onBooks(viewInventory) }, async (request, reply) => {
+    const query = request.query as { asOfDate?: string };
+    return reply.send(await reports.reconcile(app.db, actorOf(request), { asOfDate: query.asOfDate }));
+  });
+
+  /* -- The accounting profile --------------------------------------------- */
 
   app.get('/api/inventory/settings', { preHandler: onBooks(viewInventory) }, async (request, reply) =>
     reply.send({ settings: await settings.getSettings(app.db, actorOf(request)) }));

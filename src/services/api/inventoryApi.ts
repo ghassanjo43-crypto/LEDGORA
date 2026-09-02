@@ -125,6 +125,8 @@ export interface ServerInventorySettings {
   inventoryGainAccountId: string | null;
   inventoryLossAccountId: string | null;
   stockInTransitAccountId: string | null;
+  /** Where a standalone receipt's offset lands. Required before receiving. */
+  goodsReceivedNotInvoicedAccountId: string | null;
   /** 0 means "no profile saved yet", and is what a first save must send. */
   version: number;
 }
@@ -236,4 +238,186 @@ export const inventorySettingsApi = {
     (await api.patch<{ settings: ServerInventorySettings }>(
       '/api/inventory/settings', { ...input, expectedVersion },
     )).settings,
+};
+
+/* ══ I2 — the movement ledger ═══════════════════════════════════════════════
+ *
+ * Quantities are exact decimal STRINGS on the way in and out, exactly like
+ * money. A quantity that passed through a JSON number would arrive at the
+ * server already rounded, and the server would then post a journal against it.
+ */
+
+export type StockDocumentKind = 'receipt' | 'issue' | 'transfer' | 'adjustment';
+
+export interface ServerMovement {
+  id: string;
+  lineNumber: number;
+  movementType: string;
+  itemId: string;
+  itemCode: string;
+  itemName: string;
+  warehouseId: string;
+  warehouseCode: string;
+  baseUnitId: string;
+  baseUnitCode: string;
+  direction: 'in' | 'out';
+  quantity: string;
+  unitCost: string;
+  totalCost: string;
+  inventoryAccountId: string;
+  offsetAccountId: string | null;
+  movementDate: string;
+  postingDate: string;
+  status: string;
+  reversalOfMovementId: string | null;
+  reversedByMovementId: string | null;
+}
+
+export interface ServerStockDocument {
+  id: string;
+  documentNumber: string;
+  kind: string;
+  movementDate: string;
+  postingDate: string;
+  reference: string;
+  memo: string;
+  reason: string;
+  status: string;
+  journalEntryId: string | null;
+  reversalOfDocumentId: string | null;
+  reversedByDocumentId: string | null;
+  reversalReason: string;
+  version: number;
+  createdAt: string | null;
+  movements: ServerMovement[];
+}
+
+export interface StockLineInput {
+  itemId: string;
+  warehouseId?: string;
+  quantity: string;
+  unitCost?: string | null;
+  expenseAccountId?: string | null;
+  direction?: 'in' | 'out';
+}
+
+export interface StockDocumentInput {
+  kind: StockDocumentKind;
+  movementDate: string;
+  postingDate?: string;
+  reference?: string;
+  memo?: string;
+  reason?: string;
+  /** Makes a retry safe. The caller mints it once per attempt at a document. */
+  idempotencyKey: string;
+  sourceWarehouseId?: string;
+  destinationWarehouseId?: string;
+  lines: StockLineInput[];
+}
+
+export interface StockOnHandRow {
+  itemId: string;
+  itemCode: string;
+  itemName: string;
+  warehouseId: string;
+  warehouseCode: string;
+  baseUnitCode: string;
+  quantity: string;
+  value: string;
+}
+
+export interface ValuationRow {
+  itemId: string;
+  itemCode: string;
+  itemName: string;
+  baseUnitCode: string;
+  quantity: string;
+  value: string;
+  averageCost: string | null;
+  inventoryAccountId: string;
+}
+
+export interface StockCardEntry {
+  movementId: string;
+  documentId: string;
+  documentNumber: string;
+  kind: string;
+  movementType: string;
+  warehouseId: string;
+  warehouseCode: string;
+  direction: 'in' | 'out';
+  quantity: string;
+  unitCost: string;
+  totalCost: string;
+  movementDate: string;
+  postingDate: string;
+  runningQuantity: string;
+  runningValue: string;
+}
+
+export interface ReconciliationRow {
+  accountId: string;
+  accountCode: string;
+  accountName: string;
+  subledgerValue: string;
+  generalLedgerBalance: string;
+  difference: string;
+}
+
+export const stockApi = {
+  listDocuments: async (params: {
+    kind?: StockDocumentKind; status?: string; search?: string; limit?: number;
+  } = {}): Promise<ServerStockDocument[]> =>
+    (await api.get<{ documents: ServerStockDocument[] }>(
+      `/api/inventory/documents${query(params)}`,
+    )).documents,
+
+  getDocument: async (id: string): Promise<ServerStockDocument> =>
+    (await api.get<{ document: ServerStockDocument }>(`/api/inventory/documents/${id}`)).document,
+
+  /**
+   * Post one stock document.
+   *
+   * `created` is false when the idempotency key had already posted — the retry
+   * succeeded, and the caller holds one document rather than two.
+   */
+  post: async (
+    input: StockDocumentInput,
+  ): Promise<{ document: ServerStockDocument; created: boolean }> =>
+    api.post<{ document: ServerStockDocument; created: boolean }>(
+      '/api/inventory/documents', input,
+    ),
+
+  reverse: async (
+    id: string, expectedVersion: number, reason: string,
+  ): Promise<ServerStockDocument> =>
+    (await api.post<{ document: ServerStockDocument }>(
+      `/api/inventory/documents/${id}/reverse`, { expectedVersion, reason },
+    )).document,
+
+  stockOnHand: async (params: {
+    itemId?: string; warehouseId?: string; asOfDate?: string; includeEmpty?: boolean;
+  } = {}): Promise<StockOnHandRow[]> =>
+    (await api.get<{ rows: StockOnHandRow[] }>(
+      `/api/inventory/stock-on-hand${query(params)}`,
+    )).rows,
+
+  valuation: async (params: { asOfDate?: string } = {}):
+  Promise<{ rows: ValuationRow[]; totalValue: string }> =>
+    api.get<{ rows: ValuationRow[]; totalValue: string }>(
+      `/api/inventory/valuation${query(params)}`,
+    ),
+
+  stockCard: async (itemId: string, params: {
+    warehouseId?: string; from?: string; to?: string;
+  } = {}): Promise<StockCardEntry[]> =>
+    (await api.get<{ entries: StockCardEntry[] }>(
+      `/api/inventory/items/${itemId}/stock-card${query(params)}`,
+    )).entries,
+
+  reconciliation: async (params: { asOfDate?: string } = {}):
+  Promise<{ asOfDate: string | null; rows: ReconciliationRow[]; balanced: boolean }> =>
+    api.get<{ asOfDate: string | null; rows: ReconciliationRow[]; balanced: boolean }>(
+      `/api/inventory/reconciliation${query(params)}`,
+    ),
 };

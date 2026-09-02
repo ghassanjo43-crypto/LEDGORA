@@ -1122,6 +1122,12 @@ async function deleteAccountTransaction(
      * quietly rewritten on the way past.
      */
     await sql`SET LOCAL ledgora.allow_legal_purge = 'on'`.execute(trx);
+    /*
+     * And the stock ledger, for the same reason and on the same terms. Movements
+     * are immutable evidence in every other circumstance; a workspace being
+     * destroyed is the one circumstance where they must go with it.
+     */
+    await sql`SET LOCAL ledgora.allow_stock_purge = 'on'`.execute(trx);
     const user = await trx
       .selectFrom('users')
       .selectAll()
@@ -1623,6 +1629,12 @@ async function purgeSubscriberTransaction(
      * somebody agreed to on the way past.
      */
     await sql`SET LOCAL ledgora.allow_legal_purge = 'on'`.execute(trx);
+    /*
+     * And the stock ledger, for the same reason and on the same terms. Movements
+     * are immutable evidence in every other circumstance; a workspace being
+     * destroyed is the one circumstance where they must go with it.
+     */
+    await sql`SET LOCAL ledgora.allow_stock_purge = 'on'`.execute(trx);
 
     const organization = await trx
       .selectFrom('organizations')

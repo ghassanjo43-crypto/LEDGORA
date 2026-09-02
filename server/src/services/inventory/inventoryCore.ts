@@ -87,6 +87,12 @@ export function assertVersion(current: number, expected: number): void {
  * `inventory`, and it is a different role precisely because the two must not be
  * confused by a form.
  */
+interface AccountRoleSpec {
+  /** The ledger type this role demands, or null where more than one is defensible. */
+  type: string | null;
+  label: string;
+}
+
 export const ACCOUNT_ROLES = {
   inventory: { type: 'asset', label: 'inventory asset' },
   cogs: { type: 'expense', label: 'cost of sales' },
@@ -96,7 +102,10 @@ export const ACCOUNT_ROLES = {
   gain: { type: 'income', label: 'inventory gain' },
   loss: { type: 'expense', label: 'inventory loss' },
   transit: { type: 'asset', label: 'stock in transit' },
-} as const;
+  /* No required type: goods received may accrue as a liability or sit in a
+   * clearing asset, and both are defensible. Everything else still applies. */
+  grni: { type: null, label: 'goods received not invoiced' },
+} satisfies Record<string, AccountRoleSpec>;
 
 export type AccountRole = keyof typeof ACCOUNT_ROLES;
 
@@ -136,7 +145,7 @@ export async function assertAccountForRole(
     );
   }
 
-  if (account.account_type !== spec.type) {
+  if (spec.type && account.account_type !== spec.type) {
     throw errors.validation(
       `${account.account_code} (${account.account_name}) is ${account.account_type}, and the `
       + `${spec.label} account must be ${spec.type}. Mapping it here would post inventory into a `
