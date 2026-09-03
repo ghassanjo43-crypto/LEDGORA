@@ -179,6 +179,9 @@ function computeTotals(lines: Json[]): {
       lineSubtotal: D3(gross), lineNet: D3(net),
       taxableAmount: D3(net), taxAmount: D3(tax), grossAmount: D3(net + tax),
       taxCodeId: line.taxCodeId ?? null,
+      /* I3: what the line bought into stock, echoed so a test can see it. */
+      itemId: line.itemId ?? null,
+      warehouseId: line.warehouseId ?? null,
       /* Frozen at posting on the real server; the shape is what matters here. */
       taxSnapshot: line.taxCodeId ? { rate: D3(rate * 100) } : null,
     } as Json;

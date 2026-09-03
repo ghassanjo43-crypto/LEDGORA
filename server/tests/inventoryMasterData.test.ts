@@ -706,9 +706,13 @@ describe('migration 037', () => {
   it('rolls back cleanly when the registers are empty, and replays', async () => {
     const migrator = createMigrator(ctx.db);
 
-    /* 038 sits on top of 037 now, so it comes off first. Asserting the name
-     * rather than a count is what makes a later migration fail here loudly
-     * instead of silently rolling back something else. */
+    /* Each later migration comes off first. Asserting the name rather than a
+     * count is what makes a new one fail here loudly instead of silently
+     * rolling back something else. */
+    const stocked = await migrator.migrateDown();
+    expect(stocked.error).toBeUndefined();
+    expect(stocked.results?.[0]?.migrationName).toBe('039_stocked_bills');
+
     const movements = await migrator.migrateDown();
     expect(movements.error).toBeUndefined();
     expect(movements.results?.[0]?.migrationName).toBe('038_inventory_movements');
@@ -743,8 +747,10 @@ describe('migration 037', () => {
     expect(created.statusCode, created.body).toBe(201);
 
     const migrator = createMigrator(ctx.db);
-    /* The movement ledger is empty, so 038 comes off without complaint; 037 is
-     * the one holding the catalogue this test is about. */
+    /* Nothing stocked and no movements, so 039 and 038 come off without
+     * complaint; 037 is the one holding the catalogue this test is about. */
+    const stocked = await migrator.migrateDown();
+    expect(stocked.error).toBeUndefined();
     const movements = await migrator.migrateDown();
     expect(movements.error).toBeUndefined();
 
@@ -763,6 +769,10 @@ describe('migration 037', () => {
     await call('GET', '/api/inventory/units', user);
 
     const migrator = createMigrator(ctx.db);
+    const stocked = await migrator.migrateDown();
+    expect(stocked.error).toBeUndefined();
+    expect(stocked.results?.[0]?.migrationName).toBe('039_stocked_bills');
+
     const movements = await migrator.migrateDown();
     expect(movements.error).toBeUndefined();
     expect(movements.results?.[0]?.migrationName).toBe('038_inventory_movements');

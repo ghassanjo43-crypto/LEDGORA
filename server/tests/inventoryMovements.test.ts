@@ -880,6 +880,12 @@ describe('the I2 boundary', () => {
 describe('migration 038', () => {
   it('rolls back and reapplies when the ledger is empty', async () => {
     const migrator = createMigrator(ctx.db);
+
+    /* 039 sits on top now, so it comes off first. */
+    const stocked = await migrator.migrateDown();
+    expect(stocked.error).toBeUndefined();
+    expect(stocked.results?.[0]?.migrationName).toBe('039_stocked_bills');
+
     const down = await migrator.migrateDown();
     expect(down.error).toBeUndefined();
     expect(down.results?.[0]?.migrationName).toBe('038_inventory_movements');
@@ -898,7 +904,13 @@ describe('migration 038', () => {
     const b = await books('Rollback');
     await receipt(b, '2', '1.000');
 
-    const down = await createMigrator(ctx.db).migrateDown();
+    const migrator = createMigrator(ctx.db);
+    /* Nothing was bought on a bill here, so 039 comes off cleanly; 038 is the
+     * one holding the movements this test is about. */
+    const stocked = await migrator.migrateDown();
+    expect(stocked.error).toBeUndefined();
+
+    const down = await migrator.migrateDown();
     expect(down.error).toBeDefined();
     expect(String((down.error as Error).message)).toMatch(/Refusing to roll back 038/);
 

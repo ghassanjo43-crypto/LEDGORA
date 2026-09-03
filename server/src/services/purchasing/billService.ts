@@ -45,6 +45,14 @@ import { toCalendarDate, toCalendarDateOrNull } from '../accounting/calendarDate
 import * as Money from '../accounting/money.js';
 import { postSourceJournalIn } from '../accounting/sourcePostingService.js';
 import { reverseJournalIn } from '../accounting/journalService.js';
+import {
+  postBillReceipt,
+  reverseBillReceipt,
+  resolveStockedItem,
+  resolveStockedWarehouse,
+  type BillReceiptLine,
+  type ResolvedStockedItem,
+} from '../inventory/billReceipt.js';
 import { assertNoLiveAllocations } from './paymentService.js';
 import * as SalesTax from '../accounting/salesTax.js';
 import {
@@ -150,7 +158,17 @@ const WITHHOLDING_FIELDS = ['withholdingTaxRate', 'withholdingTaxAmount'];
 
 export interface BillLineInput {
   description?: string;
+  /**
+   * Where the line posts.
+   *
+   * On a STOCKED line this is ignored and replaced by the item's own inventory
+   * account: the journal debits what the line says, so letting a caller name
+   * something else would credit the payable while debiting anything at all.
+   */
   accountId: string;
+  /** Naming an item makes the line stocked. Both or neither, with the warehouse. */
+  itemId?: string | null;
+  warehouseId?: string | null;
   /** The tax CODE, and nothing else about the tax. */
   taxCodeId?: string | null;
   /** Decimal STRINGS throughout. See `money.ts` for why these are never numbers. */
@@ -399,12 +417,31 @@ function assertWithinBoundary(input: BillInput): void {
     }
 
     /*
-     * Stock is refused by the SHAPE of the line, not by a flag the client sets.
-     * A line naming an item or a warehouse moves stock; that is a property of
-     * what was sent rather than a claim about it, which is what stops a caller
-     * marking a stocked line "not stock" to slip past the subledger.
+     * `itemId` and `warehouseId` are now supported: I3 brought stocked
+     * purchasing onto the server, and a line naming both is a purchase into
+     * stock. Both or neither — a line that names what arrived but not where it
+     * went implies a movement nobody could write.
      */
-    for (const field of ['itemId', 'inventoryItemId', 'warehouseId', 'inventoryReceiptMode', 'capitalAssetId']) {
+    if (Boolean(raw.itemId) !== Boolean(raw.warehouseId)) {
+      throw errors.validation(
+        'A stocked bill line needs both an item and a warehouse: one says what arrived, the other '
+        + 'says where it went, and a movement needs both. Nothing has been saved.',
+        {
+          fieldErrors: {
+            [`lines.${at}.${raw.itemId ? 'warehouseId' : 'itemId'}`]:
+              raw.itemId ? 'Choose a warehouse.' : 'Choose an item.',
+          },
+        },
+      );
+    }
+
+    /*
+     * These three remain refused. They are browser-only shapes for a
+     * receipt-first workflow this product has never implemented — the
+     * recognition point is the BILL — and accepting one would imply a goods
+     * receipt, a clearing account and a match that do not exist here.
+     */
+    for (const field of ['inventoryItemId', 'inventoryReceiptMode', 'capitalAssetId']) {
       if (raw[field]) {
         throw errors.validation(UNSUPPORTED_INVENTORY, {
           fieldErrors: { [`lines.${at}.${field}`]: 'Remove the stock reference, or record it from a demo workspace.' },
@@ -735,6 +772,16 @@ function assertLineAccount(account: AccountRecord | undefined, at: number): void
   }
 }
 
+/**
+ * The accounts a set of lines may debit.
+ *
+ * A STOCKED line is skipped: its account is not the caller's to choose. The
+ * item's own inventory account is forced onto the line as it is written, and
+ * that account is validated here on the way to posting, when it is the one
+ * actually on the row. Checking the request's account too would refuse a bill
+ * over a field the server is about to replace — and refuse it for being a bank
+ * account when nothing was ever going to debit the bank.
+ */
 async function assertLineAccountsArePostable(
   db: Executor,
   actor: AccountingActor,
@@ -747,6 +794,7 @@ async function assertLineAccountsArePostable(
    * about whether an account may receive a posting. */
   const accounts = await loadAccountsForPosting(db, actor.organizationId, actor.companyId, ids);
   for (const [index, line] of lines.entries()) {
+    if ((line as { itemId?: string | null }).itemId) continue;
     assertLineAccount(accounts.get(line.accountId), index + 1);
   }
 }
@@ -1062,13 +1110,34 @@ async function replaceLines(
         `Line ${index + 1}: unitPrice carries more decimal places than this currency allows.`,
       );
     }
+
+    /*
+     * A STOCKED line posts to the item's own inventory account, whatever the
+     * request said.
+     *
+     * The journal debits the account recorded on the line, so a caller that
+     * could choose it could credit the payable while debiting anything at all —
+     * and the movement would then describe stock the ledger never recognised.
+     * Resolving it here means the line, the journal and the movement cannot
+     * disagree, because only one of them decides.
+     */
+    let accountId = value.accountId;
+    if (value.itemId && value.warehouseId) {
+      const scope = { ...actor, requestId: actor.requestId ?? undefined };
+      const item = await resolveStockedItem(trx, scope, value.itemId, index + 1);
+      await resolveStockedWarehouse(trx, scope, value.warehouseId, index + 1);
+      accountId = item.inventoryAccountId;
+    }
+
     await trx.insertInto('bill_lines').values({
       organization_id: actor.organizationId,
       company_id: actor.companyId,
       bill_id: billId,
       line_number: index + 1,
       description: value.description ?? '',
-      account_id: value.accountId,
+      account_id: accountId,
+      item_id: value.itemId ?? null,
+      warehouse_id: value.warehouseId ?? null,
       quantity: value.quantity ?? '0',
       unit: value.unit ?? '',
       unit_price: value.unitPrice ?? '0',
@@ -1166,15 +1235,17 @@ async function lockBill(
 ): Promise<{
   id: string; version: number; status: SupplierBillStatus; supplier_id: string;
   bill_number: string; supplier_invoice_number: string; issuing_entity_id: string;
-  posting_date: string | Date; currency: string; journal_entry_id: string | null;
+  bill_date: string | Date; posting_date: string | Date; currency: string;
+  journal_entry_id: string | null;
 }> {
   const { rows } = await sql<{
     id: string; version: number; status: SupplierBillStatus; supplier_id: string;
     bill_number: string; supplier_invoice_number: string; issuing_entity_id: string;
-    posting_date: string | Date; currency: string; journal_entry_id: string | null;
+    bill_date: string | Date; posting_date: string | Date; currency: string;
+  journal_entry_id: string | null;
   }>`
     SELECT id, version, status, supplier_id, bill_number, supplier_invoice_number,
-           issuing_entity_id, posting_date, currency, journal_entry_id
+           issuing_entity_id, bill_date, posting_date, currency, journal_entry_id
       FROM bills
      WHERE organization_id = ${actor.organizationId}
        AND company_id = ${actor.companyId}
@@ -1566,6 +1637,71 @@ export async function postBill(
         .execute();
     }
 
+    /*
+     * ══ The stock this bill bought ═══════════════════════════════════════════
+     *
+     * After the journal, and inside the same transaction, so the movements and
+     * the entry that accounts for them commit together or not at all. The
+     * document created here carries THIS journal rather than posting one of its
+     * own — the bill has already debited inventory and credited the payable, and
+     * a second entry would double both.
+     *
+     * Each movement is costed at its line's TAXABLE amount, which is the exact
+     * figure the journal above debited. One number, one debit, one movement: the
+     * subledger and the general ledger cannot drift apart because they are
+     * reading the same thing.
+     */
+    const stockedLines = lines.filter((line) => line.item_id && line.warehouse_id);
+    if (stockedLines.length > 0) {
+      const inventoryActor = {
+        organizationId: actor.organizationId,
+        companyId: actor.companyId,
+        userId: actor.userId,
+        name: actor.name,
+        requestId: actor.requestId ?? undefined,
+      };
+
+      /* Re-resolved at POSTING time: an item can be archived, re-typed as a
+       * service or have its account withdrawn between the draft and here. */
+      const items = new Map<string, ResolvedStockedItem>();
+      const warehouses = new Map<string, { id: string; code: string }>();
+      const receiptLines: BillReceiptLine[] = [];
+
+      for (const line of stockedLines) {
+        const at = Number(line.line_number);
+        if (!items.has(line.item_id!)) {
+          items.set(line.item_id!, await resolveStockedItem(trx, inventoryActor, line.item_id!, at));
+        }
+        if (!warehouses.has(line.warehouse_id!)) {
+          warehouses.set(
+            line.warehouse_id!,
+            await resolveStockedWarehouse(trx, inventoryActor, line.warehouse_id!, at),
+          );
+        }
+
+        const computedLine = computed.computed[lines.indexOf(line)]!;
+        receiptLines.push({
+          billLineId: line.id,
+          lineNumber: at,
+          itemId: line.item_id!,
+          warehouseId: line.warehouse_id!,
+          quantity: String(line.quantity),
+          totalCost: Money.toDecimalString(computedLine.taxableAmount),
+        });
+      }
+
+      await postBillReceipt(trx, inventoryActor, {
+        billId: id,
+        billNumber: current.bill_number,
+        journalEntryId: journal.id,
+        movementDate: toCalendarDate(current.bill_date),
+        postingDate,
+        lines: receiptLines,
+        items,
+        warehouses,
+      });
+    }
+
     await trx.updateTable('bills').set({
       status: 'posted',
       journal_entry_id: journal.id,
@@ -1669,6 +1805,26 @@ export async function reverseBill(
     const { reversal } = await reverseJournalIn(trx, actor, current.journal_entry_id, {
       reason,
       expectedVersion: entry.version,
+    });
+
+    /*
+     * And the stock this bill brought in, inside the same transaction. Refused
+     * when any of it has since been used: taking out more than is there would
+     * drive a warehouse below zero, and the position could not be restored
+     * exactly. A bill with no stocked lines has nothing here, which is not an
+     * error.
+     */
+    await reverseBillReceipt(trx, {
+      organizationId: actor.organizationId,
+      companyId: actor.companyId,
+      userId: actor.userId,
+      name: actor.name,
+      requestId: actor.requestId ?? undefined,
+    }, {
+      billId: id,
+      billNumber: current.bill_number,
+      reversalJournalEntryId: reversal.id,
+      reason,
     });
 
     await trx.updateTable('bills').set({

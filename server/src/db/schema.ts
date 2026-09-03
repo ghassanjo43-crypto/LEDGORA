@@ -1238,6 +1238,13 @@ export interface BillLinesTable {
   company_id: string;
   bill_id: string;
   line_number: number;
+  /**
+   * Naming both makes the line a STOCKED purchase: the item's own inventory
+   * account is forced onto `account_id`, and posting creates one inbound
+   * movement costed at this line's taxable amount. Both or neither, by CHECK.
+   */
+  item_id: string | null;
+  warehouse_id: string | null;
   description: Generated<string>;
   /** The account DEBITED — expense or non-inventory asset. */
   account_id: string;
@@ -1870,6 +1877,8 @@ export interface InventoryDocumentsTable {
   reversal_of_document_id: string | null;
   reversed_by_document_id: string | null;
   reversal_reason: Generated<string>;
+  /** The bill that produced this stock, for a `bill-receipt` and nothing else. */
+  source_bill_id: string | null;
   version: Generated<number>;
   created_by: string | null;
   created_at: Generated<Timestamp>;

@@ -394,12 +394,33 @@ describe('unsupported dependencies', () => {
       .rejects.toThrow(/Additional charges are not supported/i);
   });
 
-  it.each(['itemId', 'inventoryItemId', 'warehouseId', 'capitalAssetId'])(
-    'refuses a stocked line by its SHAPE (%s)',
+  /*
+   * I3 made `itemId` + `warehouseId` a supported shape: a line naming both is a
+   * purchase into stock, and `stockedBills.test.ts` proves what it posts. What
+   * remains refused here are the shapes that imply a receipt-first workflow this
+   * product has never had — a goods receipt, a clearing account and a match that
+   * do not exist.
+   */
+  it.each(['inventoryItemId', 'capitalAssetId'])(
+    'refuses a receipt-first line by its SHAPE (%s)',
     async (field) => {
       await expect(draft({
         lines: [{ accountId: chart.expense, quantity: '1', unitPrice: '10.000', [field]: 'x' }],
       })).rejects.toThrow(/receives stock/i);
+    },
+  );
+
+  it.each(['itemId', 'warehouseId'])(
+    'refuses a HALF-named stock line (%s alone)',
+    async (field) => {
+      /* One says what arrived, the other where it went. A movement needs both,
+       * so a line carrying one is refused rather than half-recorded. */
+      await expect(draft({
+        lines: [{
+          accountId: chart.expense, quantity: '1', unitPrice: '10.000',
+          [field]: '11111111-1111-1111-1111-111111111111',
+        }],
+      })).rejects.toThrow(/both an item and a warehouse/i);
     },
   );
 

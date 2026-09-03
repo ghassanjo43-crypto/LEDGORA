@@ -35,6 +35,7 @@ import { useStore } from '@/store/useStore';
 import { useSuppliers } from '@/services/parties/useSuppliers';
 import { useServerTaxCodeStore, rateOn } from '@/store/serverTaxCodeStore';
 import { useBills } from '@/services/bills/useBills';
+import { useInventoryMasterData } from '@/services/inventory/useInventoryMasterData';
 import {
   billActions, emptyDurableLine, type BillDraftValues,
 } from '@/services/bills/billActions';
@@ -44,6 +45,7 @@ import { cn as cx } from '@/lib/utils';
 import { Drawer } from '@/components/ui/Drawer';
 import { Button } from '@/components/ui/Button';
 import { Field, Input } from '@/components/ui/Input';
+import { Select } from '@/components/ui/Select';
 import { Badge } from '@/components/ui/Badge';
 import { ReadOnlyValue } from '@/components/ui/ReadOnlyValue';
 import { useToast } from '@/components/ui/Toast';
@@ -72,6 +74,25 @@ export function DurableBillDrawer({ open, billId, onClose, onSaved }: Props) {
   /* The server ledger. Reading `useBillStore` here would show a durable
    * workspace a bill the books do not have. */
   const { bills } = useBills();
+
+  /*
+   * The stock catalogue, from the SERVER. A line that names an item and a
+   * warehouse buys into stock: the server debits the item's own inventory
+   * account and brings the quantity in through the movement ledger. Only
+   * tracked, active items can do that, so only those are offered.
+   */
+  const { items: catalogue, warehouses } = useInventoryMasterData();
+  const stockedItemOptions = useMemo(() => [
+    { value: '', label: 'Not stock — an ordinary purchase' },
+    ...catalogue
+      .filter((item) => item.status === 'active' && item.isInventoryTracked
+        && item.itemType !== 'service' && item.itemType !== 'non-inventory')
+      .map((item) => ({ value: item.id, label: `${item.code} — ${item.name}` })),
+  ], [catalogue]);
+  const warehouseOptions = useMemo(() => warehouses
+    .filter((warehouse) => warehouse.status === 'active')
+    .map((warehouse) => ({ value: warehouse.id, label: `${warehouse.code} — ${warehouse.name}` })),
+  [warehouses]);
   const bill = billId ? bills.find((b) => b.id === billId) : undefined;
 
   /*
@@ -195,7 +216,12 @@ export function DurableBillDrawer({ open, billId, onClose, onSaved }: Props) {
     if (!supplierInvoiceNumber.trim()) return "Enter the supplier's own invoice number.";
     if (!billDate) return 'Enter the bill date.';
     if (!dueDate) return 'Enter the due date.';
-    if (lines.some((line) => !line.accountId)) return 'Every line needs a purchase account.';
+    if (lines.some((line) => !line.itemId && !line.accountId)) {
+      return 'Every ordinary line needs a purchase account.';
+    }
+    if (lines.some((line) => line.itemId && !line.warehouseId)) {
+      return 'Every stock line needs the warehouse the goods went into.';
+    }
     return null;
   };
 
@@ -398,15 +424,55 @@ export function DurableBillDrawer({ open, billId, onClose, onSaved }: Props) {
                     </Button>
                   )}
                 </div>
+                {/*
+                  Naming a stock item changes what this line IS: the server
+                  debits the item's inventory account rather than the one chosen
+                  below, and the quantity enters the warehouse. The purchase
+                  account is therefore hidden once an item is named — offering a
+                  choice the server overrules is offering a false one.
+                */}
+                {stockedItemOptions.length > 1 && (
+                  <div className="mb-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <Field label="Stock item" hint="Leave blank for an ordinary purchase">
+                      <Select
+                        aria-label={`Line ${index + 1} stock item`}
+                        options={stockedItemOptions}
+                        value={line.itemId ?? ''}
+                        onChange={(e) => setLine(line.id, {
+                          itemId: e.target.value || undefined,
+                          /* Both or neither: the server refuses a half-named line. */
+                          warehouseId: e.target.value
+                            ? (line.warehouseId ?? warehouseOptions[0]?.value)
+                            : undefined,
+                        })}
+                        disabled={readOnly}
+                      />
+                    </Field>
+                    {line.itemId && (
+                      <Field label="Received into" required>
+                        <Select
+                          aria-label={`Line ${index + 1} warehouse`}
+                          options={warehouseOptions}
+                          value={line.warehouseId ?? ''}
+                          onChange={(e) => setLine(line.id, { warehouseId: e.target.value })}
+                          disabled={readOnly}
+                        />
+                      </Field>
+                    )}
+                  </div>
+                )}
+
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                  <Field label="Purchase account" required>
-                    <AccountSelect
-                      value={line.accountId}
-                      accounts={accounts}
-                      onChange={(a) => setLine(line.id, { accountId: a.id })}
-                      disabled={readOnly}
-                    />
-                  </Field>
+                  {!line.itemId && (
+                    <Field label="Purchase account" required>
+                      <AccountSelect
+                        value={line.accountId}
+                        accounts={accounts}
+                        onChange={(a) => setLine(line.id, { accountId: a.id })}
+                        disabled={readOnly}
+                      />
+                    </Field>
+                  )}
                   <Field label="Description">
                     <Input
                       aria-label={`Line ${index + 1} description`}

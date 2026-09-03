@@ -80,6 +80,15 @@ export function toBillWriteInput(values: BillDraftValues): BillWriteInput {
     discountValue: line.discountValue ? DECIMAL(line.discountValue) : null,
     /* The CODE, and nothing else about the tax. */
     taxCodeId: line.taxCodeId ?? null,
+    /*
+     * Naming both makes the line a purchase into STOCK: the server debits the
+     * item's inventory account and brings the quantity in through the movement
+     * ledger. Naming neither leaves it an ordinary expense line, exactly as
+     * before. The account is deliberately not sent for a stocked line — the
+     * server decides it.
+     */
+    itemId: line.itemId ?? null,
+    warehouseId: line.warehouseId ?? null,
   }));
 
   return {
@@ -101,6 +110,8 @@ export function emptyDurableLine(index: number): BillLine {
     quantity: 1,
     unitPrice: 0,
     discountAmount: 0,
+    itemId: undefined,
+    warehouseId: undefined,
     taxRate: 0,
     taxableAmount: 0,
     taxAmount: 0,

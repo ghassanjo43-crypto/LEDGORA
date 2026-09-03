@@ -34,6 +34,30 @@ vi.mock('@/services/books/booksEngine', async (importOriginal) => ({
 
 const SUPPLIER = { id: 'sup-1', legalName: 'Acme Supplies Ltd' };
 
+/*
+ * The stock catalogue the bill drawer offers. Empty by default, so every test
+ * above sees the screen exactly as it was before I3; the stocked-purchase tests
+ * fill it in.
+ */
+const catalogue = vi.hoisted(() => ({
+  items: [] as Array<Record<string, unknown>>,
+  warehouses: [] as Array<Record<string, unknown>>,
+}));
+vi.mock('@/services/inventory/useInventoryMasterData', () => ({
+  useInventoryMasterData: () => ({
+    items: catalogue.items,
+    warehouses: catalogue.warehouses,
+    units: [],
+    serverBacked: true,
+    loading: false,
+    error: null,
+    strandedItems: 0,
+    strandedWarehouses: 0,
+    strandedUnits: 0,
+    conversionsSupported: false,
+  }),
+}));
+
 vi.mock('@/services/api/suppliersApi', () => ({
   suppliersApi: {
     list: vi.fn(async () => ({ parties: [], nextCursor: null })),
@@ -688,5 +712,67 @@ describe('Free Demo keeps its own disposable behaviour', () => {
     payments();
     expect(screen.queryByText('What is owed')).toBeNull();
     expect(screen.queryByTestId('payables-panel')).toBeNull();
+  });
+});
+
+/* ══ I3 — buying into stock through the same screen ════════════════════════ */
+
+describe('a durable subscriber buys stock on a bill', () => {
+  /*
+   * The catalogue the drawer offers comes from the SERVER register. Mocked here
+   * because I1's own cutover covers it; what these prove is that naming an item
+   * changes what the REQUEST carries, and that the purchase-account control
+   * disappears when the server is going to decide it.
+   */
+  beforeEach(() => {
+    catalogue.items = [{
+      id: 'item-1', code: 'SKU-1', name: 'Widget', itemType: 'inventory',
+      isInventoryTracked: true, status: 'active',
+    }];
+    catalogue.warehouses = [{ id: 'wh-1', code: 'MAIN', name: 'Main store', status: 'active' }];
+  });
+  afterEach(() => { catalogue.items = []; catalogue.warehouses = []; });
+
+  it('sends the item and warehouse, and no purchase account, to the server', async () => {
+    bills();
+    click('New bill');
+    await settle();
+
+    pickSupplier();
+    type('Supplier invoice number', 'SUP-STOCK');
+    type('Bill date', '2026-03-01');
+    type('Due date', '2026-03-31');
+
+    /* Naming the item is what makes this a purchase into stock. */
+    fireEvent.change(screen.getByLabelText('Line 1 stock item'), { target: { value: 'item-1' } });
+    await settle();
+
+    type('Line 1 description', 'Widgets');
+    type('Line 1 quantity', '10');
+    type('Line 1 unit price', '5');
+
+    click('Save draft');
+    await settle();
+
+    expect(server.bills).toHaveLength(1);
+    const line = server.bills[0]!.lines[0] as Record<string, unknown>;
+    expect(line.itemId).toBe('item-1');
+    expect(line.warehouseId).toBe('wh-1');
+  });
+
+  it('hides the purchase account once an item is named — the server decides it', async () => {
+    bills();
+    click('New bill');
+    await settle();
+
+    /* An ordinary line still asks for one. */
+    expect(screen.queryByText('Purchase account')).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText('Line 1 stock item'), { target: { value: 'item-1' } });
+    await settle();
+
+    expect(screen.queryByText('Purchase account')).toBeNull();
+    /* And it asks where the goods went instead. */
+    expect(screen.getByLabelText('Line 1 warehouse')).toBeTruthy();
   });
 });

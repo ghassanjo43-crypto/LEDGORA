@@ -56,6 +56,9 @@ export function toBrowserBill(bill: ServerBill, outstanding?: string): Bill {
      * the browser calculator is not authoritative for a server-held bill.
      */
     taxCodeId: line.taxCodeId ?? undefined,
+    /* What this line bought into stock, if anything. */
+    itemId: line.itemId ?? undefined,
+    warehouseId: line.warehouseId ?? undefined,
     taxRate: Number(line.taxSnapshot?.rate ?? 0),
     taxableAmount: Number(line.taxableAmount),
     taxAmount: Number(line.taxAmount),

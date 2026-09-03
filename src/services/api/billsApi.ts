@@ -21,6 +21,9 @@ export interface ServerBillLine {
   lineNumber: number;
   description: string;
   accountId: string;
+  /** Set when the line bought stock; the movement it made is in the ledger. */
+  itemId: string | null;
+  warehouseId: string | null;
   quantity: string;
   unit: string;
   unitPrice: string;
@@ -94,7 +97,17 @@ export interface ServerBill {
 
 export interface ServerBillLineInput {
   description?: string;
+  /**
+   * Where the line posts.
+   *
+   * Ignored on a STOCKED line: the server forces the item's own inventory
+   * account onto it, because the journal debits what the line says and letting
+   * a caller choose would credit the payable against anything at all.
+   */
   accountId: string;
+  /** Naming both makes this a purchase into stock. Both or neither. */
+  itemId?: string | null;
+  warehouseId?: string | null;
   quantity?: string;
   unit?: string;
   unitPrice?: string;
