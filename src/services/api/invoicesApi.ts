@@ -33,6 +33,9 @@ export interface ServerInvoiceLine {
   lineSubtotal: string;
   lineTotal: string;
   itemId: string | null;
+  warehouseId: string | null;
+  /** The average this line's stock was costed at, frozen at issue. */
+  issuedUnitCost: string | null;
   entityId: string | null;
   projectId: string | null;
   costCenterId: string | null;
@@ -88,7 +91,16 @@ export interface ServerInvoiceLineInput {
    * the absence of those fields is the contract, not an omission.
    */
   taxCodeId?: string | null;
+  /**
+   * A stocked line names both, or neither.
+   *
+   * The server refuses half a pair: an item with no warehouse cannot say where
+   * the goods left, and a warehouse with no item cannot say what did. There is
+   * deliberately no cost field — what the stock cost is the ledger's answer,
+   * not the caller's.
+   */
   itemId?: string | null;
+  warehouseId?: string | null;
   projectId?: string | null;
   costCenterId?: string | null;
 }

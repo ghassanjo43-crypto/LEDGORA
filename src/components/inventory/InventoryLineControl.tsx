@@ -6,9 +6,15 @@
  *
  * Rendered only when the organization is entitled to inventory — non-inventory
  * organizations never see item or warehouse fields.
+ *
+ * The catalogue comes from `useInventoryMasterData`, which reads the SERVER on
+ * durable books and the browser store on Free Demo. That distinction is not
+ * cosmetic: a durable invoice naming a browser item id would be refused by the
+ * server, because that id came from a catalogue the books never held — so
+ * offering browser items here would offer choices that cannot be saved.
  */
 import { useMemo } from 'react';
-import { useInventoryStore } from '@/store/inventoryStore';
+import { useInventoryMasterData } from '@/services/inventory/useInventoryMasterData';
 import { Select } from '@/components/ui/Select';
 
 export interface InventoryLinePatch {
@@ -32,8 +38,7 @@ export function InventoryLineControl({
   disabled?: boolean;
   onChange: (patch: InventoryLinePatch) => void;
 }) {
-  const items = useInventoryStore((s) => s.items);
-  const warehouses = useInventoryStore((s) => s.warehouses);
+  const { items, warehouses } = useInventoryMasterData();
 
   const itemOptions = useMemo(
     () => [

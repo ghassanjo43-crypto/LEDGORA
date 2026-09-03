@@ -594,13 +594,21 @@ describe('cross-company attacks', () => {
 /* ══ What S2c did NOT bring ════════════════════════════════════════════════ */
 
 describe('the rest of the boundary still holds', () => {
-  it('still refuses additional charges, stock, dimensions and foreign currency', async () => {
+  it('still refuses additional charges, half-named stock, dimensions and foreign currency', async () => {
     const code = await makeCode({ rate: '16' });
     const line = (over: Record<string, unknown>) =>
       ({ lines: [{ accountId: chart.sales, quantity: '1', unitPrice: '100.000', taxCodeId: code.id, ...over }] });
 
     await expect(draft({ additionalChargesTotal: '5.000' })).rejects.toThrow(/Additional charges are not yet supported/i);
-    await expect(draft(line({ itemId: '22222222-2222-2222-2222-222222222222' }))).rejects.toThrow(/sells inventory items/i);
+    /*
+     * I4 made a fully-named stocked line legal, so the refusal that remains is
+     * about the SHAPE: half a pair says either what left or where from, never
+     * both, and the movement it implies cannot be written.
+     */
+    await expect(draft(line({ itemId: '22222222-2222-2222-2222-222222222222' })))
+      .rejects.toThrow(/must name both the item and the warehouse/i);
+    await expect(draft(line({ warehouseId: '33333333-3333-3333-3333-333333333333' })))
+      .rejects.toThrow(/must name both the item and the warehouse/i);
     await expect(draft({ projectId: 'p1' })).rejects.toThrow(/held in the browser/i);
     await expect(draft({ costCenterId: 'cc1' })).rejects.toThrow(/held in the browser/i);
     await expect(draft({ salespersonId: 's1' })).rejects.toThrow(/held in the browser/i);

@@ -642,6 +642,11 @@ describe('reconciliation', () => {
 describe('migration 039', () => {
   it('rolls back and reapplies when nothing is stocked', async () => {
     const migrator = createMigrator(ctx.db);
+    /* 040 sits on top now, so it comes off first. */
+    const sold = await migrator.migrateDown();
+    expect(sold.error).toBeUndefined();
+    expect(sold.results?.[0]?.migrationName).toBe('040_stocked_invoices');
+
     const down = await migrator.migrateDown();
     expect(down.error).toBeUndefined();
     expect(down.results?.[0]?.migrationName).toBe('039_stocked_bills');
@@ -661,7 +666,13 @@ describe('migration 039', () => {
     const created = await draft(b, [stockedLine(b, '2', '1.000')]);
     await post(b, created.json().bill.id, created.json().bill.version);
 
-    const down = await createMigrator(ctx.db).migrateDown();
+    const migrator = createMigrator(ctx.db);
+    /* Nothing was sold, so 040 comes off cleanly; 039 is the one holding the
+     * stocked purchase this test is about. */
+    const sold = await migrator.migrateDown();
+    expect(sold.error).toBeUndefined();
+
+    const down = await migrator.migrateDown();
     expect(down.error).toBeDefined();
     expect(String((down.error as Error).message)).toMatch(/Refusing to roll back 039/);
     expect(await onHand(b)).toBe(2);

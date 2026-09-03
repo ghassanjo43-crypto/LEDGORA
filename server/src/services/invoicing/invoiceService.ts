@@ -43,6 +43,7 @@ import * as Money from '../accounting/money.js';
 import * as journals from '../accounting/journalService.js';
 import { postSourceJournalIn } from '../accounting/sourcePostingService.js';
 import * as SalesTax from '../accounting/salesTax.js';
+import * as inventoryIssue from '../inventory/invoiceIssue.js';
 import { toCalendarDate, toCalendarDateOrNull } from '../accounting/calendarDate.js';
 import {
   resolveTaxForDate, assertOutputAccountPostable, type ResolvedTax,
@@ -77,6 +78,14 @@ export interface InvoiceLineInput {
   taxRate?: string;
   taxAmount?: string;
   itemId?: string | null;
+  /**
+   * Where the goods left from. Required with `itemId` and refused without it.
+   *
+   * A stocked line names both or neither: one that names an item but no
+   * warehouse cannot say where the stock came from, and one that names a
+   * warehouse but no item cannot say what did.
+   */
+  warehouseId?: string | null;
   entityId?: string | null;
   projectId?: string | null;
   costCenterId?: string | null;
@@ -146,6 +155,12 @@ export interface InvoiceLineRecord {
    */
   taxSnapshot: InvoiceLineTaxSnapshot | null;
   itemId: string | null;
+  warehouseId: string | null;
+  /**
+   * The weighted average this line's stock was actually costed at, frozen at
+   * issue. Null on a draft and on any line that sells no stock.
+   */
+  issuedUnitCost: string | null;
   entityId: string | null;
   projectId: string | null;
   costCenterId: string | null;
@@ -280,6 +295,9 @@ function toLine(row: any, decimals: number): InvoiceLineRecord {
         ? row.tax_snapshot_at.toISOString() : String(row.tax_snapshot_at),
     } : null,
     itemId: row.item_id,
+    warehouseId: row.warehouse_id ?? null,
+    issuedUnitCost: row.issued_unit_cost === null || row.issued_unit_cost === undefined
+      ? null : display(row.issued_unit_cost, decimals),
     entityId: row.entity_id,
     projectId: row.project_id,
     costCenterId: row.cost_center_id,
@@ -519,9 +537,17 @@ const UNSUPPORTED_CHARGES =
   'Additional charges are not yet supported on server-held invoices: there is no controlled '
   + 'account for them, so the entry could not say where they post. Nothing has been saved.';
 
-const UNSUPPORTED_INVENTORY =
-  'This invoice sells inventory items. Stock movements and cost of sales have not moved to the '
-  + 'server, so issuing here would sell stock without depleting it. Nothing has been saved.';
+/**
+ * A stocked line names both, or neither.
+ *
+ * Half a pair is refused rather than completed from a default. A line naming an
+ * item but no warehouse cannot say which building the goods left, and one
+ * naming a warehouse but no item cannot say what did — either way the movement
+ * it implies is unwritable, and picking a warehouse on the caller's behalf
+ * would move stock somebody never said had moved.
+ */
+const HALF_NAMED_STOCK =
+  'A line that sells stock must name both the item and the warehouse it left. Nothing has been saved.';
 
 /** One message per browser-resident dimension, naming the field. */
 const UNVERIFIABLE: Record<string, string> = {
@@ -570,13 +596,18 @@ function assertWithinBoundary(input: InvoiceInput): void {
     }
 
     /*
-     * Inventory is refused by the SHAPE of the line, not by a flag the client
-     * sets. A line that names no item and no warehouse cannot move stock, so
-     * this is a property of what was sent rather than a claim about it.
+     * Whether a line sells stock is decided by the SHAPE of what was sent, not
+     * by a flag the client sets: a line naming an item and a warehouse moves
+     * stock, and one naming neither does not. The database says the same thing
+     * through `invoice_lines_stocked_pair_ck`, so this refusal explains rather
+     * than enforces.
      */
-    if (line.itemId) {
-      throw errors.validation(UNSUPPORTED_INVENTORY, {
-        fieldErrors: { [`lines.${at}.itemId`]: 'Remove the stock item, or issue this invoice from a demo workspace.' },
+    if (Boolean(line.itemId) !== Boolean(line.warehouseId)) {
+      throw errors.validation(HALF_NAMED_STOCK, {
+        fieldErrors: {
+          [`lines.${at}.${line.itemId ? 'warehouseId' : 'itemId'}`]:
+            line.itemId ? 'Choose the warehouse the goods left.' : 'Choose the item being sold.',
+        },
       });
     }
 
@@ -849,6 +880,7 @@ async function replaceLines(
       line_number: index + 1,
       account_id: value.accountId,
       item_id: value.itemId ?? null,
+      warehouse_id: value.warehouseId ?? null,
       description: value.description ?? '',
       quantity: value.quantity ?? '0',
       unit: value.unit ?? '',
@@ -1379,6 +1411,54 @@ export async function issueInvoice(
      */
     const taxed = await freezeLineTax(trx, actor, lines, { issueDate, decimals });
 
+    /*
+     * ══ Stock leaves BEFORE the revenue entry is posted ═════════════════════
+     *
+     * Not for atomicity — this is one transaction, so both commit or neither
+     * does whichever way round they run. It is for the message: an invoice that
+     * cannot be issued because the warehouse is empty should say so, rather
+     * than failing somewhere inside a posting the seller never asked about.
+     *
+     * It is also the order the browser already uses, and for the same reason
+     * its own comment gives: insufficient stock blocks the whole issue.
+     */
+    const stocked = lines.filter((line) => line.item_id && line.warehouse_id);
+    let issuedCosts: inventoryIssue.IssuedCost[] = [];
+    if (stocked.length > 0) {
+      const defaultCogs = await inventoryIssue.defaultCogsAccount(trx, actor);
+      const items = new Map<string, inventoryIssue.SoldItem>();
+      const warehouses = new Map<string, { id: string; code: string }>();
+      for (const line of stocked) {
+        const at = line.line_number as number;
+        if (!items.has(line.item_id!)) {
+          items.set(line.item_id!, await inventoryIssue.resolveSoldItem(trx, actor, line.item_id!, at, defaultCogs));
+        }
+        if (!warehouses.has(line.warehouse_id!)) {
+          warehouses.set(line.warehouse_id!, await inventoryIssue.resolveSellingWarehouse(trx, actor, line.warehouse_id!, at));
+        }
+      }
+
+      const issued = await inventoryIssue.postInvoiceIssue(trx, actor, {
+        invoiceId: id,
+        invoiceNumber: current.invoice_number,
+        movementDate: issueDate,
+        postingDate: issueDate,
+        monetaryDecimals: decimals,
+        lines: stocked.map((line) => ({
+          invoiceLineId: line.id as string,
+          lineNumber: line.line_number as number,
+          itemId: line.item_id!,
+          warehouseId: line.warehouse_id!,
+          /* What was SOLD, not what it was worth. The cost is the ledger's. */
+          quantity: String(line.quantity),
+          description: String(line.description ?? ''),
+        })),
+        items,
+        warehouses,
+      });
+      issuedCosts = issued.costs;
+    }
+
     const subtotal = Money.sum(taxed.map((line) => line.taxableAmount));
     const taxDue = Money.sum(taxed.map((line) => line.taxAmount));
     const charges = Money.toAmount(current.additional_charges_total);
@@ -1479,6 +1559,23 @@ export async function issueInvoice(
       .where('id', '=', id)
       .execute();
 
+    /*
+     * The average each line was actually costed at, kept on the line.
+     *
+     * Derived from the movements rather than recomputed, so the invoice, the
+     * subledger and the cost entry all report one number. It is what makes a
+     * margin on this invoice answerable years later, when the item's average
+     * has moved on and nothing could reconstruct it.
+     */
+    for (const cost of issuedCosts) {
+      await trx.updateTable('invoice_lines')
+        .set({ issued_unit_cost: cost.unitCost })
+        .where('organization_id', '=', actor.organizationId)
+        .where('company_id', '=', actor.companyId)
+        .where('id', '=', cost.invoiceLineId)
+        .execute();
+    }
+
     await writeAudit(trx, actor, id, 'invoice.issued', journal.journalNumber);
     return loadInvoice(trx, actor, id);
   });
@@ -1520,18 +1617,46 @@ export async function voidInvoice(
   if (!current) throw errors.notFound('Invoice');
   if (current.status === 'void') throw errors.conflict('This invoice is already void.');
 
-  let reversalId: string | null = null;
-  if (current.journal_entry_id) {
-    const entry = await journals.getJournal(db, actor, current.journal_entry_id);
-    const reversal = await journals.reverseJournal(
-      db, actor, current.journal_entry_id,
-      { expectedVersion: entry.version, reason: `Void invoice ${current.invoice_number}: ${reason}` },
-    );
-    reversalId = reversal.reversal.id;
-  }
-
   return db.transaction().execute(async (trx) => {
     const locked = await lockInvoice(trx, actor, id, options.expectedVersion);
+
+    /*
+     * ══ The reversal is posted INSIDE this transaction ══════════════════════
+     *
+     * It used to be posted before it, against the un-transacted connection.
+     * That was survivable while voiding only reversed a journal — the worst
+     * case left a reversed entry against a live invoice, visible and fixable.
+     *
+     * It is not survivable now. Voiding a stocked invoice also puts goods back
+     * in a warehouse and takes a cost of sales off, and a failure between the
+     * two halves would leave the stock restored against a sale still standing,
+     * or a reversed sale whose stock never came back. Both are silent, and
+     * neither reconciles. One transaction, or none of it.
+     */
+    let reversalId: string | null = null;
+    if (current.journal_entry_id) {
+      const entry = await journals.getJournal(trx, actor, current.journal_entry_id);
+      const reversal = await journals.reverseJournalIn(
+        trx, actor, current.journal_entry_id,
+        { expectedVersion: entry.version, reason: `Void invoice ${current.invoice_number}: ${reason}` },
+      );
+      reversalId = reversal.reversal.id;
+    }
+
+    /*
+     * The stock this invoice sold goes back at the cost it left at, and its
+     * cost of sales is reversed against it. An invoice that sold nothing
+     * stocked finds no document here, which is not an error.
+     *
+     * This can never be refused for want of stock, the way a reversed purchase
+     * can: it puts goods IN, so no warehouse can be driven below zero by it.
+     */
+    await inventoryIssue.reverseInvoiceIssue(trx, actor, {
+      invoiceId: id,
+      invoiceNumber: current.invoice_number,
+      reason,
+    });
+
     await trx.updateTable('invoices').set({
       status: 'void',
       void_reason: reason,

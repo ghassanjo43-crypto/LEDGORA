@@ -881,7 +881,11 @@ describe('migration 038', () => {
   it('rolls back and reapplies when the ledger is empty', async () => {
     const migrator = createMigrator(ctx.db);
 
-    /* 039 sits on top now, so it comes off first. */
+    /* 040 and 039 sit on top now, so they come off first. */
+    const sold = await migrator.migrateDown();
+    expect(sold.error).toBeUndefined();
+    expect(sold.results?.[0]?.migrationName).toBe('040_stocked_invoices');
+
     const stocked = await migrator.migrateDown();
     expect(stocked.error).toBeUndefined();
     expect(stocked.results?.[0]?.migrationName).toBe('039_stocked_bills');
@@ -905,8 +909,12 @@ describe('migration 038', () => {
     await receipt(b, '2', '1.000');
 
     const migrator = createMigrator(ctx.db);
-    /* Nothing was bought on a bill here, so 039 comes off cleanly; 038 is the
-     * one holding the movements this test is about. */
+    /* Nothing was sold on an invoice or bought on a bill here, so 040 and 039
+     * come off cleanly; 038 is the one holding the movements this test is
+     * about. */
+    const sold = await migrator.migrateDown();
+    expect(sold.error).toBeUndefined();
+
     const stocked = await migrator.migrateDown();
     expect(stocked.error).toBeUndefined();
 

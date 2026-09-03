@@ -427,23 +427,14 @@ export const useInvoiceStore = create<InvoiceState>()(
 
         if (get().backend === 'server') {
           /*
-           * Stock is NOT moved here.
+           * Stock is not moved HERE, and that is no longer a refusal.
            *
-           * The browser path posts inventory movements before the revenue
-           * journal so insufficient stock blocks the issue atomically; the
-           * server has no equivalent yet. Rather than issue and silently leave
-           * stock overstated, the server refuses a line that names a stock
-           * item at all — so an invoice carrying one never reaches issuing
-           * there, and this refusal is what the user sees instead.
+           * The server relieves stock inside the very transaction that posts
+           * the revenue entry, so a stocked line is issued there rather than
+           * blocked: insufficient stock refuses the whole issue at the server,
+           * with the warehouse and the quantity named, and nothing is written.
+           * Moving stock from this store as well would deplete it twice.
            */
-          const stocked = existing.lines.some((line) => line.inventoryItemId);
-          if (stocked && inventoryEnabled()) {
-            return {
-              ok: false,
-              error: 'This invoice sells inventory items, which cannot be issued server-side yet '
-                + 'because stock would not be depleted. Issue it from a browser-backed company.',
-            };
-          }
           /*
            * No receivable is sent. The browser's idea of the customer's default
            * account is a BROWSER id whose code may or may not exist in the

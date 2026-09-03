@@ -1879,6 +1879,8 @@ export interface InventoryDocumentsTable {
   reversal_reason: Generated<string>;
   /** The bill that produced this stock, for a `bill-receipt` and nothing else. */
   source_bill_id: string | null;
+  /** The invoice that consumed this stock, for an `invoice-issue` and nothing else. */
+  source_invoice_id: string | null;
   version: Generated<number>;
   created_by: string | null;
   created_at: Generated<Timestamp>;

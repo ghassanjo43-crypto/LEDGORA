@@ -46,6 +46,15 @@ const STALE =
   'This invoice was not loaded from the server, so it cannot be changed there. Reload and try again.';
 
 function toLineInput(line: Invoice['lines'][number], decimals: number): ServerInvoiceLineInput {
+  /*
+   * Both, or neither. The server refuses half a pair — an item with no
+   * warehouse cannot say where the goods left — so a line the screen has only
+   * half-filled is sent as a plain revenue line rather than as a stocked one
+   * the server would reject.
+   */
+  const sellsStock = line.inventoryFulfillmentMode === 'issue-on-invoice'
+    && Boolean(line.inventoryItemId) && Boolean(line.warehouseId);
+
   return {
     accountId: line.accountId,
     description: line.description,
@@ -59,7 +68,8 @@ function toLineInput(line: Invoice['lines'][number], decimals: number): ServerIn
      * told. Everything numeric comes back resolved.
      */
     taxCodeId: line.taxCodeId ?? null,
-    itemId: line.inventoryItemId ?? null,
+    itemId: sellsStock ? line.inventoryItemId! : null,
+    warehouseId: sellsStock ? line.warehouseId! : null,
     projectId: line.projectId ?? null,
     costCenterId: line.costCenterId ?? null,
   };

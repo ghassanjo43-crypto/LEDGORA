@@ -56,6 +56,13 @@ function toBrowserLine(line: ServerInvoiceLine): InvoiceLine {
     discountValue: line.discountValue === null ? undefined : decimalToNumber(line.discountValue),
     taxCodeId: line.taxCodeId ?? undefined,
     inventoryItemId: line.itemId ?? undefined,
+    warehouseId: line.warehouseId ?? undefined,
+    /* Set by the server only where a line actually moved stock, so the flag
+     * the screen reads is derived from what the books hold rather than from a
+     * separate value that could disagree with them. */
+    inventoryFulfillmentMode: line.itemId ? 'issue-on-invoice' : 'none',
+    issuedUnitCost: line.issuedUnitCost === null || line.issuedUnitCost === undefined
+      ? undefined : decimalToNumber(line.issuedUnitCost),
     projectId: line.projectId ?? undefined,
     costCenterId: line.costCenterId ?? undefined,
     unit: line.unit || undefined,

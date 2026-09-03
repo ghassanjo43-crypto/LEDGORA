@@ -29,6 +29,7 @@ vi.mock('@/services/books/booksEngine', async (importOriginal) => ({
 }));
 
 import { useInvoiceStore } from './invoiceStore';
+import { useInventoryStore } from '@/store/inventoryStore';
 import { invoicesApi } from '@/services/api/invoicesApi';
 
 vi.mock('@/services/api/invoicesApi', () => ({
@@ -161,20 +162,32 @@ describe('lifecycle writes route to the API', () => {
     expect(result.error).toMatch(/changed by another user/i);
   });
 
-  it('refuses to issue an invoice that would leave stock overstated', async () => {
+  /*
+   * I4 moved stock relief onto the server, so a stocked line is no longer
+   * refused here — it is ISSUED there, inside the same transaction that posts
+   * the revenue entry. What this now guards is that the store does not ALSO
+   * move stock itself: relieving it in both engines would deplete it twice.
+   */
+  it('issues an invoice that sells stock, and moves no stock of its own', async () => {
+    const before = useInventoryStore.getState().movements.length;
+    api.issue.mockResolvedValue(record({ status: 'issued', version: 4 }) as never);
     useInvoiceStore.setState({
       invoices: [{
         ...useInvoiceStore.getState().invoices[0]!,
         status: 'draft',
-        lines: [{ id: 'l1', accountId: 'a', inventoryItemId: 'item-1', quantity: 1, unitPrice: 10 } as never],
+        lines: [{
+          id: 'l1', accountId: 'a', quantity: 1, unitPrice: 10,
+          inventoryItemId: 'item-1', warehouseId: 'wh-1',
+          inventoryFulfillmentMode: 'issue-on-invoice',
+        } as never],
       }],
     });
 
     const result = await useInvoiceStore.getState().issueInvoice('srv-1');
 
-    expect(result.ok).toBe(false);
-    expect(result.error).toMatch(/stock would not be depleted/i);
-    expect(api.issue).not.toHaveBeenCalled();
+    expect(result.ok, result.error).toBe(true);
+    expect(api.issue).toHaveBeenCalled();
+    expect(useInventoryStore.getState().movements).toHaveLength(before);
   });
 });
 

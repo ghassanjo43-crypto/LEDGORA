@@ -185,15 +185,26 @@ describe('unsupported dependencies', () => {
     expect(await invoiceCount()).toBe(0);
   });
 
-  it('refuses a stocked line by its SHAPE, not by a client flag', async () => {
-    /* The line names an item, so it could move stock. That is a property of
-     * what was sent rather than a claim the client makes about itself. */
+  it('refuses a HALF-named stocked line by its shape, not by a client flag', async () => {
+    /*
+     * I4 made a fully-named stocked line legal, so what is refused now is the
+     * shape that cannot describe a movement: an item with no warehouse says
+     * what left but not from where, and a warehouse with no item says the
+     * reverse. Either way it is a property of what was sent rather than a
+     * claim the client makes about itself.
+     */
     await expect(draft({
       lines: [{
         accountId: chart.sales, quantity: '1', unitPrice: '100.000',
         itemId: '44444444-4444-4444-4444-444444444444',
       }],
-    })).rejects.toThrow(/stock movements and cost of sales/i);
+    })).rejects.toThrow(/must name both the item and the warehouse/i);
+    await expect(draft({
+      lines: [{
+        accountId: chart.sales, quantity: '1', unitPrice: '100.000',
+        warehouseId: '44444444-4444-4444-4444-444444444444',
+      }],
+    })).rejects.toThrow(/must name both the item and the warehouse/i);
     expect(await invoiceCount()).toBe(0);
   });
 
