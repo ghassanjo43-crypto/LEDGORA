@@ -24,13 +24,15 @@ vi.mock('@/services/api/taxCodesApi', () => ({
 import { GoodsReceiptsPage, GoodsIssuesPage } from './inventory/MovementDocumentPage';
 import { TransfersPage } from './inventory/TransfersPage';
 import { StockMovementsPage } from './inventory/StockMovementsPage';
+import { StockCountsPage } from './inventory/StockCountsPage';
 import { useInventoryStore } from '@/store/inventoryStore';
 import { useStore } from '@/store/useStore';
 import { makeInventorySeed } from '@/lib/inventorySeed';
 import {
-  clearInventoryCache, clearStockCache, useServerStock, useServerInventory,
+  clearInventoryCache, clearStockCache, clearCountCache,
+  useServerStock, useServerInventory, useServerCounts,
 } from '@/services/inventory/inventoryBackend';
-import { server, resetServer, install } from './__fixtures__/stockFakeServer';
+import { server, resetServer, install, seedReceipt } from './__fixtures__/stockFakeServer';
 
 const realFetch = globalThis.fetch;
 
@@ -41,6 +43,7 @@ beforeEach(() => {
   install();
   clearInventoryCache();
   clearStockCache();
+  clearCountCache();
   useInventoryStore.getState().resetToDefault();
   useStore.setState({ accounts: [] } as never);
 });
@@ -271,5 +274,85 @@ describe('Free Demo', () => {
   it('offers no expense-account picker, which is a server control', async () => {
     render(<GoodsIssuesPage />);
     expect(screen.queryByLabelText(/Expense account/i)).toBeNull();
+  });
+});
+
+
+/* ══ Physical counts ═══════════════════════════════════════════════════════ */
+
+describe('stock counts on durable books', () => {
+  it('sends the counted quantity ONLY, and never a book figure', async () => {
+    /* Ten on the shelf according to the books. */
+    seedReceipt(10);
+
+    render(<StockCountsPage />);
+    await ready();
+    await waitFor(() => expect(useServerStock.getState().onHandState).toBe('ready'));
+
+    fireEvent.click(screen.getByRole('button', { name: /start count/i }));
+    await screen.findByLabelText(/counted quantity for/i);
+
+    fireEvent.change(screen.getByLabelText(/counted quantity for/i), { target: { value: '8' } });
+    fireEvent.click(screen.getByRole('button', { name: /post variances/i }));
+
+    await waitFor(() => expect(server.counts).toHaveLength(1));
+
+    /*
+     * The request carried the counted figure and nothing else. An expected
+     * quantity, a variance, a cost or an account arriving from a browser would
+     * let the screen decide what the adjustment posts.
+     */
+    const sent = server.counts[0]!;
+    expect(sent.lines[0]!.countedQuantity).toBe('8');
+    /* The server derived the book quantity itself. */
+    expect(sent.lines[0]!.expectedQuantity).toBe('10');
+    expect(sent.lines[0]!.varianceQuantity).toBe('-2');
+
+    /* And the browser movement store was never written. */
+    expect(useInventoryStore.getState().movements).toHaveLength(0);
+  });
+
+  it('reuses one idempotency key when a failed post is retried', async () => {
+    seedReceipt(10);
+    render(<StockCountsPage />);
+    await ready();
+    await waitFor(() => expect(useServerStock.getState().onHandState).toBe('ready'));
+
+    fireEvent.click(screen.getByRole('button', { name: /start count/i }));
+    await screen.findByLabelText(/counted quantity for/i);
+    fireEvent.change(screen.getByLabelText(/counted quantity for/i), { target: { value: '7' } });
+
+    server.failNextPost = true;
+    fireEvent.click(screen.getByRole('button', { name: /post variances/i }));
+    await screen.findByText(/could not reach the books/i);
+
+    fireEvent.click(screen.getByRole('button', { name: /post variances/i }));
+    await waitFor(() => expect(server.counts).toHaveLength(1));
+
+    const keys = server.postedKeys.filter((k) => k.length > 0);
+    expect(new Set(keys).size).toBe(1);
+  });
+
+  it('shows nothing rather than browser counts when the server cannot answer', async () => {
+    server.failReads = true;
+    render(<StockCountsPage />);
+    await waitFor(() => expect(useServerCounts.getState().state).toBe('unavailable'));
+    expect(useServerCounts.getState().counts).toHaveLength(0);
+    /* The server's own words, not a reassuring substitute: an empty register
+     * that looked normal would read as "this company has never counted". */
+    expect(await screen.findByText(/not reachable/i)).toBeTruthy();
+    expect(screen.queryByText(/No counts yet/i)).toBeNull();
+  });
+
+  it('leaves Free Demo posting through its own engine', async () => {
+    engine.current = 'demo';
+    useInventoryStore.setState(makeInventorySeed('manufacturing') as never);
+
+    render(<StockCountsPage />);
+    fireEvent.click(screen.getByRole('button', { name: /start count \(freeze\)/i }));
+
+    /* No count reached the server at all. */
+    expect(server.counts).toHaveLength(0);
+    expect(server.calls.filter((c) => c.path === '/api/inventory/counts')).toHaveLength(0);
   });
 });

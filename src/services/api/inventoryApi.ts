@@ -353,6 +353,14 @@ export interface StockCardEntry {
   postingDate: string;
   runningQuantity: string;
   runningValue: string;
+  /**
+   * `posted` or `reversed`. A reversed row stays on the card: the pair
+   * contributes zero to the running balance, so hiding it would leave a card
+   * that cannot account for its own history.
+   */
+  status: 'posted' | 'reversed';
+  reversalOfMovementId: string | null;
+  reversedByMovementId: string | null;
 }
 
 export interface ReconciliationRow {
@@ -363,6 +371,99 @@ export interface ReconciliationRow {
   generalLedgerBalance: string;
   difference: string;
 }
+
+/** A journal that touched an inventory control account with no stock document behind it. */
+export interface ReconciliationException {
+  journalEntryId: string;
+  journalNumber: string;
+  postingDate: string;
+  accountId: string;
+  accountCode: string;
+  description: string;
+  sourceType: string | null;
+  reference: string;
+  amount: string;
+}
+
+export interface ReconciliationResult {
+  asOfDate: string | null;
+  rows: ReconciliationRow[];
+  totals: { subledgerValue: string; generalLedgerBalance: string; difference: string };
+  balanced: boolean;
+  exceptions: ReconciliationException[];
+}
+
+/* ── Physical stock counts ─────────────────────────────────────────────────── */
+
+export interface ServerCountLine {
+  id: string;
+  lineNumber: number;
+  itemId: string;
+  itemCode: string;
+  itemName: string;
+  baseUnitCode: string;
+  /** Read from the ledger by the server. Never sent, never trusted from here. */
+  expectedQuantity: string;
+  countedQuantity: string;
+  varianceQuantity: string;
+  unitCost: string;
+  varianceValue: string;
+  note: string;
+}
+
+export interface ServerStockCount {
+  id: string;
+  countNumber: string;
+  status: 'posted' | 'reversed';
+  warehouseId: string;
+  warehouseCode: string;
+  countDate: string;
+  postingDate: string;
+  memo: string;
+  adjustmentDocumentId: string | null;
+  adjustmentDocumentNumber: string | null;
+  journalEntryId: string | null;
+  reversalReason: string;
+  version: number;
+  createdAt: string;
+  lines: ServerCountLine[];
+}
+
+export interface CountLineInput {
+  itemId: string;
+  /** The ONLY figure this client supplies. Everything else is read server-side. */
+  countedQuantity: string;
+  unitCost?: string | null;
+  note?: string;
+}
+
+export interface StockCountInput {
+  warehouseId: string;
+  countDate: string;
+  postingDate?: string;
+  memo?: string;
+  reason: string;
+  idempotencyKey: string;
+  lines: CountLineInput[];
+}
+
+export const stockCountsApi = {
+  list: async (params: { warehouseId?: string; status?: string; limit?: number } = {}):
+  Promise<ServerStockCount[]> =>
+    (await api.get<{ counts: ServerStockCount[] }>(`/api/inventory/counts${query(params)}`)).counts,
+
+  get: async (id: string): Promise<ServerStockCount> =>
+    (await api.get<{ count: ServerStockCount }>(`/api/inventory/counts/${id}`)).count,
+
+  /** `created` is false when the key had already counted — the retry succeeded. */
+  post: async (input: StockCountInput): Promise<{ count: ServerStockCount; created: boolean }> =>
+    api.post<{ count: ServerStockCount; created: boolean }>('/api/inventory/counts', input),
+
+  reverse: async (id: string, expectedVersion: number, reason: string): Promise<ServerStockCount> =>
+    (await api.post<{ count: ServerStockCount }>(
+      `/api/inventory/counts/${id}/reverse`, { expectedVersion, reason },
+    )).count,
+};
 
 export const stockApi = {
   listDocuments: async (params: {
@@ -415,9 +516,8 @@ export const stockApi = {
       `/api/inventory/items/${itemId}/stock-card${query(params)}`,
     )).entries,
 
-  reconciliation: async (params: { asOfDate?: string } = {}):
-  Promise<{ asOfDate: string | null; rows: ReconciliationRow[]; balanced: boolean }> =>
-    api.get<{ asOfDate: string | null; rows: ReconciliationRow[]; balanced: boolean }>(
+  reconciliation: async (params: { asOfDate?: string } = {}): Promise<ReconciliationResult> =>
+    api.get<ReconciliationResult>(
       `/api/inventory/reconciliation${query(params)}`,
     ),
 };

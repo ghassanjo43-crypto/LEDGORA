@@ -808,6 +808,70 @@ export interface Database {
   inventory_documents: InventoryDocumentsTable;
   inventory_movements: InventoryMovementsTable;
   inventory_document_numbering: InventoryDocumentNumberingTable;
+  stock_counts: StockCountsTable;
+  stock_count_lines: StockCountLinesTable;
+  stock_count_numbering: StockCountNumberingTable;
+}
+
+/**
+ * A physical stock count: what was expected, what was found, and the
+ * adjustment that settled the difference.
+ *
+ * Captured and posted in one call, so there is no state between the two — the
+ * only transition is becoming reversed, once.
+ */
+export interface StockCountsTable {
+  id: Generated<string>;
+  organization_id: string;
+  company_id: string;
+  count_number: string;
+  warehouse_id: string;
+  count_date: string;
+  posting_date: string;
+  status: Generated<'posted' | 'reversed'>;
+  memo: Generated<string>;
+  /** Null when every line agreed with the books, which moves nothing. */
+  adjustment_document_id: string | null;
+  idempotency_key: string;
+  reversal_of_count_id: string | null;
+  reversed_by_count_id: string | null;
+  reversal_reason: Generated<string>;
+  version: Generated<number>;
+  counted_by: string | null;
+  created_at: Generated<Timestamp>;
+  updated_at: Generated<Timestamp>;
+}
+
+/** One counted item. An observation, never revised. */
+export interface StockCountLinesTable {
+  id: Generated<string>;
+  organization_id: string;
+  company_id: string;
+  count_id: string;
+  line_number: number;
+  item_id: string;
+  base_unit_id: string;
+  expected_quantity: string;
+  counted_quantity: string;
+  variance_quantity: string;
+  unit_cost: Generated<string>;
+  variance_value: Generated<string>;
+  item_code: string;
+  item_name: string;
+  base_unit_code: string;
+  note: Generated<string>;
+  created_at: Generated<Timestamp>;
+}
+
+export interface StockCountNumberingTable {
+  organization_id: string;
+  company_id: string;
+  prefix: Generated<string>;
+  include_year: Generated<boolean>;
+  sequence_length: Generated<number>;
+  next_sequence: Generated<number>;
+  created_at: Generated<Timestamp>;
+  updated_at: Generated<Timestamp>;
 }
 
 

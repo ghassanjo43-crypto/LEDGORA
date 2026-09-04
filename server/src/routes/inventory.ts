@@ -35,6 +35,7 @@ import * as items from '../services/inventory/itemService.js';
 import * as warehouses from '../services/inventory/warehouseService.js';
 import * as units from '../services/inventory/unitService.js';
 import * as settings from '../services/inventory/settingsService.js';
+import * as counts from '../services/inventory/stockCountService.js';
 import * as stock from '../services/inventory/stockDocumentService.js';
 import * as reports from '../services/inventory/stockReportService.js';
 
@@ -126,6 +127,32 @@ const documentSchema = z.object({
 const reverseStockSchema = z.object({
   expectedVersion: z.number().int().min(1),
   reason: z.string().min(1).max(500),
+}).strict();
+
+/**
+ * A counted line. The quantity is the ONLY figure a caller supplies.
+ *
+ * `.strict()` means an expected quantity, a variance, a value or an account
+ * arriving with the request is rejected outright rather than quietly dropped —
+ * a client that could send any of them could decide what the adjustment posts.
+ */
+const countLineSchema = z.object({
+  itemId: uuid,
+  /* Non-negative: there is no negative shelf. Zero is a real observation. */
+  countedQuantity: z.string().regex(/^\d+(\.\d+)?$/, 'Enter a plain quantity, such as 12 or 12.500.'),
+  /* Only ever meaningful for a positive variance; refused otherwise. */
+  unitCost: z.string().regex(/^\d+(\.\d+)?$/).nullable().optional(),
+  note: z.string().max(500).optional(),
+}).strict();
+
+const countSchema = z.object({
+  warehouseId: uuid,
+  countDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  postingDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  memo: z.string().max(2000).optional(),
+  reason: z.string().min(1).max(500),
+  idempotencyKey: z.string().min(1).max(128),
+  lines: z.array(countLineSchema).min(1).max(1000),
 }).strict();
 
 const settingsSchema = z.object({
@@ -416,6 +443,52 @@ export async function inventoryRoutes(app: FastifyInstance): Promise<void> {
       const body = parse(reverseStockSchema, request.body ?? {});
       return reply.send({
         document: await stock.reverseDocument(
+          app.db, actorOf(request), idOf(request), body.expectedVersion, body.reason,
+        ),
+      });
+    },
+  );
+
+  /* -- Physical stock counts ---------------------------------------------- */
+
+  /*
+   * Counting is a POST, and reading a count is a view. There is no separate
+   * approve or submit permission because there is no submission and no
+   * approval: a count is captured and posted in one call, so the act being
+   * authorised is posting stock — which `inventory.post` already names.
+   */
+  app.get('/api/inventory/counts', { preHandler: onBooks(viewInventory) }, async (request, reply) => {
+    const query = request.query as { warehouseId?: string; status?: string; limit?: string };
+    return reply.send(await counts.listCounts(app.db, actorOf(request), {
+      warehouseId: query.warehouseId,
+      status: query.status as 'posted' | 'reversed' | undefined,
+      limit: query.limit ? Number(query.limit) : undefined,
+    }));
+  });
+
+  app.get(
+    '/api/inventory/counts/:id',
+    { preHandler: onBooks(viewInventory) },
+    async (request, reply) =>
+      reply.send({ count: await counts.getCount(app.db, actorOf(request), idOf(request)) }),
+  );
+
+  app.post('/api/inventory/counts', { preHandler: onBooks(postStock) }, async (request, reply) => {
+    const body = parse(countSchema, request.body ?? {});
+    const { count, created } = await counts.postCount(app.db, actorOf(request), body);
+    /* 200 rather than 201 when the key had already counted: the retry
+     * succeeded, and reporting a fresh creation would have the caller believe
+     * they had counted the warehouse twice. */
+    return reply.code(created ? 201 : 200).send({ count, created });
+  });
+
+  app.post(
+    '/api/inventory/counts/:id/reverse',
+    { preHandler: onBooks(voidStock) },
+    async (request, reply) => {
+      const body = parse(reverseStockSchema, request.body ?? {});
+      return reply.send({
+        count: await counts.reverseCount(
           app.db, actorOf(request), idOf(request), body.expectedVersion, body.reason,
         ),
       });

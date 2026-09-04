@@ -34,7 +34,9 @@ import { clearCustomerCache } from '@/services/parties/customerDirectory';
 import { clearSupplierCache } from '@/services/parties/supplierDirectory';
 import { clearBillCache } from '@/services/bills/billBackend';
 import { clearPaymentCache } from '@/services/payments/paymentBackend';
-import { clearInventoryCache } from '@/services/inventory/inventoryBackend';
+import {
+  clearInventoryCache, clearStockCache, clearCountCache,
+} from '@/services/inventory/inventoryBackend';
 import { useInvoiceStore } from '@/store/invoiceStore';
 import { useServerTaxCodeStore } from '@/store/serverTaxCodeStore';
 import { useCompanyStore } from '@/store/companyStore';
@@ -118,6 +120,15 @@ export function enterCompanyScope(reference: string | null): void {
   /* And the item, unit and warehouse registers: the previous company's
    * catalogue in a picker is how somebody prices the wrong product. */
   clearInventoryCache();
+  /*
+   * And the stock itself — positions, valuation, reconciliation and the count
+   * history. The catalogue was already cleared here; these were not, so
+   * switching company left the previous company's quantities and inventory
+   * value on screen until the next fetch returned. A quantity is exactly the
+   * figure somebody acts on.
+   */
+  clearStockCache();
+  clearCountCache();
 
   /*
    * And the invoices, for the same reason: on server books they are a cache of

@@ -25,6 +25,34 @@ import { sql } from 'kysely';
 import type { Database } from '../../db/schema.js';
 import { errors } from '../../lib/errors.js';
 import type { InventoryActor } from './inventoryCore.js';
+import { monetaryDecimalsFor, renderAmount } from '../accounting/currencyPrecision.js';
+import * as Money from '../accounting/money.js';
+
+/**
+ * How many decimals this company's money is written to.
+ *
+ * Every figure these reports return passes through it. Before I5 they did not:
+ * the aggregates came straight back from `numeric(28,10)`, so an inventory
+ * value read `50.0000000000` in every currency while the invoice beside it read
+ * `50.000`. The scale is a storage decision and stays one; this is the
+ * rendering side of that boundary, shared with invoices and receipts so the two
+ * cannot disagree about what JPY looks like.
+ */
+async function companyDecimals(
+  db: Kysely<Database>, actor: InventoryActor,
+): Promise<number> {
+  const org = await db.selectFrom('organizations').select('base_currency')
+    .where('id', '=', actor.organizationId).executeTakeFirst();
+  return monetaryDecimalsFor(org?.base_currency);
+}
+
+/**
+ * Quantities are counted, not valued, so they follow the UNIT rather than the
+ * currency. Six places is the ledger's own quantity precision; trailing zeros
+ * below it are dropped, so a whole number reads as one.
+ */
+const QUANTITY_DECIMALS = 0;
+const quantityText = (value: unknown): string => renderAmount(value, QUANTITY_DECIMALS);
 
 export interface StockOnHandRow {
   itemId: string;
@@ -85,6 +113,7 @@ export async function stockOnHand(
      ORDER BY MAX(m.item_code), MAX(m.warehouse_code)
   `.execute(db);
 
+  const decimals = await companyDecimals(db, actor);
   return rows.map((row) => ({
     itemId: row.item_id,
     itemCode: row.item_code,
@@ -92,8 +121,8 @@ export async function stockOnHand(
     warehouseId: row.warehouse_id,
     warehouseCode: row.warehouse_code,
     baseUnitCode: row.base_unit_code,
-    quantity: row.quantity,
-    value: row.value,
+    quantity: quantityText(row.quantity),
+    value: renderAmount(row.value, decimals),
   }));
 }
 
@@ -145,7 +174,17 @@ export async function valuation(
      ORDER BY MAX(m.item_code)
   `.execute(db);
 
-  const total = rows.reduce((sum, row) => sum + Number(row.value), 0);
+  /*
+   * Summed as exact scaled integers, never as numbers.
+   *
+   * This used to be `rows.reduce((s, r) => s + Number(r.value), 0)`, which is a
+   * float sum of the very figures the general ledger is reconciled against —
+   * the one place a binary rounding error would be both invisible and
+   * load-bearing. The comment beneath it already said the total must never be
+   * accumulated in a float; now it is not.
+   */
+  const decimals = await companyDecimals(db, actor);
+  const total = rows.reduce((sum, row) => sum + Money.toAmount(row.value, 'value'), Money.ZERO);
 
   return {
     rows: rows.map((row) => ({
@@ -153,15 +192,18 @@ export async function valuation(
       itemCode: row.item_code,
       itemName: row.item_name,
       baseUnitCode: row.base_unit_code,
-      quantity: row.quantity,
-      value: row.value,
-      averageCost: row.average_cost,
+      quantity: quantityText(row.quantity),
+      value: renderAmount(row.value, decimals),
+      /*
+       * The average is a DIVISION, so it carries more places than money does —
+       * and it is not money: it is what one unit is worth, and rounding it to
+       * the currency would make quantity times average stop equalling value.
+       * Rendered at the ledger's own scale rather than the currency's.
+       */
+      averageCost: row.average_cost === null ? null : renderAmount(row.average_cost, Money.SCALE),
       inventoryAccountId: row.inventory_account_id,
     })),
-    /* Formatted from the exact per-row strings, never accumulated in a float
-     * before display: the sum here is for a heading, and the rows are the
-     * figures anything reconciles against. */
-    totalValue: total.toFixed(10),
+    totalValue: renderAmount(Money.toDecimalString(total), decimals),
   };
 }
 
@@ -182,6 +224,15 @@ export interface StockCardEntry {
   /** Running quantity and value AFTER this movement, company-wide. */
   runningQuantity: string;
   runningValue: string;
+  /**
+   * `posted` or `reversed`. A reversed row STAYS on the card: the audit
+   * question is what happened, and a withdrawal that vanished would leave a
+   * card that could not explain its own balance.
+   */
+  status: 'posted' | 'reversed';
+  /** The movement this one withdraws, and the one that withdrew it. */
+  reversalOfMovementId: string | null;
+  reversedByMovementId: string | null;
 }
 
 /**
@@ -212,12 +263,15 @@ export async function stockCard(
     quantity: string; unit_cost: string; total_cost: string;
     movement_date: string; posting_date: string;
     running_quantity: string; running_value: string;
+    status: 'posted' | 'reversed';
+    reversal_of_movement_id: string | null; reversed_by_movement_id: string | null;
   }>`
     SELECT
       m.id AS movement_id, m.document_id, d.document_number, d.kind,
       m.movement_type, m.warehouse_id, m.warehouse_code, m.direction,
       m.quantity::text, m.unit_cost::text, m.total_cost::text,
       m.movement_date::text, m.posting_date::text,
+      m.status, m.reversal_of_movement_id::text, m.reversed_by_movement_id::text,
       SUM(CASE WHEN m.direction = 'in' THEN m.quantity ELSE -m.quantity END)
         OVER (ORDER BY m.posting_date, m.created_at, m.id
               ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)::text AS running_quantity,
@@ -232,13 +286,22 @@ export async function stockCard(
      WHERE m.organization_id = ${actor.organizationId}
        AND m.company_id = ${actor.companyId}
        AND m.item_id = ${itemId}
-       AND m.status = 'posted'
+       /*
+        * Reversed rows are INCLUDED, deliberately.
+        *
+        * A reversal writes an opposite movement and marks both rows reversed,
+        * so the pair contributes exactly zero to every running total — the
+        * balance is identical whether they are shown or hidden. Hiding them
+        * would leave a card that cannot account for its own history, which is
+        * the one thing a stock card exists to do.
+        */
        AND (${query.warehouseId ?? null}::uuid IS NULL OR m.warehouse_id = ${query.warehouseId ?? null}::uuid)
        AND (${query.from ?? null}::date IS NULL OR m.posting_date >= ${query.from ?? null}::date)
        AND (${query.to ?? null}::date IS NULL OR m.posting_date <= ${query.to ?? null}::date)
      ORDER BY m.posting_date, m.created_at, m.id
   `.execute(db);
 
+  const decimals = await companyDecimals(db, actor);
   return rows.map((row) => ({
     movementId: row.movement_id,
     documentId: row.document_id,
@@ -248,13 +311,16 @@ export async function stockCard(
     warehouseId: row.warehouse_id,
     warehouseCode: row.warehouse_code,
     direction: row.direction,
-    quantity: row.quantity,
-    unitCost: row.unit_cost,
-    totalCost: row.total_cost,
+    quantity: quantityText(row.quantity),
+    unitCost: renderAmount(row.unit_cost, Money.SCALE),
+    totalCost: renderAmount(row.total_cost, decimals),
     movementDate: row.movement_date,
     postingDate: row.posting_date,
-    runningQuantity: row.running_quantity,
-    runningValue: row.running_value,
+    runningQuantity: quantityText(row.running_quantity),
+    runningValue: renderAmount(row.running_value, decimals),
+    status: row.status,
+    reversalOfMovementId: row.reversal_of_movement_id,
+    reversedByMovementId: row.reversed_by_movement_id,
   }));
 }
 
@@ -267,10 +333,36 @@ export interface ReconciliationRow {
   difference: string;
 }
 
+/**
+ * A journal entry that touched an inventory control account without an
+ * inventory document behind it.
+ *
+ * This is the honest explanation of a difference, and the reason a
+ * reconciliation report never posts anything: a manual journal to an inventory
+ * account is a legitimate act with a legitimate reason, and only the person who
+ * wrote it knows whether the fix is another journal or a stock adjustment.
+ * Correcting it automatically would guess.
+ */
+export interface ReconciliationException {
+  journalEntryId: string;
+  journalNumber: string;
+  postingDate: string;
+  accountId: string;
+  accountCode: string;
+  description: string;
+  sourceType: string | null;
+  reference: string;
+  amount: string;
+}
+
 export interface ReconciliationResult {
   asOfDate: string | null;
   rows: ReconciliationRow[];
+  /** The sum of the account rows — equal to them by construction, not by a second query. */
+  totals: { subledgerValue: string; generalLedgerBalance: string; difference: string };
   balanced: boolean;
+  /** Present when a difference exists and something explains it. */
+  exceptions: ReconciliationException[];
 }
 
 /**
@@ -338,18 +430,131 @@ export async function reconcile(
      ORDER BY a.account_code
   `.execute(db);
 
-  const mapped = rows.map((row) => ({
-    accountId: row.account_id,
-    accountCode: row.account_code,
-    accountName: row.account_name,
-    subledgerValue: row.subledger,
-    generalLedgerBalance: row.gl,
-    difference: row.difference,
-  }));
+  const decimals = await companyDecimals(db, actor);
+
+  /*
+   * Exact, as scaled integers. `balanced` used to be
+   * `every((row) => Number(row.difference) === 0)` — a float comparison
+   * deciding whether the books agree, which is the one question that must not
+   * be answered approximately.
+   */
+  let subledgerTotal = Money.ZERO;
+  let ledgerTotal = Money.ZERO;
+  let differenceTotal = Money.ZERO;
+
+  const mapped = rows.map((row) => {
+    subledgerTotal += Money.toAmount(row.subledger, 'subledger');
+    ledgerTotal += Money.toAmount(row.gl, 'generalLedger');
+    differenceTotal += Money.toAmount(row.difference, 'difference');
+    return {
+      accountId: row.account_id,
+      accountCode: row.account_code,
+      accountName: row.account_name,
+      subledgerValue: renderAmount(row.subledger, decimals),
+      generalLedgerBalance: renderAmount(row.gl, decimals),
+      difference: renderAmount(row.difference, decimals),
+    };
+  });
+
+  const balanced = rows.every((row) => Money.toAmount(row.difference, 'difference') === Money.ZERO);
 
   return {
     asOfDate: asOf,
     rows: mapped,
-    balanced: mapped.every((row) => Number(row.difference) === 0),
+    totals: {
+      subledgerValue: renderAmount(Money.toDecimalString(subledgerTotal), decimals),
+      generalLedgerBalance: renderAmount(Money.toDecimalString(ledgerTotal), decimals),
+      difference: renderAmount(Money.toDecimalString(differenceTotal), decimals),
+    },
+    balanced,
+    exceptions: balanced ? [] : await reconcilingExceptions(db, actor, asOf, decimals),
   };
+}
+
+/**
+ * The journal entries that could explain a difference.
+ *
+ * An inventory control account's balance should be the sum of the movements
+ * behind it. Every journal this product posts to one is produced by an
+ * inventory document — a receipt, an issue, a transfer, an adjustment, a
+ * stocked bill or a stocked sale — and each of those documents records the
+ * journal it created. So an entry touching an inventory account that NO
+ * document claims is, by construction, one somebody wrote by hand.
+ *
+ * They are reported with their references and never corrected. A manual journal
+ * to an inventory account may be entirely right; deciding otherwise, and
+ * posting an adjustment to "fix" it, would be this report inventing a
+ * correction nobody asked for.
+ */
+async function reconcilingExceptions(
+  db: Kysely<Database>,
+  actor: InventoryActor,
+  asOf: string | null,
+  decimals: number,
+): Promise<ReconciliationException[]> {
+  const { rows } = await sql<{
+    journal_entry_id: string; journal_number: string; posting_date: string;
+    account_id: string; account_code: string; description: string;
+    source_type: string | null; reference: string; amount: string;
+  }>`
+    WITH control_accounts AS (
+      SELECT DISTINCT inventory_account_id AS id
+        FROM inventory_movements
+       WHERE organization_id = ${actor.organizationId} AND company_id = ${actor.companyId}
+         AND inventory_account_id IS NOT NULL
+      UNION
+      SELECT DISTINCT inventory_account_id
+        FROM inventory_items
+       WHERE organization_id = ${actor.organizationId} AND company_id = ${actor.companyId}
+         AND inventory_account_id IS NOT NULL
+      UNION
+      SELECT default_inventory_account_id
+        FROM inventory_settings
+       WHERE organization_id = ${actor.organizationId} AND company_id = ${actor.companyId}
+         AND default_inventory_account_id IS NOT NULL
+    ),
+    stock_journals AS (
+      SELECT DISTINCT journal_entry_id
+        FROM inventory_documents
+       WHERE organization_id = ${actor.organizationId} AND company_id = ${actor.companyId}
+         AND journal_entry_id IS NOT NULL
+    )
+    SELECT
+      e.id AS journal_entry_id,
+      e.journal_number,
+      e.posting_date::text,
+      l.account_id,
+      a.account_code,
+      COALESCE(NULLIF(e.description, ''), COALESCE(l.memo, '')) AS description,
+      e.source_type,
+      COALESCE(e.reference, '') AS reference,
+      SUM(COALESCE(l.debit_functional, 0) - COALESCE(l.credit_functional, 0))::text AS amount
+      FROM journal_lines l
+      JOIN journal_entries e
+        ON e.id = l.journal_entry_id
+       AND e.organization_id = l.organization_id
+       AND e.company_id = l.company_id
+      JOIN accounts a ON a.id = l.account_id
+     WHERE l.organization_id = ${actor.organizationId}
+       AND l.company_id = ${actor.companyId}
+       AND e.status IN ('posted', 'reversed')
+       AND (${asOf}::date IS NULL OR e.posting_date <= ${asOf}::date)
+       AND l.account_id IN (SELECT id FROM control_accounts)
+       AND e.id NOT IN (SELECT journal_entry_id FROM stock_journals)
+     GROUP BY e.id, e.journal_number, e.posting_date, l.account_id, a.account_code,
+              e.description, l.memo, e.source_type, e.reference
+     ORDER BY e.posting_date, e.journal_number
+  `.execute(db);
+
+  return rows.map((row) => ({
+    journalEntryId: row.journal_entry_id,
+    journalNumber: row.journal_number,
+    postingDate: row.posting_date,
+    accountId: row.account_id,
+    accountCode: row.account_code,
+    description: row.description,
+    sourceType: row.source_type,
+    reference: row.reference,
+    amount: renderAmount(row.amount, decimals),
+  }));
 }

@@ -351,6 +351,27 @@ const RESET_PLAN: readonly PlanEntry[] = [
   /* Stock movements, children first — see migration 038. Before the documents
    * and the master data they reference with ON DELETE RESTRICT. */
   {
+    table: 'stock_count_lines',
+    action: 'scoped_delete',
+    order: 28.66,
+    label: 'Counted lines',
+    why: 'References items and units under RESTRICT keys, so it goes before them.',
+  },
+  {
+    table: 'stock_counts',
+    action: 'scoped_delete',
+    order: 28.68,
+    label: 'Stock counts',
+    why: 'Deleted before the stock documents and warehouses a count points at.',
+  },
+  {
+    table: 'stock_count_numbering',
+    action: 'scoped_delete',
+    order: 28.7,
+    label: 'Stock count numbering',
+    why: 'Meaningless once the counts are gone.',
+  },
+  {
     table: 'inventory_movements',
     action: 'scoped_delete',
     order: 28.72,

@@ -53,6 +53,20 @@ interface FakeDocument {
   movements: FakeMovement[];
 }
 
+interface FakeCountLine {
+  id: string; lineNumber: number; itemId: string; itemCode: string; itemName: string;
+  baseUnitCode: string; expectedQuantity: string; countedQuantity: string;
+  varianceQuantity: string; unitCost: string; varianceValue: string; note: string;
+}
+
+interface FakeCount {
+  id: string; countNumber: string; status: 'posted' | 'reversed';
+  warehouseId: string; warehouseCode: string; countDate: string; postingDate: string;
+  memo: string; adjustmentDocumentId: string | null; adjustmentDocumentNumber: string | null;
+  journalEntryId: string | null; reversalReason: string; version: number;
+  createdAt: string | null; idempotencyKey: string; lines: FakeCountLine[];
+}
+
 const UNITS = [
   { id: 'unit-1', code: 'EA', name: 'Each', symbol: 'ea', category: 'quantity', decimalPlaces: 0, status: 'active', isSystem: true, version: 1 },
 ];
@@ -78,6 +92,7 @@ const WAREHOUSES = [
 
 export const server = {
   documents: [] as FakeDocument[],
+  counts: [] as FakeCount[],
   calls: [] as Array<{ method: string; path: string }>,
   postedKeys: [] as string[],
   /** Makes the next POST fail at the transport, so a retry can be observed. */
@@ -89,6 +104,7 @@ export const server = {
 
 export function resetServer(): void {
   server.documents = [];
+  server.counts = [];
   server.calls = [];
   server.postedKeys = [];
   server.failNextPost = false;
@@ -223,6 +239,156 @@ function postDocument(body: Json): Response {
   return ok({ document, created: true }, 201);
 }
 
+/**
+ * A counted sheet, settled the way the server settles one.
+ *
+ * The expected quantity is derived HERE from the movements this fake holds —
+ * never read from the request — because that is the property the cutover test
+ * is proving: the screen sends counted figures and nothing else.
+ */
+function postCount(body: Json): Response {
+  const key = String(body.idempotencyKey ?? '');
+  server.postedKeys.push(key);
+  const existing = server.counts.find((c) => c.idempotencyKey === key);
+  if (existing) return ok({ count: existing, created: false }, 200);
+
+  const lines = (body.lines as Json[] ?? []).map((line, index) => {
+    const itemId = String(line.itemId);
+    const item = ITEMS.find((i) => i.id === itemId);
+    const expected = onHand(itemId);
+    const counted = Number(line.countedQuantity);
+    const variance = counted - expected;
+    return {
+      id: `cl-${server.counts.length}-${index}`,
+      lineNumber: index + 1,
+      itemId,
+      itemCode: item?.itemCode ?? '',
+      itemName: item?.name ?? '',
+      baseUnitCode: 'EA',
+      expectedQuantity: String(expected),
+      countedQuantity: String(counted),
+      varianceQuantity: String(variance),
+      unitCost: '0',
+      varianceValue: '0',
+      note: '',
+    };
+  });
+
+  /*
+   * Each variance becomes an adjustment DOCUMENT, exactly as the real server
+   * settles one — so on-hand and valuation read it the same way, and the test
+   * is exercising the same shape the books produce.
+   */
+  const moved = lines.filter((line) => Number(line.varianceQuantity) !== 0);
+  if (moved.length > 0) {
+    server.documents.unshift({
+      id: `count-adj-${server.counts.length + 1}`,
+      documentNumber: `ADJ-COUNT-${server.counts.length + 1}`,
+      kind: 'adjustment',
+      movementDate: String(body.countDate ?? '2026-03-10'),
+      postingDate: String(body.countDate ?? '2026-03-10'),
+      reference: '',
+      memo: 'Stock count',
+      reason: String(body.reason ?? ''),
+      status: 'posted',
+      journalEntryId: null,
+      reversalOfDocumentId: null,
+      reversedByDocumentId: null,
+      reversalReason: '',
+      version: 1,
+      createdAt: null,
+      movements: moved.map((line, index) => ({
+        id: `count-mv-${server.counts.length}-${index}`,
+        lineNumber: index + 1,
+        movementType: Number(line.varianceQuantity) > 0 ? 'adjustment-in' : 'adjustment-out',
+        itemId: line.itemId,
+        itemCode: line.itemCode,
+        itemName: line.itemName,
+        warehouseId: String(body.warehouseId ?? 'wh-1'),
+        warehouseCode: 'MAIN',
+        baseUnitId: 'unit-1',
+        baseUnitCode: 'EA',
+        direction: Number(line.varianceQuantity) > 0 ? 'in' : 'out',
+        quantity: String(Math.abs(Number(line.varianceQuantity))),
+        unitCost: '0',
+        totalCost: '0',
+        inventoryAccountId: 'acct-stock',
+        offsetAccountId: null,
+        movementDate: String(body.countDate ?? '2026-03-10'),
+        postingDate: String(body.countDate ?? '2026-03-10'),
+        status: 'posted',
+        reversalOfMovementId: null,
+        reversedByMovementId: null,
+      })) as never,
+    });
+  }
+
+  const count = {
+    id: `count-${server.counts.length + 1}`,
+    countNumber: `SC-2026-000${server.counts.length + 1}`,
+    status: 'posted' as const,
+    warehouseId: String(body.warehouseId ?? 'wh-1'),
+    warehouseCode: 'MAIN',
+    countDate: String(body.countDate ?? '2026-03-10'),
+    postingDate: String(body.countDate ?? '2026-03-10'),
+    memo: '',
+    adjustmentDocumentId: null,
+    adjustmentDocumentNumber: null,
+    journalEntryId: null,
+    reversalReason: '',
+    version: 1,
+    createdAt: null,
+    idempotencyKey: key,
+    lines,
+  };
+  server.counts.unshift(count);
+  return ok({ count, created: true }, 201);
+}
+
+/** Put stock on the shelf, so a count has something to disagree with. */
+export function seedReceipt(quantity: number, unitCost = 5): void {
+  server.documents.unshift({
+    id: `seed-${server.documents.length + 1}`,
+    documentNumber: `GRN-SEED-${server.documents.length + 1}`,
+    kind: 'receipt',
+    movementDate: '2026-03-01',
+    postingDate: '2026-03-01',
+    reference: '',
+    memo: '',
+    reason: '',
+    status: 'posted',
+    journalEntryId: null,
+    reversalOfDocumentId: null,
+    reversedByDocumentId: null,
+    reversalReason: '',
+    version: 1,
+    createdAt: null,
+    movements: [{
+      id: `seed-mv-${server.documents.length + 1}`,
+      lineNumber: 1,
+      movementType: 'receipt',
+      itemId: 'item-1',
+      itemCode: 'SKU-1',
+      itemName: 'Widget',
+      warehouseId: 'wh-1',
+      warehouseCode: 'MAIN',
+      baseUnitId: 'unit-1',
+      baseUnitCode: 'EA',
+      direction: 'in',
+      quantity: String(quantity),
+      unitCost: String(unitCost),
+      totalCost: String(quantity * unitCost),
+      inventoryAccountId: 'acct-stock',
+      offsetAccountId: 'acct-offset',
+      movementDate: '2026-03-01',
+      postingDate: '2026-03-01',
+      status: 'posted',
+      reversalOfMovementId: null,
+      reversedByMovementId: null,
+    }] as never,
+  });
+}
+
 export function install(): void {
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), 'http://server.test');
@@ -281,7 +447,25 @@ export function install(): void {
 
     if (path === '/api/inventory/reconciliation' && method === 'GET') {
       if (server.failReads) return fail(503, 'unavailable', 'The books are not reachable.');
-      return ok({ asOfDate: null, rows: [], balanced: true });
+      return ok({
+        asOfDate: null, rows: [], balanced: true,
+        totals: { subledgerValue: '0', generalLedgerBalance: '0', difference: '0' },
+        exceptions: [],
+      });
+    }
+
+    if (path === '/api/inventory/counts' && method === 'GET') {
+      if (server.failReads) return fail(503, 'unavailable', 'The books are not reachable.');
+      return ok({ counts: server.counts });
+    }
+
+    if (path === '/api/inventory/counts' && method === 'POST') {
+      if (server.failNextPost) {
+        server.failNextPost = false;
+        server.postedKeys.push(String(body.idempotencyKey ?? ''));
+        return fail(503, 'unavailable', 'Could not reach the books. Try again.');
+      }
+      return postCount(body);
     }
 
     if (path === '/api/inventory/settings' && method === 'GET') {

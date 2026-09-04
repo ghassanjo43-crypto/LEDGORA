@@ -23,7 +23,7 @@ import type { Kysely } from 'kysely';
 import type { Database } from '../../db/schema.js';
 import { errors } from '../../lib/errors.js';
 import type { AccountingActor } from '../accounting/audit.js';
-import { monetaryDecimalsFor } from '../accounting/currencyPrecision.js';
+import { monetaryDecimalsFor, renderAmount } from '../accounting/currencyPrecision.js';
 import * as Money from '../accounting/money.js';
 import * as journals from '../accounting/journalService.js';
 import { INVOICE_SOURCE_TYPE, CONCURRENCY_MESSAGE, getInvoice, type InvoiceRecord } from './invoiceService.js';
@@ -65,14 +65,7 @@ const instant = (value: unknown): string | null =>
   value ? new Date(value as string).toISOString() : null;
 
 /** Render a stored amount at the currency's precision — same rule as the invoice. */
-function display(value: unknown, decimals: number): string {
-  const raw = Money.toDecimalString(Money.toAmount(value as string));
-  const [whole = '0', fraction = ''] = raw.split('.');
-  let end = fraction.length;
-  while (end > decimals && fraction[end - 1] === '0') end -= 1;
-  const kept = fraction.slice(0, end);
-  return kept.length > 0 ? `${whole}.${kept}` : whole;
-}
+const display = renderAmount;
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function toPayment(row: any, decimals: number): PaymentRecord {

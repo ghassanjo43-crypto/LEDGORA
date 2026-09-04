@@ -613,11 +613,326 @@ function isDuplicateKey(cause: unknown): boolean {
   return code === '23505' || /inventory_documents_idempotency_uidx|duplicate key/i.test(message);
 }
 
-export async function postDocument(
-  db: Kysely<Database>,
+/**
+ * Post a stock document inside a transaction the CALLER owns.
+ *
+ * Extracted so a document that is produced by another document — a stock count
+ * settling its variance — can post through this engine rather than beside it.
+ * There is exactly one movement engine, one costing rule and one set of account
+ * checks; a second would be a second answer, and the two would diverge the
+ * first time either changed.
+ */
+export async function postDocumentIn(
+  trx: Transaction<Database>,
   actor: InventoryActor,
   input: PostDocumentInput,
-): Promise<{ document: DocumentRecord; created: boolean }> {
+): Promise<{ id: string; created: boolean }> {
+  assertPostable(input);
+  const decimals = await companyDecimals(trx, actor);
+  const postingDate = input.postingDate ?? input.movementDate;
+
+  /* Re-checked inside the transaction: the window between the read above and
+   * here is exactly where a retry lands. */
+  const raced = await findByKey(trx, actor, input.idempotencyKey);
+  if (raced) return { id: raced, created: false };
+
+  /*
+   * Locks first, in item order, before anything is read for costing. Sorting
+   * is what stops two opposing transfers deadlocking; taking them before the
+   * reads is what stops two issues both seeing stock that only one can have.
+   */
+  await lockItems(trx, actor, input.lines.map((line) => line.itemId));
+
+  /* The period gate, explicitly — a transfer posts no journal, so it would
+   * otherwise never meet the check that `postSourceJournalIn` performs. */
+  await assertPeriodAccepts(trx, actor.organizationId, actor.companyId, postingDate, 'post');
+
+  const profile = await profileOf(trx, actor);
+  const planned: PlannedMovement[] = [];
+
+  /* Running positions, advanced line by line so a multi-line document is
+   * internally consistent: two issues of the same item cost the second at
+   * what the first left behind. */
+  const positions = new Map<string, Position>();
+  const onHand = new Map<string, Money.Amount>();
+
+  const positionFor = async (itemId: string): Promise<Position> => {
+    if (!positions.has(itemId)) positions.set(itemId, await positionOf(trx, actor, itemId));
+    return positions.get(itemId)!;
+  };
+  const onHandFor = async (itemId: string, warehouseId: string): Promise<Money.Amount> => {
+    const key = `${itemId}:${warehouseId}`;
+    if (!onHand.has(key)) onHand.set(key, await onHandAt(trx, actor, itemId, warehouseId));
+    return onHand.get(key)!;
+  };
+
+  const source = input.kind === 'transfer'
+    ? await resolveWarehouse(trx, actor, input.sourceWarehouseId, 'sourceWarehouseId')
+    : null;
+  const destination = input.kind === 'transfer'
+    ? await resolveWarehouse(trx, actor, input.destinationWarehouseId, 'destinationWarehouseId')
+    : null;
+  if (source && destination && source.id === destination.id) {
+    throw errors.validation('A transfer must move stock between two different warehouses.');
+  }
+
+  let lineNumber = 0;
+
+  for (const line of input.lines) {
+    const item = await resolveItem(trx, actor, line.itemId);
+    const quantity = toQuantity(line.quantity, item.unitDecimals, 'quantity');
+
+    /* Backdating: refused behind this item's own history. */
+    const latest = await latestPostingDate(trx, actor, item.id);
+    if (latest && postingDate < latest) {
+      throw errors.validation(
+        `${BACKDATING_REFUSED} Item ${item.code} already has a movement posted on ${latest}.`,
+        { fieldErrors: { postingDate: `On or after ${latest}.` } },
+      );
+    }
+
+    const inventoryAccountId = await assertEligible(
+      trx, actor, item.inventoryAccountId ?? profile.inventory, 'inventory', 'asset',
+    );
+
+    const apply = async (
+      direction: 'in' | 'out',
+      movementType: string,
+      warehouse: { id: string; code: string },
+      unitCostInput: Money.Amount | null,
+      offsetAccountId: string | null,
+    ): Promise<void> => {
+      const position = await positionFor(item.id);
+      const key = `${item.id}:${warehouse.id}`;
+      const available = await onHandFor(item.id, warehouse.id);
+
+      let unitCost: Money.Amount;
+      let totalCost: Money.Amount;
+
+      if (direction === 'in') {
+        unitCost = unitCostInput ?? Money.ZERO;
+        totalCost = inboundCost(quantity, unitCost, decimals);
+        positions.set(item.id, {
+          quantity: position.quantity + quantity,
+          value: position.value + totalCost,
+        });
+        onHand.set(key, available + quantity);
+      } else {
+        if (available < quantity) {
+          throw errors.validation(
+            `${NEGATIVE_STOCK_REFUSED} ${item.code} has ${Money.describe(available)} in `
+            + `${warehouse.code} and this would take ${Money.describe(quantity)}.`,
+            { fieldErrors: { quantity: `At most ${Money.describe(available)} available.` } },
+          );
+        }
+        /* The cost is the SERVER's: a client-supplied figure for an outbound
+         * would be the caller choosing its own cost of sales. */
+        totalCost = outboundCost(position, quantity, decimals);
+        unitCost = quantity === 0n ? Money.ZERO
+          : (totalCost * 10n ** BigInt(Money.SCALE)) / quantity;
+        positions.set(item.id, {
+          quantity: position.quantity - quantity,
+          value: position.value - totalCost,
+        });
+        onHand.set(key, available - quantity);
+      }
+
+      lineNumber += 1;
+      planned.push({
+        lineNumber,
+        movementType,
+        item,
+        warehouseId: warehouse.id,
+        warehouseCode: warehouse.code,
+        direction,
+        quantity,
+        unitCost,
+        totalCost,
+        inventoryAccountId,
+        offsetAccountId,
+      });
+    };
+
+    if (input.kind === 'receipt') {
+      const warehouse = await resolveWarehouse(trx, actor, line.warehouseId, 'warehouseId');
+      const unitCost = toUnitCost(line.unitCost, decimals, 'unitCost');
+      /*
+       * The offset is the goods-received-not-invoiced account and nothing
+       * else. The browser falls back to Trade Payables when it is unset,
+       * which would create a payable owed to nobody; there is no fallback
+       * here at all.
+       */
+      const grni = await assertEligible(trx, actor, profile.grni, 'goods-received-not-invoiced', null);
+      await apply('in', 'receipt', warehouse, unitCost, grni);
+    } else if (input.kind === 'issue') {
+      const warehouse = await resolveWarehouse(trx, actor, line.warehouseId, 'warehouseId');
+      const expense = await assertEligible(
+        trx, actor, line.expenseAccountId ?? profile.loss, 'issue expense', 'expense',
+      );
+      await apply('out', 'issue', warehouse, null, expense);
+    } else if (input.kind === 'transfer') {
+      /* Two legs, same cost, one act. The out is costed first so the in
+       * carries exactly what left — which is what makes it value-neutral. */
+      await apply('out', 'transfer-out', source!, null, null);
+      const justPlanned = planned[planned.length - 1]!;
+      const position = await positionFor(item.id);
+      positions.set(item.id, {
+        quantity: position.quantity + quantity,
+        value: position.value + justPlanned.totalCost,
+      });
+      const destinationKey = `${item.id}:${destination!.id}`;
+      onHand.set(destinationKey, (await onHandFor(item.id, destination!.id)) + quantity);
+      lineNumber += 1;
+      planned.push({
+        lineNumber,
+        movementType: 'transfer-in',
+        item,
+        warehouseId: destination!.id,
+        warehouseCode: destination!.code,
+        direction: 'in',
+        quantity,
+        unitCost: justPlanned.unitCost,
+        totalCost: justPlanned.totalCost,
+        inventoryAccountId,
+        offsetAccountId: null,
+      });
+    } else {
+      const warehouse = await resolveWarehouse(trx, actor, line.warehouseId, 'warehouseId');
+      if (line.direction !== 'in' && line.direction !== 'out') {
+        throw errors.validation('An adjustment line must say whether stock goes in or out.', {
+          fieldErrors: { direction: 'Choose in or out.' },
+        });
+      }
+      if (line.direction === 'in') {
+        const gain = await assertEligible(trx, actor, profile.gain, 'inventory gain', 'income');
+        /* An adjustment in may name its cost; with none, it comes in at what
+         * the item is currently worth. */
+        const position = await positionFor(item.id);
+        const unitCost = line.unitCost === undefined || line.unitCost === null || line.unitCost === ''
+          ? (position.quantity === 0n ? Money.ZERO
+            : (position.value * 10n ** BigInt(Money.SCALE)) / position.quantity)
+          : toUnitCost(line.unitCost, decimals, 'unitCost');
+        await apply('in', 'adjustment-in', warehouse, unitCost, gain);
+      } else {
+        const loss = await assertEligible(trx, actor, profile.loss, 'inventory loss', 'expense');
+        await apply('out', 'adjustment-out', warehouse, null, loss);
+      }
+    }
+  }
+
+  const documentNumber = await allocateNumber(trx, actor, input.kind, postingDate);
+
+  let created: { id: string };
+  try {
+    created = await trx
+      .insertInto('inventory_documents')
+      .values({
+        organization_id: actor.organizationId,
+        company_id: actor.companyId,
+        document_number: documentNumber,
+        kind: input.kind,
+        movement_date: input.movementDate,
+        posting_date: postingDate,
+        reference: input.reference ?? '',
+        memo: input.memo ?? '',
+        reason: input.reason ?? '',
+        idempotency_key: input.idempotencyKey,
+        created_by: actor.userId,
+        /* Filled in below for everything but a transfer, which posts none. */
+        journal_entry_id: null,
+      } as never)
+      .returning('id')
+      .executeTakeFirstOrThrow();
+  } catch (cause) {
+    if (isDuplicateKey(cause)) {
+      /* Lost the race. Inside a transaction the statement has aborted this
+       * one, so the honest move is to let it roll back and answer from the
+       * winner on the way out. */
+      throw errors.conflict(
+        'That posting is already being recorded. Retry in a moment — it will not post twice.',
+      );
+    }
+    throw cause;
+  }
+
+  for (const movement of planned) {
+    await trx.insertInto('inventory_movements').values({
+      organization_id: actor.organizationId,
+      company_id: actor.companyId,
+      document_id: created.id,
+      line_number: movement.lineNumber,
+      movement_type: movement.movementType,
+      item_id: movement.item.id,
+      warehouse_id: movement.warehouseId,
+      base_unit_id: movement.item.baseUnitId,
+      direction: movement.direction,
+      quantity: Money.toDecimalString(movement.quantity),
+      unit_cost: Money.toDecimalString(movement.unitCost),
+      total_cost: Money.toDecimalString(movement.totalCost),
+      inventory_account_id: movement.inventoryAccountId,
+      offset_account_id: movement.offsetAccountId,
+      item_code: movement.item.code,
+      item_name: movement.item.name,
+      warehouse_code: movement.warehouseCode,
+      base_unit_code: movement.item.baseUnitCode,
+      movement_date: input.movementDate,
+      posting_date: postingDate,
+      created_by: actor.userId,
+    } as never).execute();
+  }
+
+  /*
+   * A transfer posts no journal. Stock has not changed hands, changed value
+   * or changed account — it is in a different building, which the general
+   * ledger has no opinion about.
+   */
+  if (input.kind !== 'transfer') {
+    const lines = planned.flatMap((movement) => {
+      const amount = Money.toDecimalString(movement.totalCost);
+      const label = `${input.kind} — ${movement.item.code}`;
+      return movement.direction === 'in'
+        ? [
+          { accountId: movement.inventoryAccountId, debit: amount, memo: label },
+          { accountId: movement.offsetAccountId!, credit: amount, memo: label },
+        ]
+        : [
+          { accountId: movement.offsetAccountId!, debit: amount, memo: label },
+          { accountId: movement.inventoryAccountId, credit: amount, memo: label },
+        ];
+    });
+
+    const { journal } = await postSourceJournalIn(trx, accountingActorOf(actor), {
+      sourceType: 'inventory_document',
+      sourceId: created.id,
+      sourceEvent: 'post',
+      transactionDate: input.movementDate,
+      postingDate,
+      reference: documentNumber,
+      description: `${input.kind[0]!.toUpperCase()}${input.kind.slice(1)} ${documentNumber}`,
+      lines,
+    });
+
+    await trx.updateTable('inventory_documents')
+      .set({ journal_entry_id: journal.id } as never)
+      .where('organization_id', '=', actor.organizationId)
+      .where('company_id', '=', actor.companyId)
+      .where('id', '=', created.id)
+      .execute();
+  }
+
+  await writeInventoryAudit(trx, actor, {
+    subjectType: 'item',
+    subjectId: null,
+    action: `STOCK_${input.kind.toUpperCase()}_POSTED`,
+    resultingVersion: 1,
+    detail: { documentId: created.id, documentNumber, lines: planned.length },
+  });
+
+  return { id: created.id, created: true };
+}
+
+/** The checks that must pass before anything at all is written. */
+function assertPostable(input: PostDocumentInput): void {
   if (!input.idempotencyKey?.trim()) {
     throw errors.validation('An idempotency key is required so a retry cannot post twice.');
   }
@@ -629,313 +944,19 @@ export async function postDocument(
       fieldErrors: { reason: 'Say why the quantity changed.' },
     });
   }
+}
+
+export async function postDocument(
+  db: Kysely<Database>,
+  actor: InventoryActor,
+  input: PostDocumentInput,
+): Promise<{ document: DocumentRecord; created: boolean }> {
+  assertPostable(input);
 
   const existingId = await findByKey(db, actor, input.idempotencyKey);
   if (existingId) return { document: await getDocument(db, actor, existingId), created: false };
 
-  const decimals = await companyDecimals(db, actor);
-  const postingDate = input.postingDate ?? input.movementDate;
-
-  const outcome = await db.transaction().execute(async (trx) => {
-    /* Re-checked inside the transaction: the window between the read above and
-     * here is exactly where a retry lands. */
-    const raced = await findByKey(trx, actor, input.idempotencyKey);
-    if (raced) return { id: raced, created: false };
-
-    /*
-     * Locks first, in item order, before anything is read for costing. Sorting
-     * is what stops two opposing transfers deadlocking; taking them before the
-     * reads is what stops two issues both seeing stock that only one can have.
-     */
-    await lockItems(trx, actor, input.lines.map((line) => line.itemId));
-
-    /* The period gate, explicitly — a transfer posts no journal, so it would
-     * otherwise never meet the check that `postSourceJournalIn` performs. */
-    await assertPeriodAccepts(trx, actor.organizationId, actor.companyId, postingDate, 'post');
-
-    const profile = await profileOf(trx, actor);
-    const planned: PlannedMovement[] = [];
-
-    /* Running positions, advanced line by line so a multi-line document is
-     * internally consistent: two issues of the same item cost the second at
-     * what the first left behind. */
-    const positions = new Map<string, Position>();
-    const onHand = new Map<string, Money.Amount>();
-
-    const positionFor = async (itemId: string): Promise<Position> => {
-      if (!positions.has(itemId)) positions.set(itemId, await positionOf(trx, actor, itemId));
-      return positions.get(itemId)!;
-    };
-    const onHandFor = async (itemId: string, warehouseId: string): Promise<Money.Amount> => {
-      const key = `${itemId}:${warehouseId}`;
-      if (!onHand.has(key)) onHand.set(key, await onHandAt(trx, actor, itemId, warehouseId));
-      return onHand.get(key)!;
-    };
-
-    const source = input.kind === 'transfer'
-      ? await resolveWarehouse(trx, actor, input.sourceWarehouseId, 'sourceWarehouseId')
-      : null;
-    const destination = input.kind === 'transfer'
-      ? await resolveWarehouse(trx, actor, input.destinationWarehouseId, 'destinationWarehouseId')
-      : null;
-    if (source && destination && source.id === destination.id) {
-      throw errors.validation('A transfer must move stock between two different warehouses.');
-    }
-
-    let lineNumber = 0;
-
-    for (const line of input.lines) {
-      const item = await resolveItem(trx, actor, line.itemId);
-      const quantity = toQuantity(line.quantity, item.unitDecimals, 'quantity');
-
-      /* Backdating: refused behind this item's own history. */
-      const latest = await latestPostingDate(trx, actor, item.id);
-      if (latest && postingDate < latest) {
-        throw errors.validation(
-          `${BACKDATING_REFUSED} Item ${item.code} already has a movement posted on ${latest}.`,
-          { fieldErrors: { postingDate: `On or after ${latest}.` } },
-        );
-      }
-
-      const inventoryAccountId = await assertEligible(
-        trx, actor, item.inventoryAccountId ?? profile.inventory, 'inventory', 'asset',
-      );
-
-      const apply = async (
-        direction: 'in' | 'out',
-        movementType: string,
-        warehouse: { id: string; code: string },
-        unitCostInput: Money.Amount | null,
-        offsetAccountId: string | null,
-      ): Promise<void> => {
-        const position = await positionFor(item.id);
-        const key = `${item.id}:${warehouse.id}`;
-        const available = await onHandFor(item.id, warehouse.id);
-
-        let unitCost: Money.Amount;
-        let totalCost: Money.Amount;
-
-        if (direction === 'in') {
-          unitCost = unitCostInput ?? Money.ZERO;
-          totalCost = inboundCost(quantity, unitCost, decimals);
-          positions.set(item.id, {
-            quantity: position.quantity + quantity,
-            value: position.value + totalCost,
-          });
-          onHand.set(key, available + quantity);
-        } else {
-          if (available < quantity) {
-            throw errors.validation(
-              `${NEGATIVE_STOCK_REFUSED} ${item.code} has ${Money.describe(available)} in `
-              + `${warehouse.code} and this would take ${Money.describe(quantity)}.`,
-              { fieldErrors: { quantity: `At most ${Money.describe(available)} available.` } },
-            );
-          }
-          /* The cost is the SERVER's: a client-supplied figure for an outbound
-           * would be the caller choosing its own cost of sales. */
-          totalCost = outboundCost(position, quantity, decimals);
-          unitCost = quantity === 0n ? Money.ZERO
-            : (totalCost * 10n ** BigInt(Money.SCALE)) / quantity;
-          positions.set(item.id, {
-            quantity: position.quantity - quantity,
-            value: position.value - totalCost,
-          });
-          onHand.set(key, available - quantity);
-        }
-
-        lineNumber += 1;
-        planned.push({
-          lineNumber,
-          movementType,
-          item,
-          warehouseId: warehouse.id,
-          warehouseCode: warehouse.code,
-          direction,
-          quantity,
-          unitCost,
-          totalCost,
-          inventoryAccountId,
-          offsetAccountId,
-        });
-      };
-
-      if (input.kind === 'receipt') {
-        const warehouse = await resolveWarehouse(trx, actor, line.warehouseId, 'warehouseId');
-        const unitCost = toUnitCost(line.unitCost, decimals, 'unitCost');
-        /*
-         * The offset is the goods-received-not-invoiced account and nothing
-         * else. The browser falls back to Trade Payables when it is unset,
-         * which would create a payable owed to nobody; there is no fallback
-         * here at all.
-         */
-        const grni = await assertEligible(trx, actor, profile.grni, 'goods-received-not-invoiced', null);
-        await apply('in', 'receipt', warehouse, unitCost, grni);
-      } else if (input.kind === 'issue') {
-        const warehouse = await resolveWarehouse(trx, actor, line.warehouseId, 'warehouseId');
-        const expense = await assertEligible(
-          trx, actor, line.expenseAccountId ?? profile.loss, 'issue expense', 'expense',
-        );
-        await apply('out', 'issue', warehouse, null, expense);
-      } else if (input.kind === 'transfer') {
-        /* Two legs, same cost, one act. The out is costed first so the in
-         * carries exactly what left — which is what makes it value-neutral. */
-        await apply('out', 'transfer-out', source!, null, null);
-        const justPlanned = planned[planned.length - 1]!;
-        const position = await positionFor(item.id);
-        positions.set(item.id, {
-          quantity: position.quantity + quantity,
-          value: position.value + justPlanned.totalCost,
-        });
-        const destinationKey = `${item.id}:${destination!.id}`;
-        onHand.set(destinationKey, (await onHandFor(item.id, destination!.id)) + quantity);
-        lineNumber += 1;
-        planned.push({
-          lineNumber,
-          movementType: 'transfer-in',
-          item,
-          warehouseId: destination!.id,
-          warehouseCode: destination!.code,
-          direction: 'in',
-          quantity,
-          unitCost: justPlanned.unitCost,
-          totalCost: justPlanned.totalCost,
-          inventoryAccountId,
-          offsetAccountId: null,
-        });
-      } else {
-        const warehouse = await resolveWarehouse(trx, actor, line.warehouseId, 'warehouseId');
-        if (line.direction !== 'in' && line.direction !== 'out') {
-          throw errors.validation('An adjustment line must say whether stock goes in or out.', {
-            fieldErrors: { direction: 'Choose in or out.' },
-          });
-        }
-        if (line.direction === 'in') {
-          const gain = await assertEligible(trx, actor, profile.gain, 'inventory gain', 'income');
-          /* An adjustment in may name its cost; with none, it comes in at what
-           * the item is currently worth. */
-          const position = await positionFor(item.id);
-          const unitCost = line.unitCost === undefined || line.unitCost === null || line.unitCost === ''
-            ? (position.quantity === 0n ? Money.ZERO
-              : (position.value * 10n ** BigInt(Money.SCALE)) / position.quantity)
-            : toUnitCost(line.unitCost, decimals, 'unitCost');
-          await apply('in', 'adjustment-in', warehouse, unitCost, gain);
-        } else {
-          const loss = await assertEligible(trx, actor, profile.loss, 'inventory loss', 'expense');
-          await apply('out', 'adjustment-out', warehouse, null, loss);
-        }
-      }
-    }
-
-    const documentNumber = await allocateNumber(trx, actor, input.kind, postingDate);
-
-    let created: { id: string };
-    try {
-      created = await trx
-        .insertInto('inventory_documents')
-        .values({
-          organization_id: actor.organizationId,
-          company_id: actor.companyId,
-          document_number: documentNumber,
-          kind: input.kind,
-          movement_date: input.movementDate,
-          posting_date: postingDate,
-          reference: input.reference ?? '',
-          memo: input.memo ?? '',
-          reason: input.reason ?? '',
-          idempotency_key: input.idempotencyKey,
-          created_by: actor.userId,
-          /* Filled in below for everything but a transfer, which posts none. */
-          journal_entry_id: null,
-        } as never)
-        .returning('id')
-        .executeTakeFirstOrThrow();
-    } catch (cause) {
-      if (isDuplicateKey(cause)) {
-        /* Lost the race. Inside a transaction the statement has aborted this
-         * one, so the honest move is to let it roll back and answer from the
-         * winner on the way out. */
-        throw errors.conflict(
-          'That posting is already being recorded. Retry in a moment — it will not post twice.',
-        );
-      }
-      throw cause;
-    }
-
-    for (const movement of planned) {
-      await trx.insertInto('inventory_movements').values({
-        organization_id: actor.organizationId,
-        company_id: actor.companyId,
-        document_id: created.id,
-        line_number: movement.lineNumber,
-        movement_type: movement.movementType,
-        item_id: movement.item.id,
-        warehouse_id: movement.warehouseId,
-        base_unit_id: movement.item.baseUnitId,
-        direction: movement.direction,
-        quantity: Money.toDecimalString(movement.quantity),
-        unit_cost: Money.toDecimalString(movement.unitCost),
-        total_cost: Money.toDecimalString(movement.totalCost),
-        inventory_account_id: movement.inventoryAccountId,
-        offset_account_id: movement.offsetAccountId,
-        item_code: movement.item.code,
-        item_name: movement.item.name,
-        warehouse_code: movement.warehouseCode,
-        base_unit_code: movement.item.baseUnitCode,
-        movement_date: input.movementDate,
-        posting_date: postingDate,
-        created_by: actor.userId,
-      } as never).execute();
-    }
-
-    /*
-     * A transfer posts no journal. Stock has not changed hands, changed value
-     * or changed account — it is in a different building, which the general
-     * ledger has no opinion about.
-     */
-    if (input.kind !== 'transfer') {
-      const lines = planned.flatMap((movement) => {
-        const amount = Money.toDecimalString(movement.totalCost);
-        const label = `${input.kind} — ${movement.item.code}`;
-        return movement.direction === 'in'
-          ? [
-            { accountId: movement.inventoryAccountId, debit: amount, memo: label },
-            { accountId: movement.offsetAccountId!, credit: amount, memo: label },
-          ]
-          : [
-            { accountId: movement.offsetAccountId!, debit: amount, memo: label },
-            { accountId: movement.inventoryAccountId, credit: amount, memo: label },
-          ];
-      });
-
-      const { journal } = await postSourceJournalIn(trx, accountingActorOf(actor), {
-        sourceType: 'inventory_document',
-        sourceId: created.id,
-        sourceEvent: 'post',
-        transactionDate: input.movementDate,
-        postingDate,
-        reference: documentNumber,
-        description: `${input.kind[0]!.toUpperCase()}${input.kind.slice(1)} ${documentNumber}`,
-        lines,
-      });
-
-      await trx.updateTable('inventory_documents')
-        .set({ journal_entry_id: journal.id } as never)
-        .where('organization_id', '=', actor.organizationId)
-        .where('company_id', '=', actor.companyId)
-        .where('id', '=', created.id)
-        .execute();
-    }
-
-    await writeInventoryAudit(trx, actor, {
-      subjectType: 'item',
-      subjectId: null,
-      action: `STOCK_${input.kind.toUpperCase()}_POSTED`,
-      resultingVersion: 1,
-      detail: { documentId: created.id, documentNumber, lines: planned.length },
-    });
-
-    return { id: created.id, created: true };
-  });
+  const outcome = await db.transaction().execute(async (trx) => postDocumentIn(trx, actor, input));
 
   return { document: await getDocument(db, actor, outcome.id), created: outcome.created };
 }

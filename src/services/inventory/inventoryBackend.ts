@@ -41,6 +41,9 @@ import {
   type StockOnHandRow,
   type ValuationRow,
   type ReconciliationRow,
+  stockCountsApi,
+  type ServerStockCount,
+  type StockCountInput,
 } from '@/services/api/inventoryApi';
 
 export type InventoryBackend = 'browser' | 'server';
@@ -367,6 +370,68 @@ export const stockGateway = {
   stockCard: (itemId: string) => stockApi.stockCard(itemId),
 };
 
+/* ── Counts ────────────────────────────────────────────────────────────────── */
+
+interface CountStoreShape {
+  counts: ServerStockCount[];
+  state: RegisterState;
+  error: string | null;
+}
+
+export const useServerCounts = create<CountStoreShape>(() => ({
+  counts: [], state: 'idle', error: null,
+}));
+
+export function clearCountCache(): void {
+  useServerCounts.setState({ counts: [], state: 'idle', error: null });
+}
+
+export async function loadStockCounts(): Promise<void> {
+  if (!inventoryIsServerAuthoritative()) return;
+  /* The company can change at any await, and a late answer would list one
+   * company's counts under another company's name. */
+  const generation = booksGeneration();
+  useServerCounts.setState({ state: 'loading', error: null });
+  try {
+    const counts = await stockCountsApi.list();
+    if (!isCurrentGeneration(generation)) return;
+    useServerCounts.setState({ counts, state: 'ready', error: null });
+  } catch (error) {
+    if (!isCurrentGeneration(generation)) return;
+    /*
+     * Empty and SAID to be empty, never a browser list. A count register that
+     * silently fell back would show somebody a history their books do not have.
+     */
+    useServerCounts.setState({
+      counts: [], state: 'unavailable',
+      error: error instanceof Error ? error.message : 'Stock counts could not be loaded.',
+    });
+  }
+}
+
+export const countGateway = {
+  /**
+   * Post one physical count.
+   *
+   * The expected quantities are NOT sent: the server reads them from the ledger
+   * inside the posting transaction, which is what makes the variance measurable
+   * at all. This gateway carries the counted figures and nothing else.
+   */
+  post: async (input: StockCountInput): Promise<{ count: ServerStockCount; created: boolean }> => {
+    const answer = await stockCountsApi.post(input);
+    await Promise.all([loadStockCounts(), loadStockDocuments(), loadStockPositions()]);
+    return answer;
+  },
+
+  reverse: async (
+    id: string, expectedVersion: number, reason: string,
+  ): Promise<ServerStockCount> => {
+    const reversed = await stockCountsApi.reverse(id, expectedVersion, reason);
+    await Promise.all([loadStockCounts(), loadStockDocuments(), loadStockPositions()]);
+    return reversed;
+  },
+};
+
 /**
  * A fresh idempotency key for one attempt at one document.
  *
@@ -379,11 +444,6 @@ export function newIdempotencyKey(): string {
   const random = globalThis.crypto?.randomUUID?.();
   return random ?? `k-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
 }
-
-export const COUNTS_UNSUPPORTED =
-  'Stock counts are not available yet. Counting is a controlled document with its own variance '
-  + 'posting and a freeze on the quantities while it is open, and none of that exists on the '
-  + 'server. Record the difference as an adjustment with a reason in the meantime.';
 
 export const OPENING_UNSUPPORTED =
   'Opening stock balances are not available yet. The controlled opening-balance workflow posts '

@@ -642,7 +642,11 @@ describe('reconciliation', () => {
 describe('migration 039', () => {
   it('rolls back and reapplies when nothing is stocked', async () => {
     const migrator = createMigrator(ctx.db);
-    /* 040 sits on top now, so it comes off first. */
+    /* 041 and 040 sit on top now, so they come off first. */
+    const counted = await migrator.migrateDown();
+    expect(counted.error).toBeUndefined();
+    expect(counted.results?.[0]?.migrationName).toBe('041_stock_counts');
+
     const sold = await migrator.migrateDown();
     expect(sold.error).toBeUndefined();
     expect(sold.results?.[0]?.migrationName).toBe('040_stocked_invoices');
@@ -667,8 +671,11 @@ describe('migration 039', () => {
     await post(b, created.json().bill.id, created.json().bill.version);
 
     const migrator = createMigrator(ctx.db);
-    /* Nothing was sold, so 040 comes off cleanly; 039 is the one holding the
-     * stocked purchase this test is about. */
+    /* Nothing was counted or sold, so 041 and 040 come off cleanly; 039 is the
+     * one holding the stocked purchase this test is about. */
+    const counted = await migrator.migrateDown();
+    expect(counted.error).toBeUndefined();
+
     const sold = await migrator.migrateDown();
     expect(sold.error).toBeUndefined();
 

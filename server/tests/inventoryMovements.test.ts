@@ -719,7 +719,7 @@ describe('reports', () => {
     expect(Number(last.runningValue)).toBe(Number(valuationRow.value));
   });
 
-  it('excludes reversed movements from every read', async () => {
+  it('excludes reversed movements from the BALANCES, and keeps them on the card', async () => {
     const b = await books('Excluded');
     const created = await receipt(b, '8', '1.000');
     const doc = created.json().document;
@@ -729,9 +729,23 @@ describe('reports', () => {
     expect(undone.statusCode, undone.body).toBe(200);
 
     expect((await call('GET', '/api/inventory/stock-on-hand', b.user)).json().rows).toHaveLength(0);
-    expect((await call('GET', `/api/inventory/items/${b.item}/stock-card`, b.user))
-      .json().entries).toHaveLength(0);
     expect((await call('GET', '/api/inventory/reconciliation', b.user)).json().balanced).toBe(true);
+
+    /*
+     * The card is the exception, and deliberately so since I5: a reversal
+     * writes an opposite movement and marks both rows reversed, so the PAIR
+     * contributes exactly zero — the running balance is identical whether they
+     * are shown or hidden. Hiding them would leave a card that cannot account
+     * for its own history, which is the one thing a stock card exists to do.
+     */
+    const card = (await call('GET', `/api/inventory/items/${b.item}/stock-card`, b.user)).json();
+    expect(card.entries).toHaveLength(2);
+    expect(card.entries.every((e: { status: string }) => e.status === 'reversed')).toBe(true);
+    /* The pair links both ways, and the balance lands back on nothing. */
+    expect(card.entries[0].reversedByMovementId).toBe(card.entries[1].movementId);
+    expect(card.entries[1].reversalOfMovementId).toBe(card.entries[0].movementId);
+    expect(card.entries[1].runningQuantity).toBe('0');
+    expect(card.entries[1].runningValue).toBe('0.000');
   });
 });
 
@@ -881,7 +895,11 @@ describe('migration 038', () => {
   it('rolls back and reapplies when the ledger is empty', async () => {
     const migrator = createMigrator(ctx.db);
 
-    /* 040 and 039 sit on top now, so they come off first. */
+    /* 041, 040 and 039 sit on top now, so they come off first. */
+    const counted = await migrator.migrateDown();
+    expect(counted.error).toBeUndefined();
+    expect(counted.results?.[0]?.migrationName).toBe('041_stock_counts');
+
     const sold = await migrator.migrateDown();
     expect(sold.error).toBeUndefined();
     expect(sold.results?.[0]?.migrationName).toBe('040_stocked_invoices');
@@ -909,9 +927,12 @@ describe('migration 038', () => {
     await receipt(b, '2', '1.000');
 
     const migrator = createMigrator(ctx.db);
-    /* Nothing was sold on an invoice or bought on a bill here, so 040 and 039
-     * come off cleanly; 038 is the one holding the movements this test is
-     * about. */
+    /* Nothing was counted, sold on an invoice or bought on a bill here, so 041,
+     * 040 and 039 come off cleanly; 038 is the one holding the movements this
+     * test is about. */
+    const counted = await migrator.migrateDown();
+    expect(counted.error).toBeUndefined();
+
     const sold = await migrator.migrateDown();
     expect(sold.error).toBeUndefined();
 

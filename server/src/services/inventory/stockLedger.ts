@@ -236,6 +236,13 @@ export function toQuantity(
   value: string | number | null | undefined,
   unitDecimals: number,
   field: string,
+  /*
+   * Zero is refused by default, because a movement of nothing moves nothing and
+   * would post an empty journal. A physical COUNT is the exception: "there are
+   * none on the shelf" is an observation, and a very different one from leaving
+   * the item off the sheet.
+   */
+  options: { allowZero?: boolean } = {},
 ): Money.Amount {
   const text = String(value ?? '').trim();
   if (!text) {
@@ -248,7 +255,7 @@ export function toQuantity(
     );
   }
   const amount = Money.toAmount(text, field);
-  if (amount === 0n) {
+  if (amount === 0n && !options.allowZero) {
     throw errors.validation(
       'A quantity of zero moves nothing and would post an empty journal.',
       { fieldErrors: { [field]: 'Enter a quantity greater than zero.' } },

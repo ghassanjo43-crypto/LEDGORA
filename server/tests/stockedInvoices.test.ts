@@ -780,6 +780,11 @@ describe('workspace deletion', () => {
 describe('migration 040', () => {
   it('rolls back and reapplies when nothing was sold', async () => {
     const migrator = createMigrator(ctx.db);
+    /* 041 sits on top now, so it comes off first. */
+    const counted = await migrator.migrateDown();
+    expect(counted.error).toBeUndefined();
+    expect(counted.results?.[0]?.migrationName).toBe('041_stock_counts');
+
     const down = await migrator.migrateDown();
     expect(down.error).toBeUndefined();
     expect(down.results?.[0]?.migrationName).toBe('040_stocked_invoices');
@@ -799,7 +804,13 @@ describe('migration 040', () => {
     await buy(b, '10', '5.000');
     await draftAndIssue(b, [soldLine(b, '4', '12.000')]);
 
-    const down = await createMigrator(ctx.db).migrateDown();
+    const migrator = createMigrator(ctx.db);
+    /* Nothing was counted, so 041 comes off cleanly; 040 is the one holding the
+     * stocked sale this test is about. */
+    const counted = await migrator.migrateDown();
+    expect(counted.error).toBeUndefined();
+
+    const down = await migrator.migrateDown();
     expect(down.error).toBeDefined();
     expect(String((down.error as Error).message)).toMatch(/Refusing to roll back 040/);
     /* A refused rollback destroys nothing. */
