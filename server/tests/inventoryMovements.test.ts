@@ -877,6 +877,12 @@ describe('the I2 boundary', () => {
     expect(bill.json().error.message).toMatch(/stock|inventory/i);
   });
 
+  /*
+   * `/api/inventory/goods-receipts` stays absent after AP1: goods receipts are a
+   * PURCHASING document and live under `/api/purchasing/receipts`, which is
+   * where the order that authorises them is. A second path onto the same
+   * records would be a second place for its rules to drift.
+   */
   it('has no stock-count, opening-balance or purchase-linked endpoint', async () => {
     const b = await books('NoRoutes');
     for (const path of [
@@ -895,7 +901,11 @@ describe('migration 038', () => {
   it('rolls back and reapplies when the ledger is empty', async () => {
     const migrator = createMigrator(ctx.db);
 
-    /* 041, 040 and 039 sit on top now, so they come off first. */
+    /* 042, 041, 040 and 039 sit on top now, so they come off first. */
+    const purchased = await migrator.migrateDown();
+    expect(purchased.error).toBeUndefined();
+    expect(purchased.results?.[0]?.migrationName).toBe('042_purchase_orders');
+
     const counted = await migrator.migrateDown();
     expect(counted.error).toBeUndefined();
     expect(counted.results?.[0]?.migrationName).toBe('041_stock_counts');
@@ -927,9 +937,12 @@ describe('migration 038', () => {
     await receipt(b, '2', '1.000');
 
     const migrator = createMigrator(ctx.db);
-    /* Nothing was counted, sold on an invoice or bought on a bill here, so 041,
-     * 040 and 039 come off cleanly; 038 is the one holding the movements this
-     * test is about. */
+    /* Nothing was ordered, counted, sold on an invoice or bought on a bill
+     * here, so 042, 041, 040 and 039 come off cleanly; 038 is the one holding
+     * the movements this test is about. */
+    const purchased = await migrator.migrateDown();
+    expect(purchased.error).toBeUndefined();
+
     const counted = await migrator.migrateDown();
     expect(counted.error).toBeUndefined();
 

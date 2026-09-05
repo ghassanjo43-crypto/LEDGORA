@@ -135,6 +135,16 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { key: 'bills', label: 'Bills', icon: ReceiptEuro, description: 'Supplier bills', requiredModule: 'purchases' },
       { key: 'payments', label: 'Payments Made', icon: Banknote, description: 'Supplier & other payments', comingSoon: false, requiredModule: 'purchases' },
+      /*
+       * Advanced Purchasing. Gated on `inventory_advanced` rather than
+       * `purchases`, because a receipt-first purchase posts a stock movement:
+       * a tenant with no advanced stock at all could open these screens and
+       * every action would be refused by the server. The gate is the same one
+       * the server's permission catalogue names, so the two cannot disagree.
+       */
+      { key: 'purchase-orders', label: 'Purchase Orders', icon: ClipboardList, description: 'Commitments to buy — no ledger entry', requiredModule: 'inventory_advanced' },
+      { key: 'goods-receipts', label: 'Goods Receipts', icon: PackageCheck, description: 'Receive ordered stock against a purchase order', requiredModule: 'inventory_advanced' },
+      { key: 'received-not-invoiced', label: 'Received Not Invoiced', icon: FileBarChart2, description: 'Goods taken in and not yet invoiced', requiredModule: 'inventory_advanced' },
     ],
   },
   {

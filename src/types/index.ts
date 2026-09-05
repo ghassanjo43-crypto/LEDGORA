@@ -188,6 +188,10 @@ export type ViewKey =
   | 'statements'
   | 'bills'
   | 'payments'
+  // Advanced Purchasing — AP1
+  | 'purchase-orders'
+  | 'goods-receipts'
+  | 'received-not-invoiced'
   | 'tax-codes'
   | 'tax-groups'
   | 'tax-jurisdictions'

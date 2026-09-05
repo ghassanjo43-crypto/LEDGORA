@@ -338,6 +338,64 @@ export const PERMISSION_SUBJECTS: PermissionSubject[] = [
     actions: [...READ, ...AUTHOR, ...BOOKKEEPING, ...AMENDMENT, 'approve'],
     description: 'Supplier bills, from draft to posted.',
   },
+  /*
+   * ── Advanced Purchasing ───────────────────────────────────────────────────
+   *
+   * Three subjects, because the specification asks for viewing and editing
+   * orders, approving and issuing them, receiving and posting stock, reversing
+   * a receipt, and reading the received-not-invoiced schedule to be separately
+   * grantable — and this catalogue's shape is (subject, action).
+   *
+   * `inventory_advanced` is the gate on all three. A receipt-first purchase is
+   * an advanced-inventory workflow by construction: it posts a stock movement,
+   * so a tenant without stock at all cannot use it, and the coarse plan
+   * vocabulary already sells `inventory_advanced` above `inventory_basic`.
+   */
+  {
+    id: 'purchase_orders',
+    label: 'Purchase Orders',
+    group: 'Sales & purchases',
+    scope: 'organization',
+    requiredModule: 'inventory_advanced',
+    /*
+     * `approve` covers approving AND issuing: both are the authority to commit
+     * the business outward, and the template ladder already withholds `approve`
+     * from the Accountant who authors the order — which is the separation that
+     * matters. `void` is closing and cancelling: abandoning a commitment is the
+     * same class of act as voiding a document, and an Accountant holds it.
+     *
+     * There is no `post`: a purchase order changes no ledger, ever.
+     */
+    actions: [...READ, 'create', 'edit', 'approve', 'void'],
+    description: 'Purchase orders: raising, editing, approving, issuing, closing and cancelling. No ledger entry.',
+  },
+  {
+    id: 'goods_receipts',
+    label: 'Goods Receipts',
+    group: 'Sales & purchases',
+    scope: 'organization',
+    requiredModule: 'inventory_advanced',
+    /*
+     * `post` and `void`, and deliberately nothing else. A receipt is captured
+     * and posted in ONE call — there is no draft to author and no submission to
+     * approve — so the act being authorised is putting stock and a liability in
+     * the books, which `post` already names. Reversing is the same class of act
+     * as voiding. Inventing `create` here would offer a control that authorised
+     * nothing, which is worse than not offering it.
+     */
+    actions: [...READ, 'post', 'void'],
+    description: 'Receiving ordered stock: posting a goods receipt and reversing one.',
+  },
+  {
+    id: 'received_not_invoiced',
+    label: 'Received Not Invoiced',
+    group: 'Sales & purchases',
+    scope: 'organization',
+    requiredModule: 'inventory_advanced',
+    /* A schedule, like the trial balance: read and exported, never written. */
+    actions: [...READ],
+    description: 'The goods-received-not-invoiced schedule and its reconciliation to the ledger.',
+  },
   {
     id: 'payments',
     label: 'Payments',

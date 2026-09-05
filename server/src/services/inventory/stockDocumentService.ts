@@ -57,7 +57,20 @@ import {
   toUnitCost,
 } from './stockLedger.js';
 
-export type DocumentKind = 'receipt' | 'issue' | 'transfer' | 'adjustment';
+/**
+ * The document kinds this engine posts directly.
+ *
+ * `purchase-receipt` is the Advanced Purchasing arrival. It is a separate kind
+ * from the standalone `receipt` rather than a flag on it, because only one of
+ * the two has an order behind it, a supplier, a permitted quantity and a
+ * supplier invoice still to come — and a schedule that could not tell them
+ * apart would report an order-less warehouse receipt as awaiting an invoice
+ * nobody is going to send. Both credit goods-received-not-invoiced; what
+ * differs is where the VALUE comes from, and that difference is the reason the
+ * caller may supply a server-derived total for one and never for the other.
+ */
+export type DocumentKind =
+  | 'receipt' | 'issue' | 'transfer' | 'adjustment' | 'purchase-receipt';
 
 /**
  * The counter-movement's type.
@@ -81,6 +94,19 @@ export interface LineInput {
   quantity: string;
   /** Receipts and positive adjustments only; never trusted for an outbound. */
   unitCost?: string | null;
+  /**
+   * The EXACT value of this line, computed by a server caller.
+   *
+   * Only a `purchase-receipt` may carry one, and the route schemas accept no
+   * such field from a client: it is how the goods-receipt service hands the
+   * engine the order's own net amount attributable to what arrived. A unit cost
+   * cannot express that figure — a discounted order line's net divided by its
+   * quantity is routinely finer than the currency, and rounding it before
+   * multiplying would leave the receipt a fraction away from the order it was
+   * derived from. The unit cost is derived back FROM this at full scale, which
+   * is the same thing the outbound path already does.
+   */
+  serverTotalCost?: string | null;
   /** Issues only: where the cost lands. Falls back to the profile's default. */
   expenseAccountId?: string | null;
   /** Adjustments only. */
@@ -98,6 +124,12 @@ export interface PostDocumentInput {
   /** Transfers only. */
   sourceWarehouseId?: string;
   destinationWarehouseId?: string;
+  /**
+   * The arrival this document records. Required for a `purchase-receipt` and
+   * refused for everything else, by a CHECK in migration 042 — so a movement of
+   * that kind can always be traced back to the order that authorised it.
+   */
+  sourceGoodsReceiptId?: string;
   lines: LineInput[];
 }
 
@@ -522,6 +554,10 @@ async function resolveWarehouse(
 
 const PREFIX: Record<DocumentKind, string> = {
   receipt: 'GRN-', issue: 'GIN-', transfer: 'TRF-', adjustment: 'ADJ-',
+  /* The stock document, not the receipt itself: the goods receipt carries its
+   * own `GR-` number, and two documents sharing one sequence would make the
+   * pair impossible to tell apart in a stock register. */
+  'purchase-receipt': 'PRC-',
 };
 
 async function allocateNumber(
@@ -701,6 +737,12 @@ export async function postDocumentIn(
       warehouse: { id: string; code: string },
       unitCostInput: Money.Amount | null,
       offsetAccountId: string | null,
+      /*
+       * An exact inbound value supplied by a SERVER caller, which wins over the
+       * unit cost. See `LineInput.serverTotalCost` for why a unit cost cannot
+       * always express the figure a purchase order actually committed to.
+       */
+      totalCostInput: Money.Amount | null = null,
     ): Promise<void> => {
       const position = await positionFor(item.id);
       const key = `${item.id}:${warehouse.id}`;
@@ -710,8 +752,16 @@ export async function postDocumentIn(
       let totalCost: Money.Amount;
 
       if (direction === 'in') {
-        unitCost = unitCostInput ?? Money.ZERO;
-        totalCost = inboundCost(quantity, unitCost, decimals);
+        if (totalCostInput !== null) {
+          totalCost = totalCostInput;
+          /* Derived, never sent: what it cost divided by what arrived. */
+          unitCost = quantity === 0n
+            ? Money.ZERO
+            : (totalCost * 10n ** BigInt(Money.SCALE)) / quantity;
+        } else {
+          unitCost = unitCostInput ?? Money.ZERO;
+          totalCost = inboundCost(quantity, unitCost, decimals);
+        }
         positions.set(item.id, {
           quantity: position.quantity + quantity,
           value: position.value + totalCost,
@@ -753,17 +803,31 @@ export async function postDocumentIn(
       });
     };
 
-    if (input.kind === 'receipt') {
+    if (input.kind === 'receipt' || input.kind === 'purchase-receipt') {
       const warehouse = await resolveWarehouse(trx, actor, line.warehouseId, 'warehouseId');
-      const unitCost = toUnitCost(line.unitCost, decimals, 'unitCost');
       /*
        * The offset is the goods-received-not-invoiced account and nothing
        * else. The browser falls back to Trade Payables when it is unset,
        * which would create a payable owed to nobody; there is no fallback
-       * here at all.
+       * here at all. Re-checked here, at the moment the entry is written,
+       * because an account eligible when it was mapped can be archived,
+       * blocked or given a child before anything is received against it.
        */
       const grni = await assertEligible(trx, actor, profile.grni, 'goods-received-not-invoiced', null);
-      await apply('in', 'receipt', warehouse, unitCost, grni);
+      if (input.kind === 'purchase-receipt') {
+        /*
+         * The value is the ORDER's, worked out by the goods-receipt service
+         * and passed through whole. A unit cost is not accepted here at all:
+         * the figure that matters is the order's net attributable to what
+         * arrived, and re-deriving it from a rounded unit price would put the
+         * receipt a fraction away from the commitment it came from.
+         */
+        const total = Money.toAmount(line.serverTotalCost ?? '0', 'totalCost');
+        await apply('in', 'receipt', warehouse, null, grni, total);
+      } else {
+        const unitCost = toUnitCost(line.unitCost, decimals, 'unitCost');
+        await apply('in', 'receipt', warehouse, unitCost, grni);
+      }
     } else if (input.kind === 'issue') {
       const warehouse = await resolveWarehouse(trx, actor, line.warehouseId, 'warehouseId');
       const expense = await assertEligible(
@@ -838,6 +902,8 @@ export async function postDocumentIn(
         reason: input.reason ?? '',
         idempotency_key: input.idempotencyKey,
         created_by: actor.userId,
+        /* Required for a purchase receipt and refused otherwise, by CHECK. */
+        source_goods_receipt_id: input.sourceGoodsReceiptId ?? null,
         /* Filled in below for everything but a transfer, which posts none. */
         journal_entry_id: null,
       } as never)
@@ -963,19 +1029,15 @@ export async function postDocument(
 
 /* ── Reversal ──────────────────────────────────────────────────────────────── */
 
-export async function reverseDocument(
-  db: Kysely<Database>,
-  actor: InventoryActor,
-  id: string,
-  expectedVersion: number,
-  reason: string,
-): Promise<DocumentRecord> {
-  /*
-   * Five characters, because the journal service demands that of every
-   * withdrawal reason and refusing here says so plainly. Letting it through
-   * would surface a message about "the entry's history" to somebody who was
-   * reversing a goods receipt and had no idea a journal was involved.
-   */
+/**
+ * The five-character rule, stated once.
+ *
+ * The journal service demands that of every withdrawal reason, and refusing it
+ * here says so plainly — letting it through would surface a message about "the
+ * entry's history" to somebody who was reversing a goods receipt and had no
+ * idea a journal was involved.
+ */
+export function assertReversalReason(reason: string): string {
   if ((reason ?? '').trim().length < 5) {
     throw errors.validation(
       'A reason of at least five characters is required, and it is recorded permanently against '
@@ -983,176 +1045,221 @@ export async function reverseDocument(
       { fieldErrors: { reason: 'Say why this is being reversed.' } },
     );
   }
+  return reason.trim();
+}
 
-  const reversalId = await db.transaction().execute(async (trx) => {
-    const original = await trx
-      .selectFrom('inventory_documents')
-      .selectAll()
-      .where('organization_id', '=', actor.organizationId)
-      .where('company_id', '=', actor.companyId)
-      .where('id', '=', id)
-      .forUpdate()
-      .executeTakeFirst();
-    if (!original) throw errors.notFound('Stock document');
-    assertVersion(Number(original.version), expectedVersion);
-    if (original.status === 'reversed') {
-      throw errors.conflict('That document has already been reversed.');
+/**
+ * Withdraw a stock document inside a transaction the CALLER owns.
+ *
+ * Extracted for the same reason `postDocumentIn` was: a document produced by
+ * another document — a goods receipt being reversed — has to withdraw its stock
+ * and change its own state together or not at all. Reversing through a separate
+ * transaction leaves a window in which the movements are gone and the owning
+ * document still says it is posted, and a crash inside that window leaves the
+ * two disagreeing permanently.
+ */
+export async function reverseDocumentIn(
+  trx: Transaction<Database>,
+  actor: InventoryActor,
+  id: string,
+  expectedVersion: number,
+  reason: string,
+): Promise<string> {
+  assertReversalReason(reason);
+  const original = await trx
+    .selectFrom('inventory_documents')
+    .selectAll()
+    .where('organization_id', '=', actor.organizationId)
+    .where('company_id', '=', actor.companyId)
+    .where('id', '=', id)
+    .forUpdate()
+    .executeTakeFirst();
+  if (!original) throw errors.notFound('Stock document');
+  assertVersion(Number(original.version), expectedVersion);
+  if (original.status === 'reversed') {
+    throw errors.conflict('That document has already been reversed.');
+  }
+
+  const movements = await trx
+    .selectFrom('inventory_movements')
+    .selectAll()
+    .where('organization_id', '=', actor.organizationId)
+    .where('company_id', '=', actor.companyId)
+    .where('document_id', '=', id)
+    .orderBy('line_number', 'asc')
+    .execute();
+
+  await lockItems(trx, actor, movements.map((m) => m.item_id));
+
+  const today = new Date().toISOString().slice(0, 10);
+  await assertPeriodAccepts(trx, actor.organizationId, actor.companyId, today, 'post');
+
+  /*
+   * Reversing an inbound takes that quantity back out. If it is no longer
+   * there, the stock has been consumed and an exact restoration is impossible
+   * — the product's answer is a controlled correction, not a reversal that
+   * drives a warehouse below zero.
+   */
+  for (const movement of movements) {
+    if (movement.direction !== 'in') continue;
+    const available = await onHandAt(trx, actor, movement.item_id, movement.warehouse_id);
+    const quantity = Money.toAmount(movement.quantity, 'quantity');
+    if (available < quantity) {
+      throw errors.validation(
+        `Cannot reverse ${original.document_number}: only ${Money.describe(available)} of `
+        + `${movement.item_code} remain in ${movement.warehouse_code}, but the document added `
+        + `${Money.describe(quantity)}. Some of it has been used, so the reversal cannot restore `
+        + 'the position exactly. Record a correcting adjustment instead.',
+      );
     }
+  }
 
-    const movements = await trx
-      .selectFrom('inventory_movements')
-      .selectAll()
-      .where('organization_id', '=', actor.organizationId)
-      .where('company_id', '=', actor.companyId)
-      .where('document_id', '=', id)
-      .orderBy('line_number', 'asc')
-      .execute();
+  const reversalNumber = await allocateNumber(
+    trx, actor, original.kind as DocumentKind, today,
+  );
 
-    await lockItems(trx, actor, movements.map((m) => m.item_id));
+  const created = await trx
+    .insertInto('inventory_documents')
+    .values({
+      organization_id: actor.organizationId,
+      company_id: actor.companyId,
+      document_number: reversalNumber,
+      kind: original.kind,
+      movement_date: today,
+      posting_date: today,
+      reference: original.document_number,
+      memo: `Reversal of ${original.document_number}`,
+      reason: original.kind === 'adjustment' ? reason.trim() : '',
+      status: 'reversed',
+      idempotency_key: `reverse:${id}`,
+      /*
+       * The counter-document is the SAME kind as the one it withdraws, and a
+       * kind that names a source document must keep naming it: migration 042
+       * requires a `purchase-receipt` to carry its goods receipt, so a
+       * reversal that dropped the link would be refused by the database — and
+       * a reader who found the counter-movement could not get from it back to
+       * the arrival it cancels.
+       */
+      source_goods_receipt_id: original.source_goods_receipt_id ?? null,
+      reversal_of_document_id: id,
+      reversal_reason: reason.trim(),
+      created_by: actor.userId,
+      journal_entry_id: null,
+    } as never)
+    .returning('id')
+    .executeTakeFirstOrThrow();
 
-    const today = new Date().toISOString().slice(0, 10);
-    await assertPeriodAccepts(trx, actor.organizationId, actor.companyId, today, 'post');
-
-    /*
-     * Reversing an inbound takes that quantity back out. If it is no longer
-     * there, the stock has been consumed and an exact restoration is impossible
-     * — the product's answer is a controlled correction, not a reversal that
-     * drives a warehouse below zero.
-     */
-    for (const movement of movements) {
-      if (movement.direction !== 'in') continue;
-      const available = await onHandAt(trx, actor, movement.item_id, movement.warehouse_id);
-      const quantity = Money.toAmount(movement.quantity, 'quantity');
-      if (available < quantity) {
-        throw errors.validation(
-          `Cannot reverse ${original.document_number}: only ${Money.describe(available)} of `
-          + `${movement.item_code} remain in ${movement.warehouse_code}, but the document added `
-          + `${Money.describe(quantity)}. Some of it has been used, so the reversal cannot restore `
-          + 'the position exactly. Record a correcting adjustment instead.',
-        );
-      }
-    }
-
-    const reversalNumber = await allocateNumber(
-      trx, actor, original.kind as DocumentKind, today,
-    );
-
-    const created = await trx
-      .insertInto('inventory_documents')
+  /*
+   * The counter-movements are written already reversed, and the originals are
+   * flipped to reversed too. Both sides then fall out of every sum, which is
+   * what "exactly restored" means here — a plain opposite movement left in the
+   * running average would leave a different average behind, not the original.
+   */
+  let line = 0;
+  for (const movement of movements) {
+    line += 1;
+    const counter = await trx
+      .insertInto('inventory_movements')
       .values({
         organization_id: actor.organizationId,
         company_id: actor.companyId,
-        document_number: reversalNumber,
-        kind: original.kind,
+        document_id: created.id,
+        line_number: line,
+        movement_type: OPPOSITE_TYPE[movement.movement_type]
+          ?? (movement.direction === 'in' ? 'adjustment-out' : 'adjustment-in'),
+        item_id: movement.item_id,
+        warehouse_id: movement.warehouse_id,
+        base_unit_id: movement.base_unit_id,
+        direction: movement.direction === 'in' ? 'out' : 'in',
+        quantity: movement.quantity,
+        /* The ORIGINAL cost, never today's average. */
+        unit_cost: movement.unit_cost,
+        total_cost: movement.total_cost,
+        inventory_account_id: movement.inventory_account_id,
+        offset_account_id: movement.offset_account_id,
+        item_code: movement.item_code,
+        item_name: movement.item_name,
+        warehouse_code: movement.warehouse_code,
+        base_unit_code: movement.base_unit_code,
         movement_date: today,
         posting_date: today,
-        reference: original.document_number,
-        memo: `Reversal of ${original.document_number}`,
-        reason: original.kind === 'adjustment' ? reason.trim() : '',
         status: 'reversed',
-        idempotency_key: `reverse:${id}`,
-        reversal_of_document_id: id,
-        reversal_reason: reason.trim(),
+        reversal_of_movement_id: movement.id,
         created_by: actor.userId,
-        journal_entry_id: null,
       } as never)
       .returning('id')
       .executeTakeFirstOrThrow();
 
-    /*
-     * The counter-movements are written already reversed, and the originals are
-     * flipped to reversed too. Both sides then fall out of every sum, which is
-     * what "exactly restored" means here — a plain opposite movement left in the
-     * running average would leave a different average behind, not the original.
-     */
-    let line = 0;
-    for (const movement of movements) {
-      line += 1;
-      const counter = await trx
-        .insertInto('inventory_movements')
-        .values({
-          organization_id: actor.organizationId,
-          company_id: actor.companyId,
-          document_id: created.id,
-          line_number: line,
-          movement_type: OPPOSITE_TYPE[movement.movement_type]
-            ?? (movement.direction === 'in' ? 'adjustment-out' : 'adjustment-in'),
-          item_id: movement.item_id,
-          warehouse_id: movement.warehouse_id,
-          base_unit_id: movement.base_unit_id,
-          direction: movement.direction === 'in' ? 'out' : 'in',
-          quantity: movement.quantity,
-          /* The ORIGINAL cost, never today's average. */
-          unit_cost: movement.unit_cost,
-          total_cost: movement.total_cost,
-          inventory_account_id: movement.inventory_account_id,
-          offset_account_id: movement.offset_account_id,
-          item_code: movement.item_code,
-          item_name: movement.item_name,
-          warehouse_code: movement.warehouse_code,
-          base_unit_code: movement.base_unit_code,
-          movement_date: today,
-          posting_date: today,
-          status: 'reversed',
-          reversal_of_movement_id: movement.id,
-          created_by: actor.userId,
-        } as never)
-        .returning('id')
-        .executeTakeFirstOrThrow();
-
-      await trx.updateTable('inventory_movements')
-        .set({ status: 'reversed', reversed_by_movement_id: counter.id } as never)
-        .where('organization_id', '=', actor.organizationId)
-        .where('company_id', '=', actor.companyId)
-        .where('id', '=', movement.id)
-        .execute();
-    }
-
-    if (original.journal_entry_id) {
-      const journal = await trx
-        .selectFrom('journal_entries')
-        .select(['id', 'version'])
-        .where('organization_id', '=', actor.organizationId)
-        .where('company_id', '=', actor.companyId)
-        .where('id', '=', original.journal_entry_id)
-        .executeTakeFirst();
-      if (!journal) throw errors.conflict('The journal behind this document is missing.');
-
-      const { reversal } = await reverseJournalIn(
-        trx, accountingActorOf(actor), original.journal_entry_id,
-        { expectedVersion: Number(journal.version), reason: reason.trim(), postingDate: today },
-      );
-      await trx.updateTable('inventory_documents')
-        .set({ journal_entry_id: reversal.id } as never)
-        .where('organization_id', '=', actor.organizationId)
-        .where('company_id', '=', actor.companyId)
-        .where('id', '=', created.id)
-        .execute();
-    }
-
-    await trx.updateTable('inventory_documents')
-      .set({
-        status: 'reversed',
-        reversed_by_document_id: created.id,
-        reversal_reason: reason.trim(),
-        version: Number(original.version) + 1,
-        updated_at: new Date(),
-      } as never)
+    await trx.updateTable('inventory_movements')
+      .set({ status: 'reversed', reversed_by_movement_id: counter.id } as never)
       .where('organization_id', '=', actor.organizationId)
       .where('company_id', '=', actor.companyId)
-      .where('id', '=', id)
+      .where('id', '=', movement.id)
       .execute();
+  }
 
-    await writeInventoryAudit(trx, actor, {
-      subjectType: 'item',
-      subjectId: null,
-      action: 'STOCK_DOCUMENT_REVERSED',
-      resultingVersion: Number(original.version) + 1,
-      detail: { documentId: id, reversalId: created.id, reason: reason.trim() },
-    });
+  if (original.journal_entry_id) {
+    const journal = await trx
+      .selectFrom('journal_entries')
+      .select(['id', 'version'])
+      .where('organization_id', '=', actor.organizationId)
+      .where('company_id', '=', actor.companyId)
+      .where('id', '=', original.journal_entry_id)
+      .executeTakeFirst();
+    if (!journal) throw errors.conflict('The journal behind this document is missing.');
 
-    return created.id;
+    const { reversal } = await reverseJournalIn(
+      trx, accountingActorOf(actor), original.journal_entry_id,
+      { expectedVersion: Number(journal.version), reason: reason.trim(), postingDate: today },
+    );
+    await trx.updateTable('inventory_documents')
+      .set({ journal_entry_id: reversal.id } as never)
+      .where('organization_id', '=', actor.organizationId)
+      .where('company_id', '=', actor.companyId)
+      .where('id', '=', created.id)
+      .execute();
+  }
+
+  await trx.updateTable('inventory_documents')
+    .set({
+      status: 'reversed',
+      reversed_by_document_id: created.id,
+      reversal_reason: reason.trim(),
+      version: Number(original.version) + 1,
+      updated_at: new Date(),
+    } as never)
+    .where('organization_id', '=', actor.organizationId)
+    .where('company_id', '=', actor.companyId)
+    .where('id', '=', id)
+    .execute();
+
+  await writeInventoryAudit(trx, actor, {
+    subjectType: 'item',
+    subjectId: null,
+    action: 'STOCK_DOCUMENT_REVERSED',
+    resultingVersion: Number(original.version) + 1,
+    detail: { documentId: id, reversalId: created.id, reason: reason.trim() },
   });
 
+  return created.id;
+}
+
+/**
+ * Withdraw a stock document, in a transaction of its own.
+ *
+ * The public entry point for a caller that owns nothing else — a bookkeeper
+ * reversing an adjustment from the stock register.
+ */
+export async function reverseDocument(
+  db: Kysely<Database>,
+  actor: InventoryActor,
+  id: string,
+  expectedVersion: number,
+  reason: string,
+): Promise<DocumentRecord> {
+  assertReversalReason(reason);
+  const reversalId = await db.transaction().execute(
+    async (trx) => reverseDocumentIn(trx, actor, id, expectedVersion, reason),
+  );
   return getDocument(db, actor, reversalId);
 }

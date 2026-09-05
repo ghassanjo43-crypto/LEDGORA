@@ -111,6 +111,9 @@ const AdjustmentsPage = lazy(() => import('@/pages/inventory/MovementDocumentPag
 const TransfersPage = lazy(() => import('@/pages/inventory/TransfersPage').then((m) => ({ default: m.TransfersPage })));
 const StockCountsPage = lazy(() => import('@/pages/inventory/StockCountsPage').then((m) => ({ default: m.StockCountsPage })));
 const InventoryReportsPage = lazy(() => import('@/pages/inventory/InventoryReportsPage').then((m) => ({ default: m.InventoryReportsPage })));
+const PurchaseOrdersPage = lazy(() => import('@/pages/purchasing/PurchaseOrdersPage').then((m) => ({ default: m.PurchaseOrdersPage })));
+const PurchasingGoodsReceiptsPage = lazy(() => import('@/pages/purchasing/GoodsReceiptsPage').then((m) => ({ default: m.GoodsReceiptsPage })));
+const ReceivedNotInvoicedPage = lazy(() => import('@/pages/purchasing/ReceivedNotInvoicedPage').then((m) => ({ default: m.ReceivedNotInvoicedPage })));
 const ManufacturingDashboardPage = lazy(() => import('@/pages/manufacturing/ManufacturingDashboardPage').then((m) => ({ default: m.ManufacturingDashboardPage })));
 const WorkOrdersPage = lazy(() => import('@/pages/manufacturing/WorkOrdersPage').then((m) => ({ default: m.WorkOrdersPage })));
 const PlantsPage = lazy(() => import('@/pages/manufacturing/MasterPages').then((m) => ({ default: m.PlantsPage })));
@@ -261,6 +264,17 @@ export default function App() {
         return <StockCountsPage />;
       case 'inventory-reports':
         return <InventoryReportsPage />;
+      case 'purchase-orders':
+        return <PurchaseOrdersPage />;
+      /* The PURCHASING goods receipt, against an order. Deliberately a
+       * different screen from the standalone warehouse receipt under
+       * Inventory: one has a commitment and a supplier behind it, the other
+       * does not, and a single screen would have to pretend the difference
+       * away. */
+      case 'goods-receipts':
+        return <PurchasingGoodsReceiptsPage />;
+      case 'received-not-invoiced':
+        return <ReceivedNotInvoicedPage />;
       case 'manufacturing-dashboard':
         return <ManufacturingDashboardPage />;
       case 'manufacturing-plants':

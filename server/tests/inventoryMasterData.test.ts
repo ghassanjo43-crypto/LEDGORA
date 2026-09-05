@@ -709,6 +709,10 @@ describe('migration 037', () => {
     /* Each later migration comes off first. Asserting the name rather than a
      * count is what makes a new one fail here loudly instead of silently
      * rolling back something else. */
+    const purchased = await migrator.migrateDown();
+    expect(purchased.error).toBeUndefined();
+    expect(purchased.results?.[0]?.migrationName).toBe('042_purchase_orders');
+
     const counted = await migrator.migrateDown();
     expect(counted.error).toBeUndefined();
     expect(counted.results?.[0]?.migrationName).toBe('041_stock_counts');
@@ -755,9 +759,11 @@ describe('migration 037', () => {
     expect(created.statusCode, created.body).toBe(201);
 
     const migrator = createMigrator(ctx.db);
-    /* Nothing counted, sold, stocked or moved, so 041, 040, 039 and 038 come
-     * off without complaint; 037 is the one holding the catalogue this test is
-     * about. */
+    /* Nothing ordered, counted, sold, stocked or moved, so 042, 041, 040, 039
+     * and 038 come off without complaint; 037 is the one holding the catalogue
+     * this test is about. */
+    const purchased = await migrator.migrateDown();
+    expect(purchased.error).toBeUndefined();
     const counted = await migrator.migrateDown();
     expect(counted.error).toBeUndefined();
     const sold = await migrator.migrateDown();
@@ -782,6 +788,10 @@ describe('migration 037', () => {
     await call('GET', '/api/inventory/units', user);
 
     const migrator = createMigrator(ctx.db);
+    const purchased = await migrator.migrateDown();
+    expect(purchased.error).toBeUndefined();
+    expect(purchased.results?.[0]?.migrationName).toBe('042_purchase_orders');
+
     const counted = await migrator.migrateDown();
     expect(counted.error).toBeUndefined();
     expect(counted.results?.[0]?.migrationName).toBe('041_stock_counts');

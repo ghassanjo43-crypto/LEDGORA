@@ -780,7 +780,11 @@ describe('workspace deletion', () => {
 describe('migration 040', () => {
   it('rolls back and reapplies when nothing was sold', async () => {
     const migrator = createMigrator(ctx.db);
-    /* 041 sits on top now, so it comes off first. */
+    /* 042 and 041 sit on top now, so they come off first. */
+    const purchased = await migrator.migrateDown();
+    expect(purchased.error).toBeUndefined();
+    expect(purchased.results?.[0]?.migrationName).toBe('042_purchase_orders');
+
     const counted = await migrator.migrateDown();
     expect(counted.error).toBeUndefined();
     expect(counted.results?.[0]?.migrationName).toBe('041_stock_counts');
@@ -805,8 +809,11 @@ describe('migration 040', () => {
     await draftAndIssue(b, [soldLine(b, '4', '12.000')]);
 
     const migrator = createMigrator(ctx.db);
-    /* Nothing was counted, so 041 comes off cleanly; 040 is the one holding the
-     * stocked sale this test is about. */
+    /* Nothing was ordered or counted, so 042 and 041 come off cleanly; 040 is
+     * the one holding the stocked sale this test is about. */
+    const purchased = await migrator.migrateDown();
+    expect(purchased.error).toBeUndefined();
+
     const counted = await migrator.migrateDown();
     expect(counted.error).toBeUndefined();
 

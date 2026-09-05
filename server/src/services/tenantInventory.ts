@@ -377,6 +377,71 @@ export const TENANT_DEPENDENCIES: readonly TenantDependency[] = [
     crossTenantReachable: false,
     rationale: 'The held bill sequence for a tenant company.',
   },
+  /*
+   * Advanced Purchasing AP1, children first. Ordered BEFORE the stock rows: a
+   * receipt line names a movement under a RESTRICT key, and the order lines
+   * name items, units and warehouses under RESTRICT keys of their own.
+   */
+  {
+    table: 'purchasing_audit_events',
+    ownershipKey: 'organization_id',
+    kind: 'authoritative',
+    disposition: 'delete',
+    order: 35.7,
+    label: 'Purchasing audit events',
+    crossTenantReachable: false,
+    rationale: 'The history of an order or a receipt; meaningless once both are gone.',
+  },
+  {
+    table: 'goods_receipt_lines',
+    ownershipKey: 'organization_id',
+    kind: 'authoritative',
+    disposition: 'delete',
+    order: 35.72,
+    label: 'Goods receipt lines',
+    crossTenantReachable: false,
+    rationale: 'What arrived on one delivery. References movements, items, units and warehouses under RESTRICT keys, so it goes before all of them and before the receipt that owns it.',
+  },
+  {
+    table: 'goods_receipts',
+    ownershipKey: 'organization_id',
+    kind: 'authoritative',
+    disposition: 'delete',
+    order: 35.74,
+    label: 'Goods receipts',
+    crossTenantReachable: false,
+    rationale: 'A delivery against a purchase order, and the stock document it posted. Deleted after its lines and before the stock documents and orders it points at.',
+  },
+  {
+    table: 'purchase_order_lines',
+    ownershipKey: 'organization_id',
+    kind: 'authoritative',
+    disposition: 'delete',
+    order: 35.76,
+    label: 'Purchase order lines',
+    crossTenantReachable: false,
+    rationale: 'What was ordered. References items, units, warehouses and tax codes under RESTRICT keys, so it goes before them — and after the receipt lines that name it.',
+  },
+  {
+    table: 'purchase_orders',
+    ownershipKey: 'organization_id',
+    kind: 'authoritative',
+    disposition: 'delete',
+    order: 35.78,
+    label: 'Purchase orders',
+    crossTenantReachable: false,
+    rationale: 'The tenant commitment ledger. References suppliers, so it goes before the business parties.',
+  },
+  {
+    table: 'purchasing_document_numbering',
+    ownershipKey: 'organization_id',
+    kind: 'authoritative',
+    disposition: 'delete',
+    order: 35.8,
+    label: 'Purchasing document numbering',
+    crossTenantReachable: false,
+    rationale: 'The held order and receipt sequences; meaningless once both are gone.',
+  },
   {
     table: 'stock_count_lines',
     ownershipKey: 'organization_id',
@@ -748,6 +813,14 @@ export const DIRECTLY_OWNED_TABLES = [
   'bill_lines',
   'bills',
   'bill_numbering',
+  /* Advanced purchasing, children first — see migration 042. Before the stock
+   * documents and movements a receipt points at. */
+  'purchasing_audit_events',
+  'goods_receipt_lines',
+  'goods_receipts',
+  'purchase_order_lines',
+  'purchase_orders',
+  'purchasing_document_numbering',
   /* Inventory movements, children first — see migration 038. Before the
    * documents they belong to and the master data they reference. */
   'stock_count_lines',

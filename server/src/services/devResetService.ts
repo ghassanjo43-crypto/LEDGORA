@@ -350,6 +350,50 @@ const RESET_PLAN: readonly PlanEntry[] = [
    */
   /* Stock movements, children first — see migration 038. Before the documents
    * and the master data they reference with ON DELETE RESTRICT. */
+  /* Advanced purchasing, children first — see migration 042. Before the stock
+   * documents and movements a receipt points at. */
+  {
+    table: 'purchasing_audit_events',
+    action: 'scoped_delete',
+    order: 28.58,
+    label: 'Purchasing audit events',
+    why: 'The history of an order or a receipt; meaningless once both are gone.',
+  },
+  {
+    table: 'goods_receipt_lines',
+    action: 'scoped_delete',
+    order: 28.6,
+    label: 'Goods receipt lines',
+    why: 'References movements, items, units and warehouses under RESTRICT keys, so it goes first.',
+  },
+  {
+    table: 'goods_receipts',
+    action: 'scoped_delete',
+    order: 28.61,
+    label: 'Goods receipts',
+    why: 'Deleted after its lines, and before the stock documents and orders it points at.',
+  },
+  {
+    table: 'purchase_order_lines',
+    action: 'scoped_delete',
+    order: 28.62,
+    label: 'Purchase order lines',
+    why: 'References items, units, warehouses and tax codes under RESTRICT keys.',
+  },
+  {
+    table: 'purchase_orders',
+    action: 'scoped_delete',
+    order: 28.63,
+    label: 'Purchase orders',
+    why: 'The commitment ledger. References suppliers, so it goes before the business parties.',
+  },
+  {
+    table: 'purchasing_document_numbering',
+    action: 'scoped_delete',
+    order: 28.64,
+    label: 'Purchasing document numbering',
+    why: 'Sequence counters; meaningless once the orders and receipts are gone.',
+  },
   {
     table: 'stock_count_lines',
     action: 'scoped_delete',

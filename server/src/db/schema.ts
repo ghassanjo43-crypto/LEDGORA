@@ -811,6 +811,12 @@ export interface Database {
   stock_counts: StockCountsTable;
   stock_count_lines: StockCountLinesTable;
   stock_count_numbering: StockCountNumberingTable;
+  purchase_orders: PurchaseOrdersTable;
+  purchase_order_lines: PurchaseOrderLinesTable;
+  goods_receipts: GoodsReceiptsTable;
+  goods_receipt_lines: GoodsReceiptLinesTable;
+  purchasing_document_numbering: PurchasingDocumentNumberingTable;
+  purchasing_audit_events: PurchasingAuditEventsTable;
 }
 
 /**
@@ -1923,7 +1929,7 @@ export interface InventoryDocumentsTable {
   organization_id: string;
   company_id: string;
   document_number: string;
-  /** receipt | issue | transfer | adjustment */
+  /** receipt | issue | transfer | adjustment | bill-receipt | invoice-issue | purchase-receipt */
   kind: string;
   /** When it happened in the warehouse. */
   movement_date: string;
@@ -1945,6 +1951,11 @@ export interface InventoryDocumentsTable {
   source_bill_id: string | null;
   /** The invoice that consumed this stock, for an `invoice-issue` and nothing else. */
   source_invoice_id: string | null;
+  /**
+   * The arrival that produced this stock, for a `purchase-receipt` and nothing
+   * else. Through it, the order line that authorised the quantity and the cost.
+   */
+  source_goods_receipt_id: string | null;
   version: Generated<number>;
   created_by: string | null;
   created_at: Generated<Timestamp>;
@@ -1994,4 +2005,180 @@ export interface InventoryDocumentNumberingTable {
   sequence_length: Generated<number>;
   next_sequence: Generated<number>;
   updated_at: Generated<Timestamp>;
+}
+
+/* ══ Advanced Purchasing AP1 ═══════════════════════════════════════════════ */
+
+/**
+ * A purchase order: a commercial commitment, and nothing in the ledger.
+ *
+ * No `journal_entry_id`, no posting date and no idempotency key, because
+ * ordering something is not a transaction — nothing has arrived, nobody is owed
+ * and no tax point has occurred. Every monetary column is server-computed from
+ * the lines; a client sends quantities, prices, discounts and a tax code.
+ */
+export interface PurchaseOrdersTable {
+  id: Generated<string>;
+  organization_id: string;
+  company_id: string;
+  order_number: string;
+  supplier_id: string;
+  order_date: string;
+  expected_date: string | null;
+  /** draft | approved | issued | partially_received | received | closed | cancelled */
+  status: Generated<string>;
+  currency: string;
+  /** The SUPPLIER's own reference. Never Ledgora's `order_number`. */
+  supplier_reference: Generated<string>;
+  memo: Generated<string>;
+  subtotal: Generated<string>;
+  discount_total: Generated<string>;
+  /** Commercial expectation only. The statutory snapshot is the bill's, in AP2. */
+  estimated_tax_total: Generated<string>;
+  total: Generated<string>;
+  approved_at: Timestamp | null;
+  approved_by: string | null;
+  issued_at: Timestamp | null;
+  issued_by: string | null;
+  closed_at: Timestamp | null;
+  cancelled_at: Timestamp | null;
+  closure_reason: Generated<string>;
+  version: Generated<number>;
+  created_by: string | null;
+  created_at: Generated<Timestamp>;
+  updated_at: Generated<Timestamp>;
+}
+
+/**
+ * One ordered item.
+ *
+ * There is deliberately no received or remaining quantity here: both are sums
+ * over posted, unreversed receipt lines, and a stored copy would be a second
+ * answer that drifts the first time anything fails halfway.
+ */
+export interface PurchaseOrderLinesTable {
+  id: Generated<string>;
+  organization_id: string;
+  company_id: string;
+  order_id: string;
+  line_number: number;
+  item_id: string;
+  base_unit_id: string;
+  warehouse_id: string;
+  description: Generated<string>;
+  /** Decimal STRINGS throughout: an exact figure is never a float. */
+  ordered_quantity: string;
+  unit_price: string;
+  discount_type: string | null;
+  discount_value: Generated<string>;
+  discount_amount: Generated<string>;
+  line_subtotal: Generated<string>;
+  line_net: Generated<string>;
+  tax_code_id: string | null;
+  estimated_tax_rate: Generated<string>;
+  estimated_tax_category: string | null;
+  estimated_tax_method: string | null;
+  estimated_tax_amount: Generated<string>;
+  /** What the goods are expected to cost, net of recoverable input tax. */
+  net_amount: Generated<string>;
+  gross_amount: Generated<string>;
+  item_code: Generated<string>;
+  item_name: Generated<string>;
+  base_unit_code: Generated<string>;
+  warehouse_code: Generated<string>;
+  created_at: Generated<Timestamp>;
+  updated_at: Generated<Timestamp>;
+}
+
+/**
+ * A goods receipt: the inventory-recognition point of the ordered workflow.
+ *
+ * Captured and posted in one call, like a stock count, so there is no state
+ * between the two — the only transition is becoming reversed, once.
+ */
+export interface GoodsReceiptsTable {
+  id: Generated<string>;
+  organization_id: string;
+  company_id: string;
+  receipt_number: string;
+  order_id: string;
+  /** Constrained by composite key to be the order's own supplier. */
+  supplier_id: string;
+  receipt_date: string;
+  posting_date: string;
+  /** The supplier's delivery-note number. Theirs, not Ledgora's. */
+  delivery_note_reference: Generated<string>;
+  memo: Generated<string>;
+  /** posted | reversed */
+  status: Generated<string>;
+  total_value: Generated<string>;
+  /** The stock document this posted, and through it the movements and journal. */
+  inventory_document_id: string | null;
+  idempotency_key: string;
+  /** The I2 document that withdrew this receipt's stock. No mirror receipt. */
+  reversal_document_id: string | null;
+  reversal_reason: Generated<string>;
+  reversed_at: Timestamp | null;
+  reversed_by: string | null;
+  version: Generated<number>;
+  received_by: string | null;
+  created_at: Generated<Timestamp>;
+  updated_at: Generated<Timestamp>;
+}
+
+/** One arrival against one order line. Never revised; only reversed. */
+export interface GoodsReceiptLinesTable {
+  id: Generated<string>;
+  organization_id: string;
+  company_id: string;
+  receipt_id: string;
+  line_number: number;
+  order_id: string;
+  order_line_id: string;
+  item_id: string;
+  base_unit_id: string;
+  warehouse_id: string;
+  received_quantity: string;
+  /** Derived from the order line's net value; never sent by a client. */
+  unit_cost: string;
+  total_cost: string;
+  /** The movement this line produced. Linked once, inside the transaction. */
+  movement_id: string | null;
+  item_code: Generated<string>;
+  item_name: Generated<string>;
+  base_unit_code: Generated<string>;
+  warehouse_code: Generated<string>;
+  created_at: Generated<Timestamp>;
+}
+
+/** Per-company, per-kind held sequences for orders and receipts. */
+export interface PurchasingDocumentNumberingTable {
+  organization_id: string;
+  company_id: string;
+  /** purchase-order | goods-receipt */
+  kind: string;
+  prefix: Generated<string>;
+  include_year: Generated<boolean>;
+  sequence_length: Generated<number>;
+  next_sequence: Generated<number>;
+  created_at: Generated<Timestamp>;
+  updated_at: Generated<Timestamp>;
+}
+
+/** The immutable history of an order or a receipt. Append-only, never edited. */
+export interface PurchasingAuditEventsTable {
+  id: Generated<string>;
+  organization_id: string;
+  company_id: string;
+  /** order | receipt */
+  subject_type: string;
+  subject_id: string;
+  action: string;
+  detail: Generated<unknown>;
+  previous_version: number | null;
+  resulting_version: number | null;
+  actor_user_id: string | null;
+  actor_name: Generated<string>;
+  request_id: Generated<string>;
+  at: Generated<Timestamp>;
 }

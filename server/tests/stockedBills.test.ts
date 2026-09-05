@@ -642,7 +642,11 @@ describe('reconciliation', () => {
 describe('migration 039', () => {
   it('rolls back and reapplies when nothing is stocked', async () => {
     const migrator = createMigrator(ctx.db);
-    /* 041 and 040 sit on top now, so they come off first. */
+    /* 042, 041 and 040 sit on top now, so they come off first. */
+    const purchased = await migrator.migrateDown();
+    expect(purchased.error).toBeUndefined();
+    expect(purchased.results?.[0]?.migrationName).toBe('042_purchase_orders');
+
     const counted = await migrator.migrateDown();
     expect(counted.error).toBeUndefined();
     expect(counted.results?.[0]?.migrationName).toBe('041_stock_counts');
@@ -671,8 +675,11 @@ describe('migration 039', () => {
     await post(b, created.json().bill.id, created.json().bill.version);
 
     const migrator = createMigrator(ctx.db);
-    /* Nothing was counted or sold, so 041 and 040 come off cleanly; 039 is the
-     * one holding the stocked purchase this test is about. */
+    /* Nothing was ordered, counted or sold, so 042, 041 and 040 come off
+     * cleanly; 039 is the one holding the stocked purchase this test is about. */
+    const purchased = await migrator.migrateDown();
+    expect(purchased.error).toBeUndefined();
+
     const counted = await migrator.migrateDown();
     expect(counted.error).toBeUndefined();
 
@@ -767,14 +774,36 @@ describe('posting exactly once', () => {
 /* ══ Deferred dependencies, refused by name ════════════════════════════════ */
 
 describe('what I3 defers', () => {
-  it('has no purchase-order or goods-receipt endpoint', async () => {
+  /*
+   * AP1 introduced purchase orders and goods receipts, at
+   * `/api/purchasing/orders` and `/api/purchasing/receipts`. What stays absent
+   * is MATCHING — two- and three-way match, tolerances and purchase-price
+   * variance — which is AP2's, and every path a client might reach for it by.
+   */
+  it('has no supplier-invoice matching endpoint', async () => {
     const b = await books('NoRoutes');
     for (const path of [
-      '/api/purchase-orders', '/api/inventory/goods-receipts',
-      '/api/inventory/matches', '/api/inventory/grni',
+      '/api/inventory/matches', '/api/purchasing/matches',
+      '/api/purchasing/three-way-match', '/api/purchasing/price-variance',
+      '/api/purchasing/returns', '/api/purchasing/debit-notes',
     ]) {
       const r = await call('GET', path, b.user);
       expect(r.statusCode, path).toBe(404);
+    }
+  });
+
+  /*
+   * And the refusal that keeps the two workflows apart stays exactly where it
+   * was: a direct stocked bill may not name a purchase order or a goods
+   * receipt, because AP1 has no way to check that the same goods were not
+   * already recognised by a receipt. AP2 replaces this with real matching.
+   */
+  it('still refuses a purchase-order or goods-receipt reference on a direct bill', async () => {
+    const b = await books('NoHalfLink');
+    for (const field of ['purchaseOrderId', 'goodsReceiptId'] as const) {
+      const r = await draft(b, [stockedLine(b, '1', '1.000')], { [field]: 'PO-2026-0001' });
+      expect(r.statusCode, r.body).toBe(400);
+      expect(r.json().error.message).toMatch(/purchase orders|goods receipts/i);
     }
   });
 

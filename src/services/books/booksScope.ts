@@ -37,6 +37,7 @@ import { clearPaymentCache } from '@/services/payments/paymentBackend';
 import {
   clearInventoryCache, clearStockCache, clearCountCache,
 } from '@/services/inventory/inventoryBackend';
+import { clearPurchasingCache } from '@/services/purchasing/purchasingBackend';
 import { useInvoiceStore } from '@/store/invoiceStore';
 import { useServerTaxCodeStore } from '@/store/serverTaxCodeStore';
 import { useCompanyStore } from '@/store/companyStore';
@@ -129,6 +130,13 @@ export function enterCompanyScope(reference: string | null): void {
    */
   clearStockCache();
   clearCountCache();
+  /*
+   * And advanced purchasing: the previous company's open orders in a receiving
+   * picker is how somebody books a delivery against the wrong commitment, and
+   * its goods-received-not-invoiced balance is exactly the accrual figure a
+   * bookkeeper acts on.
+   */
+  clearPurchasingCache();
 
   /*
    * And the invoices, for the same reason: on server books they are a cache of
