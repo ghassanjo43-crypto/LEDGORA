@@ -38,6 +38,7 @@ import { requireCompanyScope, companyOf } from '../guards/companyScope.js';
 import type { InventoryActor } from '../services/inventory/inventoryCore.js';
 import * as orders from '../services/purchasing/purchaseOrderService.js';
 import * as receipts from '../services/purchasing/goodsReceiptService.js';
+import * as matching from '../services/purchasing/receiptMatching.js';
 
 const uuid = z.string().uuid();
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use the format yyyy-mm-dd.');
@@ -137,6 +138,8 @@ export async function purchasingRoutes(app: FastifyInstance): Promise<void> {
   const voidReceipts = requireOwnOrganizationPermission('goods_receipts', 'void');
 
   const viewGrni = requireOwnOrganizationPermission('received_not_invoiced', 'view');
+  /* Matching decides which accrual an invoice takes away: its own authority. */
+  const viewMatching = requireOwnOrganizationPermission('receipt_matching', 'view');
 
   const onBooks = (
     ...guards: Array<ReturnType<typeof requireOwnOrganizationPermission>>
@@ -278,11 +281,10 @@ export async function purchasingRoutes(app: FastifyInstance): Promise<void> {
           limit: query.limit ? Number(query.limit) : undefined,
         }),
         /*
-         * Said in the payload so a client cannot quietly assume otherwise: no
-         * receipt here is matched, invoiced or settled, because nothing in this
-         * slice can match one.
+         * Said in the payload rather than assumed by a screen: matching exists,
+         * it is exact, and what it still refuses is named in the note.
          */
-        matchingSupported: false,
+        matchingSupported: true,
         matchingNote: receipts.MATCHING_DEFERRED,
       });
     },
@@ -330,7 +332,57 @@ export async function purchasingRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
+  /* ── Receipt matching ───────────────────────────────────────────────────── */
+
+  /*
+   * The receipt lines a supplier bill may still settle, with what each one has
+   * left. Derived from the receipts and the ACTIVE clearings at the moment of
+   * asking — there is no stored open quantity to go stale, and a screen that
+   * showed one could offer capacity another bill had already taken.
+   */
+  app.get(
+    '/api/purchasing/matching/eligible',
+    { preHandler: onBooks(viewMatching) },
+    async (request, reply) => {
+      const query = request.query as { supplierId?: string; orderId?: string; receiptId?: string };
+      return reply.send({
+        lines: await matching.eligibleReceiptLines(app.db, actorOf(request), query),
+        /*
+         * The rule, in the payload, so a screen states it rather than a user
+         * discovering it when a bill is refused.
+         */
+        exactValueRequired: true,
+        varianceNote: matching.VARIANCE_DEFERRED,
+      });
+    },
+  );
+
+  app.get(
+    '/api/purchasing/matching/history',
+    { preHandler: onBooks(viewMatching) },
+    async (request, reply) => {
+      const query = request.query as {
+        supplierId?: string; receiptId?: string; billId?: string;
+        status?: string; limit?: string;
+      };
+      return reply.send({
+        matches: await matching.matchHistory(app.db, actorOf(request), {
+          supplierId: query.supplierId,
+          receiptId: query.receiptId,
+          billId: query.billId,
+          status: query.status as 'active' | 'reversed' | undefined,
+          limit: query.limit ? Number(query.limit) : undefined,
+        }),
+      });
+    },
+  );
+
   /* ── Received not invoiced ──────────────────────────────────────────────── */
+
+  app.get('/api/purchasing/grni/aging', { preHandler: onBooks(viewGrni) }, async (request, reply) => {
+    const query = request.query as { asOfDate?: string };
+    return reply.send(await matching.grniAging(app.db, actorOf(request), query));
+  });
 
   app.get('/api/purchasing/grni', { preHandler: onBooks(viewGrni) }, async (request, reply) => {
     const query = request.query as { asOfDate?: string; supplierId?: string; itemId?: string };

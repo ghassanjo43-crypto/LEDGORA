@@ -682,6 +682,10 @@ describe('migration 041', () => {
   it('rolls back and reapplies when nothing has been counted', async () => {
     const migrator = createMigrator(ctx.db);
     /* 042 sits on top now, so it comes off first. */
+    const matched = await migrator.migrateDown();
+    expect(matched.error).toBeUndefined();
+    expect(matched.results?.[0]?.migrationName).toBe('043_receipt_matching');
+
     const purchased = await migrator.migrateDown();
     expect(purchased.error).toBeUndefined();
     expect(purchased.results?.[0]?.migrationName).toBe('042_purchase_orders');
@@ -706,8 +710,11 @@ describe('migration 041', () => {
     await countIt(b, [{ itemId: b.item, countedQuantity: '8' }]);
 
     const migrator = createMigrator(ctx.db);
-    /* Nothing was ordered, so 042 comes off cleanly; 041 is the one holding the
-     * count this test is about. */
+    /* Nothing was matched or ordered, so 043 and 042 come off cleanly; 041 is
+     * the one holding the count this test is about. */
+    const matched = await migrator.migrateDown();
+    expect(matched.error).toBeUndefined();
+
     const purchased = await migrator.migrateDown();
     expect(purchased.error).toBeUndefined();
 

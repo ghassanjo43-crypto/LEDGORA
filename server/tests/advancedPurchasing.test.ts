@@ -1233,15 +1233,23 @@ describe('direct stocked bills and receipt-first purchasing', () => {
     }
   });
 
-  it('never reports a receipt as matched, invoiced or settled', async () => {
+  /*
+   * AP2 made matching real, so the claim changed shape: an UNMATCHED receipt is
+   * still never reported as settled, and the payload now says matching exists
+   * rather than that it does not. What a receipt must never do is report itself
+   * matched before a bill has cleared it.
+   */
+  it('never reports an unmatched receipt as settled', async () => {
     const b = await books('NeverMatched');
     const order = await issuedOrder(b);
     await receive(b, order.id, [{ orderLineId: order.lineIds[0]!, quantity: '2' }]);
 
     const listed = (await call('GET', '/api/purchasing/receipts?awaitingInvoice=true', b.user)).json();
-    expect(listed.matchingSupported).toBe(false);
+    expect(listed.matchingSupported).toBe(true);
     expect(listed.receipts).toHaveLength(1);
     expect(listed.receipts[0].matched).toBe(false);
+    expect(Number(listed.receipts[0].clearedValue)).toBe(0);
+    expect(Number(listed.receipts[0].openValue)).toBe(Number(listed.receipts[0].totalValue));
   });
 });
 
@@ -1293,8 +1301,10 @@ describe('purchase order and GRNI reporting', () => {
     expect(Number(schedule.generalLedgerBalance)).toBe(38);
     expect(Number(schedule.difference)).toBe(0);
     expect(schedule.balanced).toBe(true);
-    expect(schedule.matchingImplemented).toBe(false);
+    /* AP2 implements matching; nothing here has been matched yet. */
+    expect(schedule.matchingImplemented).toBe(true);
     expect(schedule.rows.every((r: { matched: boolean }) => r.matched === false)).toBe(true);
+    expect(schedule.rows.every((r: { clearedValue: string }) => Number(r.clearedValue) === 0)).toBe(true);
     expect(schedule.rows[0].supplierName).toBe('Acme Supplies');
     expect(schedule.rows[0].orderNumber).toBe(order.number);
   });
@@ -1498,6 +1508,11 @@ describe('who may do what', () => {
 describe('migration 042', () => {
   it('rolls back and reapplies when nothing has been ordered', async () => {
     const migrator = createMigrator(ctx.db);
+    /* 043 sits on top now, so it comes off first. */
+    const matched = await migrator.migrateDown();
+    expect(matched.error).toBeUndefined();
+    expect(matched.results?.[0]?.migrationName).toBe('043_receipt_matching');
+
     const down = await migrator.migrateDown();
     expect(down.error).toBeUndefined();
     expect(down.results?.[0]?.migrationName).toBe('042_purchase_orders');
@@ -1519,7 +1534,12 @@ describe('migration 042', () => {
     const order = await issuedOrder(b);
     await receive(b, order.id, [{ orderLineId: order.lineIds[0]!, quantity: '2' }]);
 
-    const down = await createMigrator(ctx.db).migrateDown();
+    const migrator = createMigrator(ctx.db);
+    /* Nothing was matched, so 043 comes off cleanly; 042 holds the commitment. */
+    const matched = await migrator.migrateDown();
+    expect(matched.error).toBeUndefined();
+
+    const down = await migrator.migrateDown();
     expect(down.error).toBeDefined();
     expect(String((down.error as Error).message)).toMatch(/Refusing to roll back 042/);
 

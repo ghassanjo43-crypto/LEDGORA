@@ -35,7 +35,7 @@
  */
 import type { Kysely, Transaction } from 'kysely';
 import { sql } from 'kysely';
-import type { Database, SupplierBillStatus } from '../../db/schema.js';
+import type { Database, SupplierBillStatus, BillWorkflow } from '../../db/schema.js';
 import { errors } from '../../lib/errors.js';
 import type { AccountingActor } from '../accounting/audit.js';
 import { assessPostingAccount } from '../accounting/accountEligibility.js';
@@ -59,6 +59,14 @@ import {
   resolveTaxForDate, assertInputAccountPostable, PARTIAL_RECOVERY_UNSUPPORTED,
   type ResolvedTax,
 } from '../invoicing/taxCodeService.js';
+import {
+  planMatches,
+  recordMatches,
+  reverseMatchesForBill,
+  resolveReceiptLine,
+  RETURNS_DEFERRED,
+  type PlannedMatch,
+} from './receiptMatching.js';
 
 type Trx = Transaction<Database>;
 type Executor = Kysely<Database> | Trx;
@@ -162,13 +170,27 @@ export interface BillLineInput {
    * Where the line posts.
    *
    * On a STOCKED line this is ignored and replaced by the item's own inventory
-   * account: the journal debits what the line says, so letting a caller name
-   * something else would credit the payable while debiting anything at all.
+   * account, and on a RECEIPT-MATCHED line by the goods-received-not-invoiced
+   * account its receipt credited: the journal debits what the line says, so
+   * letting a caller name something else would credit the payable while
+   * debiting anything at all. Optional for exactly those two, required for
+   * every other line.
    */
-  accountId: string;
+  accountId?: string;
   /** Naming an item makes the line stocked. Both or neither, with the warehouse. */
   itemId?: string | null;
   warehouseId?: string | null;
+  /**
+   * The AP1 goods-receipt line this line settles, and how much of it.
+   *
+   * Mutually exclusive with `itemId`: one recognises inventory from the bill,
+   * the other clears an accrual for inventory a receipt already recognised, and
+   * a line doing both would put one physical purchase into stock twice. The
+   * item, unit, warehouse, cost and GRNI account all come from the receipt —
+   * this line names it and a quantity, and nothing else.
+   */
+  receiptLineId?: string | null;
+  matchedQuantity?: string | null;
   /** The tax CODE, and nothing else about the tax. */
   taxCodeId?: string | null;
   /** Decimal STRINGS throughout. See `money.ts` for why these are never numbers. */
@@ -181,6 +203,16 @@ export interface BillLineInput {
 
 export interface BillInput {
   issuingEntityId?: string;
+  /**
+   * Which purchasing workflow this bill belongs to.
+   *
+   * Optional, and VALIDATED rather than trusted: the server derives it from the
+   * line shapes — which are mutually exclusive in the database — and refuses a
+   * stated workflow that disagrees with them. It is then stored, so nothing
+   * downstream ever re-infers it from whichever optional field happens to be
+   * set.
+   */
+  workflow?: BillWorkflow;
   supplierId?: string;
   supplierInvoiceNumber?: string;
   billDate?: string;
@@ -270,6 +302,7 @@ export interface BillRecord {
   billNumber: string;
   supplierInvoiceNumber: string;
   status: SupplierBillStatus;
+  workflow: BillWorkflow;
   issuingEntityId: string;
   supplierId: string;
   billDate: string;
@@ -351,6 +384,7 @@ function toBill(row: any, lines: any[]): BillRecord {
     billNumber: row.bill_number,
     supplierInvoiceNumber: row.supplier_invoice_number,
     status: row.status,
+    workflow: row.workflow,
     issuingEntityId: row.issuing_entity_id,
     supplierId: row.supplier_id,
     billDate: toCalendarDate(row.bill_date),
@@ -375,6 +409,20 @@ function toBill(row: any, lines: any[]): BillRecord {
 }
 
 /* ══ The boundary ══════════════════════════════════════════════════════════ */
+
+/**
+ * Which workflow the LINES make this bill.
+ *
+ * Read from the line shapes, which migration 043 makes mutually exclusive, so
+ * there is exactly one answer and it is a fact about the document rather than a
+ * claim in a request. Stored on the bill, and never re-derived afterwards.
+ */
+function deriveWorkflow(input: BillInput): BillWorkflow {
+  const lines = (input.lines ?? []).map((line) => line as unknown as Record<string, unknown>);
+  if (lines.some((line) => Boolean(line.receiptLineId))) return 'receipt-matched';
+  if (lines.some((line) => Boolean(line.itemId))) return 'stocked-direct';
+  return 'expense';
+}
 
 function assertWithinBoundary(input: BillInput): void {
   for (const [index, line] of (input.lines ?? []).entries()) {
@@ -449,11 +497,80 @@ function assertWithinBoundary(input: BillInput): void {
       }
     }
 
+    /*
+     * ══ One physical purchase, one recognition ═════════════════════════════
+     *
+     * A line that names an item recognises inventory here (I3). A line that
+     * names a receipt line clears an accrual for inventory AP1 already
+     * recognised. Doing both would put the same goods into stock twice, and no
+     * later reconciliation could tell which half was real. The database refuses
+     * the row outright; this refuses the request first, by name.
+     */
+    if (raw.receiptLineId && raw.itemId) {
+      throw errors.validation(
+        `Line ${at} both receives stock on this bill and settles a goods receipt. One physical `
+        + 'purchase enters inventory once: either the bill recognises it, or a receipt already '
+        + 'did. Nothing has been saved.',
+        {
+          fieldErrors: {
+            [`lines.${at}.itemId`]:
+              'Remove the item to settle a receipt, or remove the receipt line to receive here.',
+          },
+        },
+      );
+    }
+    /* A matched line needs a quantity, and an unmatched one may not carry one. */
+    if (raw.receiptLineId && !raw.matchedQuantity) {
+      throw errors.validation(
+        `Line ${at} names a goods receipt line but says how much of it is being settled nowhere. `
+        + 'A clearing needs a quantity: it is what decides how much of the accrual this invoice '
+        + 'takes away.',
+        { fieldErrors: { [`lines.${at}.matchedQuantity`]: 'Say how much of the receipt this settles.' } },
+      );
+    }
+    if (!raw.receiptLineId && raw.matchedQuantity) {
+      throw errors.validation(
+        `Line ${at} carries a matched quantity but names no goods receipt line, so there is `
+        + 'nothing for it to be a quantity OF. Nothing has been saved.',
+        { fieldErrors: { [`lines.${at}.matchedQuantity`]: 'Remove it, or name the receipt line.' } },
+      );
+    }
+
+    /* Returns and their documents, refused by name on a line as well. */
+    for (const field of ['returnQuantity', 'debitNoteId', 'supplierCreditId', 'returnWarehouseId']) {
+      if (raw[field]) {
+        throw errors.validation(RETURNS_DEFERRED, {
+          fieldErrors: { [`lines.${at}.${field}`]: 'Remove it — returns are not implemented.' },
+        });
+      }
+    }
+
     refuseUnverifiable('projectId', raw.projectId);
     refuseUnverifiable('costCenterId', raw.costCenterId);
     if (Array.isArray(raw.costCenterAssignments) && raw.costCenterAssignments.length > 0) {
       refuseUnverifiable('costCenterId', 'assigned');
     }
+  }
+
+  /* ── The two stocked workflows never mix on one document ─────────────── */
+
+  /*
+   * Even with each LINE exclusive, a bill carrying one of each would recognise
+   * inventory and clear an accrual in the same entry, and its workflow would be
+   * neither of the two the product defines. The specification proves no such
+   * mixture safe, so it is refused rather than guessed at.
+   */
+  const lineShapes = (input.lines ?? []).map((line) => line as unknown as Record<string, unknown>);
+  const receiving = lineShapes.some((line) => Boolean(line.itemId));
+  const settling = lineShapes.some((line) => Boolean(line.receiptLineId));
+  if (receiving && settling) {
+    throw errors.validation(
+      'This bill both receives stock directly and settles goods receipts. Those are two different '
+      + 'purchasing workflows — in one the bill recognises the inventory, in the other a receipt '
+      + 'already did — and no established accounting makes the mixture unambiguous on one document. '
+      + 'Raise them as two bills. Nothing has been saved.',
+      { fieldErrors: { lines: 'Split the direct-stock lines and the matched lines onto separate bills.' } },
+    );
   }
 
   /* ── Document level ──────────────────────────────────────────────────── */
@@ -472,6 +589,38 @@ function assertWithinBoundary(input: BillInput): void {
   refuseUnverifiable('goodsReceiptId', input.goodsReceiptId);
   refuseUnverifiable('templateId', input.templateId);
   refuseUnverifiable('attachments', input.attachments);
+
+  /*
+   * Returns, debit notes and supplier credits, refused by name at the document
+   * level too. AP2 completes matching; it does not invent the three accounting
+   * rules a return would need.
+   */
+  const header = input as unknown as Record<string, unknown>;
+  for (const field of ['debitNoteId', 'supplierCreditId', 'returnOfBillId', 'creditNoteId']) {
+    if (header[field]) {
+      throw errors.validation(RETURNS_DEFERRED, {
+        fieldErrors: { [field]: 'Remove it — supplier credits and returns are not implemented.' },
+      });
+    }
+  }
+
+  /*
+   * A stated workflow is CHECKED against the lines, never trusted. The line
+   * shapes are mutually exclusive in the database, so they are the authority;
+   * saying otherwise in the request is a caller and a document disagreeing
+   * about what kind of purchase this is.
+   */
+  if (input.workflow !== undefined) {
+    const derived = deriveWorkflow(input);
+    if (input.workflow !== derived) {
+      throw errors.validation(
+        `This bill is described as a ${input.workflow} bill, but its lines make it a ${derived} `
+        + 'one. The lines decide: one that names an item recognises stock here, and one that names '
+        + 'a goods receipt settles stock already recognised. Nothing has been saved.',
+        { fieldErrors: { workflow: `Send ${derived}, or change the lines.` } },
+      );
+    }
+  }
 
   /* ── Decided by the server, never by the caller ──────────────────────── */
 
@@ -787,15 +936,30 @@ async function assertLineAccountsArePostable(
   actor: AccountingActor,
   lines: BillLineInput[],
 ): Promise<void> {
-  const ids = lines.map((line) => line.accountId).filter(Boolean);
-  if (ids.length !== lines.length) throw errors.validation('Every line needs an account.');
+  /*
+   * A line whose account the SERVER resolves is not checked here.
+   *
+   * A stocked line posts to the item's own inventory account, and a
+   * receipt-matched line to the goods-received-not-invoiced account its receipt
+   * credited — both derived, both re-checked at posting by the code that owns
+   * them. Requiring an account from the caller for those would be asking for a
+   * figure that is then thrown away, and validating one would refuse a bill for
+   * a field nothing reads.
+   */
+  const derived = (line: BillLineInput): boolean =>
+    Boolean((line as { itemId?: string | null }).itemId)
+    || Boolean((line as { receiptLineId?: string | null }).receiptLineId);
+
+  const stated = lines.filter((line) => !derived(line));
+  const ids = stated.map((line) => line.accountId).filter((id): id is string => Boolean(id));
+  if (ids.length !== stated.length) throw errors.validation('Every line needs an account.');
 
   /* The same loader the ledger uses, so a bill and a journal cannot disagree
    * about whether an account may receive a posting. */
   const accounts = await loadAccountsForPosting(db, actor.organizationId, actor.companyId, ids);
   for (const [index, line] of lines.entries()) {
-    if ((line as { itemId?: string | null }).itemId) continue;
-    assertLineAccount(accounts.get(line.accountId), index + 1);
+    if (derived(line)) continue;
+    assertLineAccount(accounts.get(line.accountId!), index + 1);
   }
 }
 
@@ -901,6 +1065,21 @@ async function assertPayablePostable(
     );
   }
 }
+
+/**
+ * The same actor, in the shape the inventory and purchasing modules take.
+ *
+ * `AccountingActor` allows a null request id; `InventoryActor` does not carry
+ * one at all when absent. Converting in one place keeps every call site from
+ * repeating the coercion — and from quietly disagreeing about it.
+ */
+const inventoryActorOf = (actor: AccountingActor) => ({
+  organizationId: actor.organizationId,
+  companyId: actor.companyId,
+  userId: actor.userId,
+  name: actor.name,
+  requestId: actor.requestId ?? undefined,
+});
 
 /* ══ Numbering ═════════════════════════════════════════════════════════════ */
 
@@ -1129,6 +1308,22 @@ async function replaceLines(
       accountId = item.inventoryAccountId;
     }
 
+    /*
+     * A RECEIPT-MATCHED line debits the goods-received-not-invoiced account the
+     * AP1 movement actually credited — never the one the request named, and
+     * never today's inventory profile.
+     *
+     * That is what makes the clearing land where the accrual is sitting. It
+     * also means the existing bill journal needs no special case: it debits
+     * each line's own account with the line's net, which for this line IS the
+     * GRNI account and IS the matched receipt value.
+     */
+    if (value.receiptLineId) {
+      const scope = { ...actor, requestId: actor.requestId ?? undefined };
+      const receipt = await resolveReceiptLine(trx, scope, value.receiptLineId, index + 1);
+      accountId = receipt.grniAccountId;
+    }
+
     await trx.insertInto('bill_lines').values({
       organization_id: actor.organizationId,
       company_id: actor.companyId,
@@ -1138,6 +1333,8 @@ async function replaceLines(
       account_id: accountId,
       item_id: value.itemId ?? null,
       warehouse_id: value.warehouseId ?? null,
+      receipt_line_id: value.receiptLineId ?? null,
+      matched_quantity: value.matchedQuantity ?? null,
       quantity: value.quantity ?? '0',
       unit: value.unit ?? '',
       unit_price: value.unitPrice ?? '0',
@@ -1204,6 +1401,8 @@ export async function createDraft(
       bill_number: billNumber,
       supplier_invoice_number: input.supplierInvoiceNumber ?? '',
       status: 'draft',
+      /* Stated on the row, so nothing downstream re-infers it from a field. */
+      workflow: deriveWorkflow(input),
       bill_date: dates.billDate,
       posting_date: dates.postingDate,
       due_date: dates.dueDate,
@@ -1309,6 +1508,8 @@ export async function updateDraft(
     await trx.updateTable('bills').set({
       supplier_id: input.supplierId ?? current.supplier_id,
       supplier_invoice_number: input.supplierInvoiceNumber ?? '',
+      /* Re-derived with the lines: editing a draft can change what it is. */
+      workflow: deriveWorkflow(input),
       bill_date: dates.billDate,
       posting_date: dates.postingDate,
       due_date: dates.dueDate,
@@ -1492,7 +1693,11 @@ export async function postBill(
     /* Re-checked at posting: an account eligible when the draft was saved can
      * have been archived or blocked since. */
     await assertLineAccountsArePostable(
-      trx, actor, lines.map((line) => ({ accountId: line.account_id } as BillLineInput)),
+      trx, actor, lines.map((line) => ({
+        accountId: line.account_id,
+        itemId: line.item_id,
+        receiptLineId: line.receipt_line_id,
+      } as BillLineInput)),
     );
 
     const decimals = monetaryDecimalsFor(current.currency);
@@ -1535,6 +1740,40 @@ export async function postBill(
         'The bill total must be greater than zero. A bill for nothing records a liability that does '
         + 'not exist. Nothing has been saved.',
       );
+    }
+
+    /*
+     * ══ What this bill settles, planned before anything is written ═════════
+     *
+     * Under the receipt lines' own row locks, so two bills competing for the
+     * last unit of a delivery serialise here and the second is refused rather
+     * than both clearing it. Every refusal this can raise — a reversed receipt,
+     * another supplier's goods, more than arrived, a price the receipt was not
+     * costed at — happens before the journal exists, so a rejected bill leaves
+     * nothing behind at all.
+     *
+     * The order is: the bill's row (already locked above), then the receipt
+     * lines in id order. One global sequence, so two bills touching the same
+     * receipts cannot deadlock.
+     */
+    const matchedLines = lines
+      .map((line, index) => ({ line, index }))
+      .filter(({ line }) => line.receipt_line_id !== null);
+
+    let planned: PlannedMatch[] = [];
+    if (matchedLines.length > 0) {
+      planned = await planMatches(trx, inventoryActorOf(actor), {
+        supplierId: current.supplier_id,
+        decimals,
+        lines: matchedLines.map(({ line, index }) => ({
+          billLineId: line.id,
+          lineNumber: index + 1,
+          receiptLineId: line.receipt_line_id!,
+          matchedQuantity: String(line.matched_quantity ?? '0'),
+          /* The line's own net, as P3 computed it — never the request's. */
+          netAmount: computed.computed[index]!.taxableAmount,
+        })),
+      });
     }
 
     const postingDate = toCalendarDate(current.posting_date);
@@ -1635,6 +1874,23 @@ export async function postBill(
         .where('company_id', '=', actor.companyId)
         .where('id', '=', row.id)
         .execute();
+    }
+
+    /*
+     * ══ The accrual this bill cleared ════════════════════════════════════════
+     *
+     * After the journal, and inside the same transaction, so the clearing and
+     * the entry that carries it commit together or not at all. No stock
+     * movement: the goods arrived once, on the receipt, and were costed once.
+     * The journal above already debited each matched line's own account — which
+     * IS the goods-received-not-invoiced account its receipt credited — with
+     * exactly the receipt's frozen value, so the accrual comes off at the figure
+     * it went on at.
+     */
+    if (planned.length > 0) {
+      await recordMatches(
+        trx, inventoryActorOf(actor), id, current.bill_number, planned,
+      );
     }
 
     /*
@@ -1806,6 +2062,22 @@ export async function reverseBill(
       reason,
       expectedVersion: entry.version,
     });
+
+    /*
+     * ══ And the accrual this bill cleared, put back ══════════════════════════
+     *
+     * The allocations are MARKED reversed, never removed: what a bill once
+     * settled is the explanation for a payable that stood in the books for a
+     * while, and a reader who found the reversing journal would otherwise have
+     * nothing to join it to. Capacity returns to the receipt because the rows
+     * leave the ACTIVE set the sums read — not because a counter moved.
+     *
+     * No stock movement is created or reversed here. The goods physically
+     * arrived and are still there; only the invoice is being withdrawn.
+     */
+    await reverseMatchesForBill(
+      trx, inventoryActorOf(actor), id, current.bill_number, reason,
+    );
 
     /*
      * And the stock this bill brought in, inside the same transaction. Refused

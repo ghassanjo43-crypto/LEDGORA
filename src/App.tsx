@@ -113,6 +113,7 @@ const StockCountsPage = lazy(() => import('@/pages/inventory/StockCountsPage').t
 const InventoryReportsPage = lazy(() => import('@/pages/inventory/InventoryReportsPage').then((m) => ({ default: m.InventoryReportsPage })));
 const PurchaseOrdersPage = lazy(() => import('@/pages/purchasing/PurchaseOrdersPage').then((m) => ({ default: m.PurchaseOrdersPage })));
 const PurchasingGoodsReceiptsPage = lazy(() => import('@/pages/purchasing/GoodsReceiptsPage').then((m) => ({ default: m.GoodsReceiptsPage })));
+const ReceiptMatchingPage = lazy(() => import('@/pages/purchasing/ReceiptMatchingPage').then((m) => ({ default: m.ReceiptMatchingPage })));
 const ReceivedNotInvoicedPage = lazy(() => import('@/pages/purchasing/ReceivedNotInvoicedPage').then((m) => ({ default: m.ReceivedNotInvoicedPage })));
 const ManufacturingDashboardPage = lazy(() => import('@/pages/manufacturing/ManufacturingDashboardPage').then((m) => ({ default: m.ManufacturingDashboardPage })));
 const WorkOrdersPage = lazy(() => import('@/pages/manufacturing/WorkOrdersPage').then((m) => ({ default: m.WorkOrdersPage })));
@@ -273,6 +274,8 @@ export default function App() {
        * away. */
       case 'goods-receipts':
         return <PurchasingGoodsReceiptsPage />;
+      case 'receipt-matching':
+        return <ReceiptMatchingPage />;
       case 'received-not-invoiced':
         return <ReceivedNotInvoicedPage />;
       case 'manufacturing-dashboard':

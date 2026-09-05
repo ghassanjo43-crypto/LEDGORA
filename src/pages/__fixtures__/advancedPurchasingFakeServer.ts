@@ -113,7 +113,9 @@ interface FakeReceipt {
   reversalDocumentId: string | null;
   reversalReason: string;
   reversedAt: string | null;
-  matched: false;
+  matched: boolean;
+  clearedValue: string;
+  openValue: string;
   version: number;
   createdAt: string | null;
   idempotencyKey: string;
@@ -169,6 +171,8 @@ const SUPPLIERS = [
 export const server = {
   orders: [] as FakeOrder[],
   receipts: [] as FakeReceipt[],
+  bills: [] as FakeBill[],
+  matches: [] as FakeMatch[],
   calls: [] as Array<{ method: string; path: string; body: Json }>,
   /** Makes every read fail, so "empty, never stale" can be observed. */
   failReads: false,
@@ -178,6 +182,8 @@ export const server = {
 export function resetServer(): void {
   server.orders = [];
   server.receipts = [];
+  server.bills = [];
+  server.matches = [];
   server.calls = [];
   server.failReads = false;
   server.nextId = 1;
@@ -304,6 +310,64 @@ function createOrder(body: Json): FakeOrder {
   };
   server.orders.push(order);
   return order;
+}
+
+/**
+ * A posted receipt against an order, seeded whole.
+ *
+ * One helper rather than three inline literals, so a field added to the shape
+ * cannot be forgotten in one test and silently make it prove less.
+ */
+export function seedPostedReceipt(
+  order: FakeOrder,
+  quantity = '4.000',
+  totalCost = '20.000',
+): FakeReceipt {
+  const receipt: FakeReceipt = {
+    id: id('gr'),
+    receiptNumber: `GR-2026-${String(server.receipts.length + 1).padStart(4, '0')}`,
+    orderId: order.id,
+    orderNumber: order.orderNumber,
+    supplierId: order.supplierId,
+    supplierName: order.supplierName,
+    receiptDate: '2026-03-05',
+    postingDate: '2026-03-05',
+    deliveryNoteReference: '',
+    memo: '',
+    status: 'posted',
+    totalValue: totalCost,
+    inventoryDocumentId: id('doc'),
+    inventoryDocumentNumber: 'PRC-2026-0001',
+    journalEntryId: id('je'),
+    reversalDocumentId: null,
+    reversalReason: '',
+    reversedAt: null,
+    matched: false,
+    clearedValue: '0.000',
+    openValue: totalCost,
+    version: 1,
+    createdAt: null,
+    idempotencyKey: id('seed'),
+    lines: [{
+      id: id('grl'),
+      lineNumber: 1,
+      orderLineId: order.lines[0]!.id,
+      orderLineNumber: 1,
+      itemId: 'item-1',
+      itemCode: 'SKU-1',
+      itemName: 'Widget',
+      baseUnitId: 'unit-1',
+      baseUnitCode: 'EA',
+      warehouseId: 'wh-1',
+      warehouseCode: 'MAIN',
+      receivedQuantity: quantity,
+      unitCost: money(Number(totalCost) / Number(quantity)),
+      totalCost,
+      movementId: id('mv'),
+    }],
+  };
+  server.receipts.push(receipt);
+  return receipt;
 }
 
 export function seedIssuedOrder(quantity = '10', unitPrice = '5.000'): FakeOrder {
@@ -503,6 +567,8 @@ export function install(): void {
         reversalReason: '',
         reversedAt: null,
         matched: false,
+        clearedValue: '0.000',
+        openValue: money(totalValue),
         version: 1,
         createdAt: null,
         idempotencyKey: String(body.idempotencyKey),
@@ -533,6 +599,127 @@ export function install(): void {
       return ok({ receipt });
     }
 
+    /* ── Matching ───────────────────────────────────────────────────────── */
+    if (path === '/api/purchasing/matching/eligible' && method === 'GET') {
+      if (server.failReads) return fail(503, 'unavailable', 'The books are not reachable.');
+      return ok({
+        lines: eligibleLines(url.searchParams.get('supplierId') ?? undefined),
+        exactValueRequired: true,
+        varianceNote: 'Matching is exact; a price difference is refused.',
+      });
+    }
+    if (path === '/api/purchasing/matching/history' && method === 'GET') {
+      if (server.failReads) return fail(503, 'unavailable', 'The books are not reachable.');
+      return ok({ matches: server.matches });
+    }
+
+    /* ── Bills, only so far as matching needs them ──────────────────────── */
+    if (path === '/api/bills' && method === 'GET') return ok({ bills: server.bills });
+
+    if (path === '/api/bills' && method === 'POST') {
+      const lines = (body.lines ?? []) as Json[];
+      for (const line of lines) {
+        if (line.unitCost !== undefined || line.accountId !== undefined) {
+          return fail(400, 'validation_error',
+            'A receipt-matched line derives its account and cost from the receipt.');
+        }
+      }
+      const bill: FakeBill = {
+        id: id('bill'),
+        billNumber: `BILL-2026-${String(server.bills.length + 1).padStart(4, '0')}`,
+        supplierInvoiceNumber: String(body.supplierInvoiceNumber ?? ''),
+        status: 'draft',
+        workflow: String(body.workflow ?? 'expense'),
+        supplierId: String(body.supplierId),
+        billDate: String(body.billDate),
+        postingDate: String(body.postingDate ?? body.billDate),
+        dueDate: String(body.dueDate),
+        total: '0.000',
+        version: 1,
+        lines: lines.map((line) => ({
+          id: id('bl'),
+          receiptLineId: (line.receiptLineId as string | null) ?? null,
+          matchedQuantity: (line.matchedQuantity as string | null) ?? null,
+          quantity: String(line.quantity ?? '0'),
+          unitPrice: String(line.unitPrice ?? '0'),
+          taxableAmount: money(Number(line.quantity ?? 0) * Number(line.unitPrice ?? 0)),
+        })),
+      };
+      bill.total = money(bill.lines.reduce((sum, l) => sum + Number(l.taxableAmount), 0));
+      server.bills.push(bill);
+      return ok({ bill }, 201);
+    }
+
+    const billPost = /^\/api\/bills\/([^/]+)\/post$/.exec(path);
+    if (billPost && method === 'POST') {
+      const bill = server.bills.find((b) => b.id === billPost[1]);
+      if (!bill) return fail(404, 'not_found', 'Bill not found.');
+      if (bill.version !== body.expectedVersion) {
+        return fail(409, 'conflict', 'This bill was changed by another user.');
+      }
+
+      /* The clearings, planned exactly as the server does — including the
+       * refusal when the invoice disagrees with what the goods cost. */
+      const planned: FakeMatch[] = [];
+      for (const line of bill.lines) {
+        if (!line.receiptLineId) continue;
+        const receipt = server.receipts.find(
+          (r) => r.lines.some((l) => l.id === line.receiptLineId),
+        )!;
+        const receiptLine = receipt.lines.find((l) => l.id === line.receiptLineId)!;
+        const order = server.orders.find((o) => o.id === receipt.orderId)!;
+
+        const alreadyQuantity = matchedQuantityOn(receiptLine.id);
+        const alreadyValue = clearedOn(receiptLine.id);
+        const remaining = Number(receiptLine.receivedQuantity) - alreadyQuantity;
+        const quantity = Number(line.matchedQuantity ?? '0');
+        if (quantity > remaining) {
+          return fail(400, 'validation_error',
+            'This bill would settle more than has actually arrived.');
+        }
+
+        const receiptValue = quantity === remaining
+          ? Number(receiptLine.totalCost) - alreadyValue
+          : (Number(receiptLine.totalCost) * quantity) / Number(receiptLine.receivedQuantity);
+        const billValue = Number(line.taxableAmount);
+        if (Math.abs(billValue - receiptValue) > 1e-9) {
+          return fail(400, 'validation_error', VARIANCE(billValue, receiptValue));
+        }
+
+        planned.push({
+          matchId: id('m'), status: 'active', matchedAt: 'now',
+          billId: bill.id, billNumber: bill.billNumber,
+          supplierInvoiceNumber: bill.supplierInvoiceNumber,
+          billStatus: 'posted', billPostingDate: bill.postingDate,
+          supplierId: receipt.supplierId, supplierName: receipt.supplierName,
+          receiptId: receipt.id, receiptLineId: receiptLine.id,
+          receiptNumber: receipt.receiptNumber, receiptPostingDate: receipt.postingDate,
+          orderId: order.id, orderNumber: order.orderNumber,
+          itemId: receiptLine.itemId, itemCode: receiptLine.itemCode,
+          itemName: receiptLine.itemName, baseUnitCode: receiptLine.baseUnitCode,
+          matchedQuantity: money(quantity),
+          receiptUnitCost: receiptLine.unitCost,
+          matchedReceiptValue: money(receiptValue),
+          billNetUnitPrice: money(billValue / quantity),
+          matchedBillValue: money(billValue),
+          valueDifference: '0.000',
+          accountCode: '2150', accountName: 'Goods received not invoiced',
+          reversalReason: '',
+        });
+      }
+
+      server.matches.push(...planned);
+      bill.status = 'posted';
+      bill.version += 1;
+      for (const receipt of server.receipts) {
+        const cleared = receipt.lines.reduce((sum, l) => sum + clearedOn(l.id), 0);
+        receipt.clearedValue = money(cleared);
+        receipt.openValue = money(Number(receipt.totalValue) - cleared);
+        receipt.matched = cleared > 0;
+      }
+      return ok({ bill });
+    }
+
     /* ── Received not invoiced ──────────────────────────────────────────── */
     if (path === '/api/purchasing/grni' && method === 'GET') {
       if (server.failReads) return fail(503, 'unavailable', 'The books are not reachable.');
@@ -559,9 +746,11 @@ export function install(): void {
           accountName: 'Goods received not invoiced',
           quantity: line.receivedQuantity,
           value: line.totalCost,
-          matched: false,
+          clearedValue: money(clearedOn(line.id)),
+          openValue: money(Number(line.totalCost) - clearedOn(line.id)),
+          matched: clearedOn(line.id) > 0,
         })));
-      const total = rows.reduce((sum, row) => sum + Number(row.value), 0);
+      const total = rows.reduce((sum, row) => sum + Number(row.openValue), 0);
       return ok({
         asOfDate: url.searchParams.get('asOfDate'),
         rows,
@@ -569,10 +758,128 @@ export function install(): void {
         generalLedgerBalance: money(total),
         difference: '0.000',
         balanced: true,
-        matchingImplemented: false,
+        matchingImplemented: true,
       });
     }
 
     return fail(404, 'not_found', `No fake route for ${method} ${path}`);
   }) as typeof fetch;
 }
+
+/* ══ AP2 — matching a supplier bill to a receipt ═══════════════════════════ */
+
+interface FakeMatch {
+  matchId: string;
+  status: 'active' | 'reversed';
+  matchedAt: string | null;
+  billId: string;
+  billNumber: string;
+  supplierInvoiceNumber: string;
+  billStatus: string;
+  billPostingDate: string;
+  supplierId: string;
+  supplierName: string;
+  receiptId: string;
+  receiptLineId: string;
+  receiptNumber: string;
+  receiptPostingDate: string;
+  orderId: string;
+  orderNumber: string;
+  itemId: string;
+  itemCode: string;
+  itemName: string;
+  baseUnitCode: string;
+  matchedQuantity: string;
+  receiptUnitCost: string;
+  matchedReceiptValue: string;
+  billNetUnitPrice: string;
+  matchedBillValue: string;
+  valueDifference: string;
+  accountCode: string;
+  accountName: string;
+  reversalReason: string;
+}
+
+interface FakeBill {
+  id: string;
+  billNumber: string;
+  supplierInvoiceNumber: string;
+  status: 'draft' | 'posted' | 'reversed';
+  workflow: string;
+  supplierId: string;
+  billDate: string;
+  postingDate: string;
+  dueDate: string;
+  total: string;
+  version: number;
+  lines: Array<{
+    id: string;
+    receiptLineId: string | null;
+    matchedQuantity: string | null;
+    quantity: string;
+    unitPrice: string;
+    taxableAmount: string;
+  }>;
+}
+
+/** What active matches have cleared of one receipt line. */
+export function clearedOn(receiptLineId: string): number {
+  return server.matches
+    .filter((m) => m.status === 'active' && m.receiptLineId === receiptLineId)
+    .reduce((sum, m) => sum + Number(m.matchedReceiptValue), 0);
+}
+
+function matchedQuantityOn(receiptLineId: string): number {
+  return server.matches
+    .filter((m) => m.status === 'active' && m.receiptLineId === receiptLineId)
+    .reduce((sum, m) => sum + Number(m.matchedQuantity), 0);
+}
+
+/** Every receipt line with something left, exactly as the server derives it. */
+function eligibleLines(supplierId?: string) {
+  return server.receipts
+    .filter((receipt) => receipt.status === 'posted')
+    .filter((receipt) => !supplierId || receipt.supplierId === supplierId)
+    .flatMap((receipt) => {
+      const order = server.orders.find((o) => o.id === receipt.orderId);
+      return receipt.lines.map((line) => {
+        const orderLine = order?.lines.find((l) => l.id === line.orderLineId);
+        const matchedQuantity = matchedQuantityOn(line.id);
+        const matchedValue = clearedOn(line.id);
+        const remainingQuantity = Number(line.receivedQuantity) - matchedQuantity;
+        return {
+          receiptLineId: line.id,
+          receiptId: receipt.id,
+          receiptNumber: receipt.receiptNumber,
+          receiptDate: receipt.receiptDate,
+          postingDate: receipt.postingDate,
+          orderId: receipt.orderId,
+          orderLineId: line.orderLineId,
+          orderNumber: receipt.orderNumber,
+          supplierId: receipt.supplierId,
+          itemId: line.itemId,
+          itemCode: line.itemCode,
+          itemName: line.itemName,
+          baseUnitId: line.baseUnitId,
+          baseUnitCode: line.baseUnitCode,
+          warehouseId: line.warehouseId,
+          warehouseCode: line.warehouseCode,
+          receivedQuantity: line.receivedQuantity,
+          unitCost: line.unitCost,
+          receiptValue: line.totalCost,
+          matchedQuantity: money(matchedQuantity),
+          matchedValue: money(matchedValue),
+          remainingQuantity: money(remainingQuantity),
+          remainingValue: money(Number(line.totalCost) - matchedValue),
+          _orderLine: orderLine,
+          _remainingQuantity: remainingQuantity,
+        };
+      }).filter((line) => line._remainingQuantity > 0);
+    });
+}
+
+/** The refusal the server gives when an invoice disagrees with the receipt. */
+const VARIANCE = (billValue: number, receiptValue: number): string =>
+  `The supplier invoiced ${billValue.toFixed(3)} for goods received at ${receiptValue.toFixed(3)}. `
+  + 'Purchase-price variance has no defined destination in this product, so the bill is refused '
+  + 'instead of the difference being recorded somewhere it cannot be defended.';

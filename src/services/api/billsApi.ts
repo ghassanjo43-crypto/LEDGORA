@@ -100,14 +100,25 @@ export interface ServerBillLineInput {
   /**
    * Where the line posts.
    *
-   * Ignored on a STOCKED line: the server forces the item's own inventory
-   * account onto it, because the journal debits what the line says and letting
-   * a caller choose would credit the payable against anything at all.
+   * Derived, and therefore optional, on the two lines that have no choice: a
+   * STOCKED line posts to the item's own inventory account, and a
+   * RECEIPT-MATCHED line to the goods-received-not-invoiced account its receipt
+   * credited. The journal debits what the line says, so letting a caller choose
+   * either would credit the payable against anything at all. Required on every
+   * other line.
    */
-  accountId: string;
+  accountId?: string;
   /** Naming both makes this a purchase into stock. Both or neither. */
   itemId?: string | null;
   warehouseId?: string | null;
+  /**
+   * The goods-receipt line this settles, and how much of it.
+   *
+   * Mutually exclusive with `itemId`: one recognises inventory from the bill,
+   * the other clears an accrual for inventory a receipt already recognised.
+   */
+  receiptLineId?: string | null;
+  matchedQuantity?: string | null;
   quantity?: string;
   unit?: string;
   unitPrice?: string;
@@ -124,6 +135,8 @@ export interface ServerBillLineInput {
 }
 
 export interface BillWriteInput {
+  /** Stated, and checked against the lines by the server. */
+  workflow?: 'expense' | 'stocked-direct' | 'receipt-matched';
   supplierInvoiceNumber?: string;
   billDate: string;
   postingDate?: string;

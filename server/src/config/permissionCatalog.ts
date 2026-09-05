@@ -387,6 +387,31 @@ export const PERMISSION_SUBJECTS: PermissionSubject[] = [
     description: 'Receiving ordered stock: posting a goods receipt and reversing one.',
   },
   {
+    id: 'receipt_matching',
+    label: 'Receipt Matching',
+    group: 'Sales & purchases',
+    scope: 'organization',
+    requiredModule: 'inventory_advanced',
+    /*
+     * Naming receipts on a bill is its own authority, held apart from writing
+     * the bill and from posting it: matching decides WHICH accrual an invoice
+     * takes away, and a wrong choice clears goods the supplier never sent.
+     *
+     * `post` is naming them, deliberately NOT `create`: `create` belongs to the
+     * AUTHOR group, which every Standard User holds, and that would give
+     * matching authority to anyone who can type a bill. Deciding which accrual
+     * an invoice clears is bookkeeping, so it sits with the Accountant and
+     * above — the same place posting and voiding already sit.
+     *
+     * `void` is withdrawing a match, which only ever happens by reversing the
+     * bill that made it. There is no `approve`, because there is no exception
+     * to approve: matching is exact, and a difference is refused rather than
+     * waved through by somebody senior.
+     */
+    actions: [...READ, 'post', 'void'],
+    description: 'Matching supplier bills to goods receipts, and the clearings that result.',
+  },
+  {
     id: 'received_not_invoiced',
     label: 'Received Not Invoiced',
     group: 'Sales & purchases',

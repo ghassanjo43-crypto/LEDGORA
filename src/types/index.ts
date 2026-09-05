@@ -191,6 +191,7 @@ export type ViewKey =
   // Advanced Purchasing — AP1
   | 'purchase-orders'
   | 'goods-receipts'
+  | 'receipt-matching'
   | 'received-not-invoiced'
   | 'tax-codes'
   | 'tax-groups'

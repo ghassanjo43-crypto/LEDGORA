@@ -781,6 +781,10 @@ describe('migration 040', () => {
   it('rolls back and reapplies when nothing was sold', async () => {
     const migrator = createMigrator(ctx.db);
     /* 042 and 041 sit on top now, so they come off first. */
+    const matched = await migrator.migrateDown();
+    expect(matched.error).toBeUndefined();
+    expect(matched.results?.[0]?.migrationName).toBe('043_receipt_matching');
+
     const purchased = await migrator.migrateDown();
     expect(purchased.error).toBeUndefined();
     expect(purchased.results?.[0]?.migrationName).toBe('042_purchase_orders');
@@ -811,6 +815,9 @@ describe('migration 040', () => {
     const migrator = createMigrator(ctx.db);
     /* Nothing was ordered or counted, so 042 and 041 come off cleanly; 040 is
      * the one holding the stocked sale this test is about. */
+    const matched = await migrator.migrateDown();
+    expect(matched.error).toBeUndefined();
+
     const purchased = await migrator.migrateDown();
     expect(purchased.error).toBeUndefined();
 

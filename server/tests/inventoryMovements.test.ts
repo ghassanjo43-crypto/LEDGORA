@@ -902,6 +902,10 @@ describe('migration 038', () => {
     const migrator = createMigrator(ctx.db);
 
     /* 042, 041, 040 and 039 sit on top now, so they come off first. */
+    const matched = await migrator.migrateDown();
+    expect(matched.error).toBeUndefined();
+    expect(matched.results?.[0]?.migrationName).toBe('043_receipt_matching');
+
     const purchased = await migrator.migrateDown();
     expect(purchased.error).toBeUndefined();
     expect(purchased.results?.[0]?.migrationName).toBe('042_purchase_orders');
@@ -940,6 +944,9 @@ describe('migration 038', () => {
     /* Nothing was ordered, counted, sold on an invoice or bought on a bill
      * here, so 042, 041, 040 and 039 come off cleanly; 038 is the one holding
      * the movements this test is about. */
+    const matched = await migrator.migrateDown();
+    expect(matched.error).toBeUndefined();
+
     const purchased = await migrator.migrateDown();
     expect(purchased.error).toBeUndefined();
 

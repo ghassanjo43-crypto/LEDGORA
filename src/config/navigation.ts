@@ -144,6 +144,7 @@ export const NAV_GROUPS: NavGroup[] = [
        */
       { key: 'purchase-orders', label: 'Purchase Orders', icon: ClipboardList, description: 'Commitments to buy — no ledger entry', requiredModule: 'inventory_advanced' },
       { key: 'goods-receipts', label: 'Goods Receipts', icon: PackageCheck, description: 'Receive ordered stock against a purchase order', requiredModule: 'inventory_advanced' },
+      { key: 'receipt-matching', label: 'Receipt Matching', icon: ReceiptEuro, description: 'Settle goods receipts with a supplier invoice', requiredModule: 'inventory_advanced' },
       { key: 'received-not-invoiced', label: 'Received Not Invoiced', icon: FileBarChart2, description: 'Goods taken in and not yet invoiced', requiredModule: 'inventory_advanced' },
     ],
   },

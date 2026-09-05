@@ -353,6 +353,13 @@ const RESET_PLAN: readonly PlanEntry[] = [
   /* Advanced purchasing, children first — see migration 042. Before the stock
    * documents and movements a receipt points at. */
   {
+    table: 'bill_receipt_matches',
+    action: 'scoped_delete',
+    order: 28.57,
+    label: 'Receipt-to-bill matches',
+    why: 'What each bill settled. References bill lines, receipt lines and accounts under RESTRICT keys.',
+  },
+  {
     table: 'purchasing_audit_events',
     action: 'scoped_delete',
     order: 28.58,

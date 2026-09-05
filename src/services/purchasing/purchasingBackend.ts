@@ -42,6 +42,10 @@ import {
   type ReceiptWriteInput,
   type GrniSchedule,
   type PurchaseOrderStatus,
+  matchingApi,
+  type EligibleReceiptLine,
+  type MatchHistoryRow,
+  type GrniAging,
 } from '@/services/api/purchasingApi';
 
 export type RegisterState = 'idle' | 'loading' | 'ready' | 'unavailable';
@@ -57,10 +61,12 @@ export const PURCHASING_LOCAL_UNSUPPORTED =
   + 'receipt recognises — so nothing here would reach a ledger. Record a stocked purchase on a '
   + 'supplier bill instead.';
 
-export const MATCHING_UNSUPPORTED =
-  'Matching a receipt to a supplier invoice is not available yet. Every posted receipt is awaiting '
-  + 'one, and the goods-received-not-invoiced balance is what the business has taken in and not yet '
-  + 'been invoiced for.';
+export const MATCHING_NOTE =
+  'A receipt is settled by posting a supplier bill against it, which clears the '
+  + 'goods-received-not-invoiced accrual and recognises the payable and the recoverable input tax. '
+  + 'Matching is exact: a bill invoiced at a different value from what the goods were received at '
+  + 'is refused, because purchase-price variance has no defined destination under weighted-average '
+  + 'costing in this product. Returns, debit notes and supplier credits are not implemented.';
 
 interface PurchasingShape {
   orderState: RegisterState;
@@ -80,6 +86,19 @@ interface PurchasingShape {
   grniState: RegisterState;
   grni: GrniSchedule | null;
   grniError: string | null;
+
+  eligibleState: RegisterState;
+  eligible: EligibleReceiptLine[];
+  eligibleError: string | null;
+  /** The server's own rule, carried rather than restated by a screen. */
+  exactValueRequired: boolean;
+  varianceNote: string;
+
+  matchState: RegisterState;
+  matches: MatchHistoryRow[];
+
+  agingState: RegisterState;
+  aging: GrniAging | null;
 }
 
 export const usePurchasing = create<PurchasingShape>(() => ({
@@ -92,10 +111,19 @@ export const usePurchasing = create<PurchasingShape>(() => ({
   receipts: [],
   receiptError: null,
   matchingSupported: false,
-  matchingNote: MATCHING_UNSUPPORTED,
+  matchingNote: MATCHING_NOTE,
   grniState: 'idle',
   grni: null,
   grniError: null,
+  eligibleState: 'idle',
+  eligible: [],
+  eligibleError: null,
+  exactValueRequired: true,
+  varianceNote: MATCHING_NOTE,
+  matchState: 'idle',
+  matches: [],
+  agingState: 'idle',
+  aging: null,
 }));
 
 /**
@@ -110,8 +138,12 @@ export function clearPurchasingCache(): void {
     orderState: 'idle', orders: [], orderError: null,
     openState: 'idle', openLines: [],
     receiptState: 'idle', receipts: [], receiptError: null,
-    matchingSupported: false, matchingNote: MATCHING_UNSUPPORTED,
+    matchingSupported: false, matchingNote: MATCHING_NOTE,
     grniState: 'idle', grni: null, grniError: null,
+    eligibleState: 'idle', eligible: [], eligibleError: null,
+    exactValueRequired: true, varianceNote: MATCHING_NOTE,
+    matchState: 'idle', matches: [],
+    agingState: 'idle', aging: null,
   });
 }
 
@@ -169,7 +201,7 @@ export async function loadReceipts(
       receipts: answer.receipts,
       receiptError: null,
       matchingSupported: answer.matchingSupported,
-      matchingNote: answer.note || MATCHING_UNSUPPORTED,
+      matchingNote: answer.note || MATCHING_NOTE,
     });
   } catch (cause) {
     if (!isCurrentGeneration(generation)) return;
@@ -197,6 +229,68 @@ export async function loadGrni(options: { asOfDate?: string } = {}): Promise<voi
       grni: null,
       grniError: message(cause, 'The received-not-invoiced schedule could not be loaded.'),
     });
+  }
+}
+
+export async function loadEligibleReceiptLines(
+  options: { supplierId?: string; orderId?: string } = {},
+): Promise<void> {
+  if (!purchasingIsServerAuthoritative()) return;
+  const generation = booksGeneration();
+  usePurchasing.setState({ eligibleState: 'loading', eligibleError: null });
+  try {
+    const answer = await matchingApi.eligible(options);
+    if (!isCurrentGeneration(generation)) return;
+    usePurchasing.setState({
+      eligibleState: 'ready',
+      eligible: answer.lines,
+      eligibleError: null,
+      /* The rule comes from the server, so a screen cannot drift from it. */
+      exactValueRequired: answer.exactValueRequired,
+      varianceNote: answer.varianceNote || MATCHING_NOTE,
+    });
+  } catch (cause) {
+    if (!isCurrentGeneration(generation)) return;
+    /*
+     * Empty, never stale. A capacity figure is exactly what somebody acts on,
+     * and offering one another bill has already taken is how a receipt gets
+     * cleared twice.
+     */
+    usePurchasing.setState({
+      eligibleState: 'unavailable',
+      eligible: [],
+      eligibleError: message(cause, 'Eligible goods receipts could not be loaded.'),
+    });
+  }
+}
+
+export async function loadMatchHistory(
+  options: { supplierId?: string; billId?: string; receiptId?: string } = {},
+): Promise<void> {
+  if (!purchasingIsServerAuthoritative()) return;
+  const generation = booksGeneration();
+  usePurchasing.setState({ matchState: 'loading' });
+  try {
+    const matches = await matchingApi.history(options);
+    if (!isCurrentGeneration(generation)) return;
+    usePurchasing.setState({ matchState: 'ready', matches });
+  } catch {
+    if (!isCurrentGeneration(generation)) return;
+    usePurchasing.setState({ matchState: 'unavailable', matches: [] });
+  }
+}
+
+export async function loadGrniAging(options: { asOfDate?: string } = {}): Promise<void> {
+  if (!purchasingIsServerAuthoritative()) return;
+  const generation = booksGeneration();
+  usePurchasing.setState({ agingState: 'loading' });
+  try {
+    const aging = await grniApi.aging(options);
+    if (!isCurrentGeneration(generation)) return;
+    usePurchasing.setState({ agingState: 'ready', aging });
+  } catch {
+    if (!isCurrentGeneration(generation)) return;
+    usePurchasing.setState({ agingState: 'unavailable', aging: null });
   }
 }
 
@@ -269,6 +363,25 @@ export const purchasingGateway = {
   orderHistory: (id: string) => purchaseOrdersApi.history(id),
   receiptHistory: (id: string) => goodsReceiptsApi.history(id),
 };
+
+/**
+ * Refreshing everything a posted or reversed supplier bill touched.
+ *
+ * A matched bill clears an accrual, so the eligible list, the receipts, the
+ * GRNI schedule and its ageing all change at once. Calling this from the bill
+ * screens keeps a stale capacity figure off the matching screen — which is the
+ * figure somebody would otherwise try to bill a second time.
+ */
+export async function refreshAfterBillChange(): Promise<void> {
+  if (!purchasingIsServerAuthoritative()) return;
+  await Promise.all([
+    loadEligibleReceiptLines(),
+    loadMatchHistory(),
+    loadReceipts(),
+    loadGrni(),
+    loadGrniAging(),
+  ]);
+}
 
 /**
  * A fresh idempotency key for one attempt at one delivery.

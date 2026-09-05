@@ -75,6 +75,7 @@ import {
   assertReversalReason,
   type LineInput as StockLineInput,
 } from '../inventory/stockDocumentService.js';
+import { assertNoLiveMatches } from './receiptMatching.js';
 import {
   RECEIVABLE,
   allocatePurchasingNumber,
@@ -155,10 +156,12 @@ const UNSUPPORTED: Record<string, string> = {
 };
 
 export const MATCHING_DEFERRED =
-  'Matching a goods receipt to a supplier invoice — two- and three-way match, price and quantity '
-  + 'tolerances, purchase-price variance and accrual release — is not implemented. Every posted '
-  + 'receipt in AP1 is unmatched by design, and a field that claimed otherwise would describe a '
-  + 'state the books cannot reach.';
+  'A goods receipt is matched by posting a supplier bill against it, which clears the '
+  + 'goods-received-not-invoiced accrual and recognises the payable and the recoverable input tax. '
+  + 'Matching is exact: a bill whose net differs from what the goods were received at is refused, '
+  + 'because purchase-price variance has no defined destination under weighted-average costing in '
+  + 'this product. Tolerances, variance postings, purchase returns, debit notes and supplier '
+  + 'credits are not implemented.';
 
 function refuseField(field: string, value: unknown, what: string, why: string): void {
   if (value === undefined || value === null || value === '') return;
@@ -255,11 +258,17 @@ export interface ReceiptRecord {
   reversalReason: string;
   reversedAt: string | null;
   /**
-   * Always `false` in AP1, and stated rather than implied: nothing here can
-   * match a receipt to a supplier invoice, so every posted receipt is awaiting
-   * one. A client must never infer "settled" from the absence of a field.
+   * Whether any of this receipt has been settled by a posted supplier bill.
+   *
+   * Derived from ACTIVE allocations, never stored: a reversed bill's rows leave
+   * that set, and the receipt is awaiting an invoice again. Stated explicitly so
+   * a client never has to infer "settled" from the absence of a field.
    */
-  matched: false;
+  matched: boolean;
+  /** What supplier bills have cleared of this receipt's value, so far. */
+  clearedValue: string;
+  /** The accrual still open on this receipt: total value less what was cleared. */
+  openValue: string;
   version: number;
   createdAt: string | null;
   lines: ReceiptLineRecord[];
@@ -315,6 +324,28 @@ async function loadReceipts(
     .orderBy('l.line_number', 'asc')
     .execute();
 
+  /*
+   * What posted bills have cleared of each receipt, from ACTIVE allocations.
+   * A reversed bill's rows leave this sum, which is how a receipt returns to
+   * awaiting an invoice without anything being recomputed or stored.
+   */
+  const clearedByReceipt = new Map<string, Money.Amount>();
+  const clearings = await db
+    .selectFrom('bill_receipt_matches')
+    .select((eb) => [
+      'receipt_id',
+      eb.fn.sum<string>('matched_receipt_value').as('value'),
+    ])
+    .where('organization_id', '=', actor.organizationId)
+    .where('company_id', '=', actor.companyId)
+    .where('receipt_id', 'in', ids as string[])
+    .where('status', '=', 'active')
+    .groupBy('receipt_id')
+    .execute();
+  for (const row of clearings) {
+    clearedByReceipt.set(row.receipt_id, Money.toAmount(String(row.value ?? '0'), 'cleared'));
+  }
+
   const byReceipt = new Map<string, ReceiptLineRecord[]>();
   for (const line of lines) {
     const list = byReceipt.get(line.receipt_id) ?? [];
@@ -360,7 +391,11 @@ async function loadReceipts(
       reversalDocumentId: row.reversal_document_id,
       reversalReason: row.reversal_reason,
       reversedAt: stamp(row.reversed_at),
-      matched: false as const,
+      matched: (clearedByReceipt.get(row.id) ?? Money.ZERO) !== Money.ZERO,
+      clearedValue: Money.toDecimalString(clearedByReceipt.get(row.id) ?? Money.ZERO),
+      openValue: Money.toDecimalString(
+        Money.toAmount(row.total_value, 'totalValue') - (clearedByReceipt.get(row.id) ?? Money.ZERO),
+      ),
       version: Number(row.version),
       createdAt: stamp(row.created_at),
       lines: byReceipt.get(row.id) ?? [],
@@ -411,7 +446,16 @@ export async function listReceipts(
     .limit(Math.min(Math.max(query.limit ?? 100, 1), 500))
     .execute();
 
-  return loadReceipts(db, actor, rows.map((row) => row.id));
+  const loaded = await loadReceipts(db, actor, rows.map((row) => row.id));
+  /*
+   * "Awaiting an invoice" means something is still OPEN, not merely that the
+   * receipt is posted — a fully billed receipt is settled. The clearings are
+   * summed during hydration, so the filter is applied here rather than in the
+   * query; a page may therefore come back shorter than its limit, which is the
+   * honest outcome when the alternative is listing settled receipts as waiting.
+   */
+  if (!query.awaitingInvoice) return loaded;
+  return loaded.filter((receipt) => Money.toAmount(receipt.openValue, 'openValue') > 0n);
 }
 
 export async function receiptHistory(
@@ -930,13 +974,17 @@ async function assertNoLiveDependencies(
   trx: Trx,
   actor: InventoryActor,
   receiptId: string,
+  receiptNumber: string,
 ): Promise<void> {
   /*
-   * AP2's bill-match rows do not exist yet. When they do, the query goes here:
-   * a live match on this receipt refuses the reversal by name, exactly as I2's
-   * quantity check does below.
+   * AP2's answer, in the place AP1 left for it: a receipt whose accrual a
+   * posted bill has cleared cannot be withdrawn. The payable and the recovered
+   * input tax were recognised against these goods, and taking the receipt away
+   * would leave both standing with nothing behind them. The bill is reversed
+   * first — which its own rules refuse while a payment settles it — and only
+   * then the receipt.
    */
-  void trx; void actor; void receiptId;
+  await assertNoLiveMatches(trx, actor, receiptId, receiptNumber);
 }
 
 /**
@@ -985,7 +1033,7 @@ export async function reverseReceipt(
       );
     }
 
-    await assertNoLiveDependencies(trx, actor, id);
+    await assertNoLiveDependencies(trx, actor, id, receipt.receipt_number);
 
     /* The order, locked before its status is re-derived below. */
     const order = await trx
@@ -1084,9 +1132,14 @@ export interface GrniRow {
   accountCode: string;
   accountName: string;
   quantity: string;
+  /** What the receipt credited to the accrual. Frozen by AP1. */
   value: string;
-  /** False for every AP1 row. Stated, never inferred from an absent field. */
-  matched: false;
+  /** What supplier bills have since cleared, from ACTIVE matches only. */
+  clearedValue: string;
+  /** Still owed to nobody in particular: value less what was cleared. */
+  openValue: string;
+  /** True once a bill has cleared any of this line. Never inferred. */
+  matched: boolean;
 }
 
 export interface GrniSchedule {
@@ -1098,10 +1151,12 @@ export interface GrniSchedule {
   difference: string;
   balanced: boolean;
   /**
-   * True while nothing in the product can match a receipt to an invoice, which
-   * is the whole of AP1. A reader must not present these as settled.
+   * Whether the product can match a receipt to a supplier invoice at all.
+   *
+   * True since AP2. Stated rather than assumed, so a reader knows an unmatched
+   * row is genuinely awaiting an invoice rather than awaiting a feature.
    */
-  matchingImplemented: false;
+  matchingImplemented: boolean;
 }
 
 /**
@@ -1176,7 +1231,7 @@ export async function grniSchedule(
       generalLedgerBalance: '0',
       difference: '0',
       balanced: true,
-      matchingImplemented: false as const,
+      matchingImplemented: true as const,
     };
   }
 
@@ -1198,6 +1253,15 @@ export async function grniSchedule(
       .onRef('o.id', '=', 'r.order_id')
       .onRef('o.organization_id', '=', 'r.organization_id')
       .onRef('o.company_id', '=', 'r.company_id'))
+    /*
+     * The receipt line behind this movement, so a clearing can be attributed to
+     * it. A standalone warehouse receipt has none, and nothing can clear one —
+     * which is exactly why its open value always equals its full value.
+     */
+    .leftJoin('goods_receipt_lines as rl', (join) => join
+      .onRef('rl.movement_id', '=', 'm.id')
+      .onRef('rl.organization_id', '=', 'm.organization_id')
+      .onRef('rl.company_id', '=', 'm.company_id'))
     .leftJoin('business_parties as p', (join) => join
       .onRef('p.id', '=', 'r.supplier_id')
       .onRef('p.organization_id', '=', 'r.organization_id')
@@ -1211,6 +1275,7 @@ export async function grniSchedule(
       'm.warehouse_id', 'm.warehouse_code',
       'm.quantity', 'm.total_cost',
       'a.id as account_id', 'a.account_code', 'a.account_name',
+      'rl.id as receipt_line_id',
     ])
     .where('m.organization_id', '=', actor.organizationId)
     .where('m.company_id', '=', actor.companyId)
@@ -1230,9 +1295,45 @@ export async function grniSchedule(
     .orderBy('m.line_number', 'asc')
     .execute();
 
+  /*
+   * What supplier bills have cleared against these receipt lines, from ACTIVE
+   * allocations only. A reversed bill's rows leave this sum, which is exactly
+   * how its capacity — and its share of the accrual — comes back.
+   */
+  const receiptLineIds = rows
+    .map((row) => row.receipt_line_id)
+    .filter((id): id is string => Boolean(id));
+  const cleared = new Map<string, Money.Amount>();
+  if (receiptLineIds.length > 0) {
+    const clearings = await db
+      .selectFrom('bill_receipt_matches')
+      .select((eb) => [
+        'receipt_line_id',
+        eb.fn.sum<string>('matched_receipt_value').as('value'),
+      ])
+      .where('organization_id', '=', actor.organizationId)
+      .where('company_id', '=', actor.companyId)
+      .where('receipt_line_id', 'in', receiptLineIds)
+      .where('status', '=', 'active')
+      .groupBy('receipt_line_id')
+      .execute();
+    for (const row of clearings) {
+      cleared.set(row.receipt_line_id, Money.toAmount(String(row.value ?? '0'), 'cleared'));
+    }
+  }
+
   let total = Money.ZERO;
   const mapped: GrniRow[] = rows.map((row) => {
-    total += Money.toAmount(row.total_cost, 'value');
+    const value = Money.toAmount(row.total_cost, 'value');
+    const clearedValue = (row.receipt_line_id && cleared.get(row.receipt_line_id)) || Money.ZERO;
+    const openValue = value - clearedValue;
+    /*
+     * The OPEN value is what the schedule totals, because that is what the
+     * account actually holds: the receipt credited it and the bill debited it
+     * back. Totalling the gross receipt value would report an accrual the
+     * ledger no longer carries.
+     */
+    total += openValue;
     return {
       documentId: row.document_id,
       documentNumber: row.document_number,
@@ -1254,7 +1355,9 @@ export async function grniSchedule(
       accountName: row.account_name,
       quantity: row.quantity,
       value: row.total_cost,
-      matched: false as const,
+      clearedValue: Money.toDecimalString(clearedValue),
+      openValue: Money.toDecimalString(openValue),
+      matched: clearedValue !== Money.ZERO,
     };
   });
 
@@ -1300,6 +1403,6 @@ export async function grniSchedule(
     generalLedgerBalance: Money.toDecimalString(ledger),
     difference: Money.toDecimalString(difference),
     balanced: whole ? difference === Money.ZERO : true,
-    matchingImplemented: false as const,
+    matchingImplemented: true as const,
   };
 }

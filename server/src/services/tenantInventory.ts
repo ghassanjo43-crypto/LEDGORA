@@ -383,6 +383,16 @@ export const TENANT_DEPENDENCIES: readonly TenantDependency[] = [
    * name items, units and warehouses under RESTRICT keys of their own.
    */
   {
+    table: 'bill_receipt_matches',
+    ownershipKey: 'organization_id',
+    kind: 'authoritative',
+    disposition: 'delete',
+    order: 35.68,
+    label: 'Receipt-to-bill matches',
+    crossTenantReachable: false,
+    rationale: 'What each supplier bill settled. References bill lines, receipt lines, orders, suppliers, items, units and accounts under RESTRICT keys, so it goes before all of them.',
+  },
+  {
     table: 'purchasing_audit_events',
     ownershipKey: 'organization_id',
     kind: 'authoritative',
@@ -815,6 +825,7 @@ export const DIRECTLY_OWNED_TABLES = [
   'bill_numbering',
   /* Advanced purchasing, children first — see migration 042. Before the stock
    * documents and movements a receipt points at. */
+  'bill_receipt_matches',
   'purchasing_audit_events',
   'goods_receipt_lines',
   'goods_receipts',

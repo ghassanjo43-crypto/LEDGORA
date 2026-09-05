@@ -79,13 +79,12 @@ export function ReceivedNotInvoicedPage() {
         </Alert>
       )}
 
-      {schedule && !schedule.matchingImplemented && (
-        <Alert variant="info">
-          Every line below is awaiting a supplier invoice. Matching receipts to invoices — and the
-          price and quantity differences that come with it — is not implemented, so nothing here is
-          settled, matched or invoiced.
-        </Alert>
-      )}
+      <Alert variant="info">
+        This is what the business has taken into stock and not yet been invoiced for. A line leaves
+        it when a supplier bill is matched to the receipt, which clears the accrual for exactly what
+        the goods were received at. Purchase returns, debit notes and supplier credits are not
+        implemented.
+      </Alert>
 
       {schedule && (
         <Card className="grid gap-4 p-4 md:grid-cols-3">
@@ -133,13 +132,15 @@ export function ReceivedNotInvoicedPage() {
                 <th className="px-4 py-2 text-left">Warehouse</th>
                 <th className="px-4 py-2 text-left">Account</th>
                 <th className="px-4 py-2 text-right">Quantity</th>
-                <th className="px-4 py-2 text-right">Value</th>
+                <th className="px-4 py-2 text-right">Received</th>
+                <th className="px-4 py-2 text-right">Billed</th>
+                <th className="px-4 py-2 text-right">Open</th>
               </tr>
             </thead>
             <tbody>
               {(!schedule || schedule.rows.length === 0) && (
                 <tr>
-                  <td className="px-4 py-6 text-center text-slate-500" colSpan={9}>
+                  <td className="px-4 py-6 text-center text-slate-500" colSpan={11}>
                     {state === 'loading'
                       ? 'Loading…'
                       : 'Nothing has been received and left uninvoiced.'}
@@ -165,7 +166,15 @@ export function ReceivedNotInvoicedPage() {
                     {row.accountCode} {row.accountName}
                   </td>
                   <td className="px-4 py-2 text-right">{row.quantity}</td>
-                  <td className="px-4 py-2 text-right font-medium">{money(Number(row.value))}</td>
+                  <td className="px-4 py-2 text-right text-slate-500">
+                    {money(Number(row.value))}
+                  </td>
+                  <td className="px-4 py-2 text-right text-slate-500">
+                    {money(Number(row.clearedValue))}
+                  </td>
+                  <td className="px-4 py-2 text-right font-medium">
+                    {money(Number(row.openValue))}
+                  </td>
                 </tr>
               ))}
             </tbody>

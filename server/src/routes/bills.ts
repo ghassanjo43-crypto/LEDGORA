@@ -46,7 +46,16 @@ const decimal = z.string().max(40);
  */
 const lineSchema = z.object({
   description: z.string().max(500).optional(),
-  accountId: z.string().uuid(),
+  /*
+   * Optional, because two kinds of line have their account DERIVED rather than
+   * chosen: a stocked line posts to the item's own inventory account, and a
+   * receipt-matched line to the goods-received-not-invoiced account its receipt
+   * credited. The service still requires one from every other line.
+   */
+  accountId: z.string().uuid().optional(),
+  /** The AP1 goods-receipt line this line settles, and how much of it. */
+  receiptLineId: z.string().uuid().nullable().optional(),
+  matchedQuantity: decimal.nullable().optional(),
   quantity: decimal.optional(),
   unit: z.string().max(40).optional(),
   unitPrice: decimal.optional(),
@@ -64,6 +73,12 @@ const lineSchema = z.object({
 }).passthrough();
 
 const billBody = {
+  /*
+   * Stated by the caller and CHECKED against the lines by the service, which
+   * refuses a disagreement. Optional, so an existing client keeps working and
+   * the derivation stays the authority either way.
+   */
+  workflow: z.enum(['expense', 'stocked-direct', 'receipt-matched']).optional(),
   supplierInvoiceNumber: z.string().max(120).optional(),
   billDate: isoDate,
   postingDate: isoDate.optional(),
@@ -153,6 +168,28 @@ export async function billRoutes(app: FastifyInstance): Promise<void> {
     ...guards: Array<ReturnType<typeof requireOwnOrganizationPermission>>
   ) => [...guards, requireCompanyScope];
 
+  /*
+   * Naming goods receipts on a bill needs its own authority, checked here
+   * rather than in a preHandler because whether a bill matches anything is a
+   * property of its BODY, not of its route. Writing a bill and deciding which
+   * accrual it takes away are different acts: a wrong match clears goods the
+   * supplier never sent, and the payable then settles an accrual that should
+   * still be open.
+   */
+  const assertMayMatch = (request: FastifyRequest, body: { lines?: unknown[] }): void => {
+    const matches = (body.lines ?? []).some(
+      (line) => Boolean((line as { receiptLineId?: string | null }).receiptLineId),
+    );
+    if (!matches) return;
+    const effective = request.permissions;
+    if (!effective?.allowedKeys.includes('receipt_matching:post')) {
+      throw errors.forbidden(
+        'You may write a bill but not match it to goods receipts. Matching decides which '
+        + 'goods-received accrual an invoice clears, which is a separate authority.',
+      );
+    }
+  };
+
   app.get('/api/bills', { preHandler: onBooks(viewBills) }, async (request, reply) => {
     const query = parse(listSchema, request.query);
     return reply.send({
@@ -173,6 +210,7 @@ export async function billRoutes(app: FastifyInstance): Promise<void> {
 
   app.post('/api/bills', { preHandler: onBooks(createBills) }, async (request, reply) => {
     const body = parse(createSchema, request.body ?? {});
+    assertMayMatch(request, body as { lines?: unknown[] });
     return reply.code(201).send({
       bill: await bills.createDraft(app.db, actorOf(request), body as never),
     });
@@ -180,6 +218,7 @@ export async function billRoutes(app: FastifyInstance): Promise<void> {
 
   app.patch('/api/bills/:id', { preHandler: onBooks(editBills) }, async (request, reply) => {
     const body = parse(updateSchema, request.body ?? {});
+    assertMayMatch(request, body as { lines?: unknown[] });
     return reply.send({
       bill: await bills.updateDraft(app.db, actorOf(request), idOf(request), body as never, {
         expectedVersion: body.expectedVersion,

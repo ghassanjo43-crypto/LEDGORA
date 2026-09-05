@@ -817,6 +817,7 @@ export interface Database {
   goods_receipt_lines: GoodsReceiptLinesTable;
   purchasing_document_numbering: PurchasingDocumentNumberingTable;
   purchasing_audit_events: PurchasingAuditEventsTable;
+  bill_receipt_matches: BillReceiptMatchesTable;
 }
 
 /**
@@ -1276,6 +1277,12 @@ export interface BillsTable {
   /** The supplier's own reference. Required before posting, NOT unique. */
   supplier_invoice_number: Generated<string>;
   status: Generated<SupplierBillStatus>;
+  /**
+   * Which purchasing workflow this bill belongs to, stated and never inferred:
+   * `expense` | `stocked-direct` (I3 recognises inventory) | `receipt-matched`
+   * (AP1 already did, and this clears the accrual).
+   */
+  workflow: Generated<BillWorkflow>;
   bill_date: string;
   /** What the ledger posts on, and what period locks are enforced against. */
   posting_date: string;
@@ -1315,6 +1322,15 @@ export interface BillLinesTable {
    */
   item_id: string | null;
   warehouse_id: string | null;
+  /**
+   * The AP1 receipt line this bill line settles, and how much of it.
+   *
+   * Mutually exclusive with `item_id` by CHECK: a line that both recognises
+   * inventory itself and settles a receipt that already did would put one
+   * physical purchase into stock twice.
+   */
+  receipt_line_id: string | null;
+  matched_quantity: string | null;
   description: Generated<string>;
   /** The account DEBITED — expense or non-inventory asset. */
   account_id: string;
@@ -2181,4 +2197,55 @@ export interface PurchasingAuditEventsTable {
   actor_name: Generated<string>;
   request_id: Generated<string>;
   at: Generated<Timestamp>;
+}
+
+/** Which purchasing workflow a bill belongs to. Stated, never inferred. */
+export type BillWorkflow = 'expense' | 'stocked-direct' | 'receipt-matched';
+
+/**
+ * One clearing: the quantity and value of an AP1 receipt line that a supplier
+ * bill line settled, and the goods-received-not-invoiced account it debited.
+ *
+ * Append-only. `matched`, `unmatched` and `remaining` are never stored — they
+ * are sums over the ACTIVE rows here, taken under the receipt line's row lock,
+ * so a reversed bill returns capacity by leaving that set rather than by a
+ * counter being decremented.
+ */
+export interface BillReceiptMatchesTable {
+  id: Generated<string>;
+  organization_id: string;
+  company_id: string;
+  bill_id: string;
+  bill_line_id: string;
+  receipt_id: string;
+  receipt_line_id: string;
+  /** Lineage, so a clearing can be read from either end of the workflow. */
+  order_id: string;
+  order_line_id: string;
+  supplier_id: string;
+  item_id: string;
+  base_unit_id: string;
+  /** Decimal STRINGS: an exact figure never passes through a float. */
+  matched_quantity: string;
+  /** The receipt's own frozen figures, copied so a schedule is self-contained. */
+  receipt_unit_cost: string;
+  matched_receipt_value: string;
+  /** What the supplier charged for the same quantity, net of recoverable tax. */
+  bill_net_unit_price: string;
+  matched_bill_value: string;
+  /**
+   * Zero, always, in this slice — and stored so the reconciliation can assert
+   * it rather than assume it. A difference is refused at posting because the
+   * product resolves no destination for one.
+   */
+  value_difference: Generated<string>;
+  /** Frozen from the receipt: never today's mapping. */
+  grni_account_id: string;
+  /** active | reversed */
+  status: Generated<string>;
+  reversal_reason: Generated<string>;
+  reversed_at: Timestamp | null;
+  reversed_by: string | null;
+  matched_by: string | null;
+  created_at: Generated<Timestamp>;
 }

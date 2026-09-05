@@ -31,7 +31,7 @@ import { clearInventoryCache, useServerInventory } from '@/services/inventory/in
 import { clearSupplierCache } from '@/services/parties/supplierDirectory';
 import { useStore } from '@/store/useStore';
 import {
-  server, resetServer, install, seedIssuedOrder,
+  server, resetServer, install, seedIssuedOrder, seedPostedReceipt,
 } from './__fixtures__/advancedPurchasingFakeServer';
 
 const realFetch = globalThis.fetch;
@@ -122,21 +122,7 @@ describe('a durable subscriber raises a purchase order', () => {
 
   it('shows the SERVER-derived outstanding quantity, never one it computed', async () => {
     const order = seedIssuedOrder('10', '5.000');
-    server.receipts.push({
-      id: 'gr-seed', receiptNumber: 'GR-2026-0001', orderId: order.id,
-      orderNumber: order.orderNumber, supplierId: order.supplierId,
-      supplierName: order.supplierName, receiptDate: '2026-03-05', postingDate: '2026-03-05',
-      deliveryNoteReference: '', memo: '', status: 'posted', totalValue: '20.000',
-      inventoryDocumentId: 'doc-seed', inventoryDocumentNumber: 'PRC-2026-0001',
-      journalEntryId: 'je-seed', reversalDocumentId: null, reversalReason: '', reversedAt: null,
-      matched: false, version: 1, createdAt: null, idempotencyKey: 'seed',
-      lines: [{
-        id: 'grl-seed', lineNumber: 1, orderLineId: order.lines[0]!.id, orderLineNumber: 1,
-        itemId: 'item-1', itemCode: 'SKU-1', itemName: 'Widget', baseUnitId: 'unit-1',
-        baseUnitCode: 'EA', warehouseId: 'wh-1', warehouseCode: 'MAIN',
-        receivedQuantity: '4.000', unitCost: '5.000', totalCost: '20.000', movementId: 'mv-seed',
-      }],
-    });
+    seedPostedReceipt(order, '4.000', '20.000');
 
     render(<PurchaseOrdersPage />);
     await waitFor(() => expect(screen.getByText('PO-2026-0001')).toBeTruthy());
@@ -242,21 +228,7 @@ describe('a durable subscriber receives ordered stock', () => {
 
   it('reverses through the server and refuses without a reason', async () => {
     const order = seedIssuedOrder('4', '5.000');
-    server.receipts.push({
-      id: 'gr-seed', receiptNumber: 'GR-2026-0001', orderId: order.id,
-      orderNumber: order.orderNumber, supplierId: order.supplierId,
-      supplierName: order.supplierName, receiptDate: '2026-03-05', postingDate: '2026-03-05',
-      deliveryNoteReference: '', memo: '', status: 'posted', totalValue: '20.000',
-      inventoryDocumentId: 'doc-seed', inventoryDocumentNumber: 'PRC-2026-0001',
-      journalEntryId: 'je-seed', reversalDocumentId: null, reversalReason: '', reversedAt: null,
-      matched: false, version: 1, createdAt: null, idempotencyKey: 'seed',
-      lines: [{
-        id: 'grl-seed', lineNumber: 1, orderLineId: order.lines[0]!.id, orderLineNumber: 1,
-        itemId: 'item-1', itemCode: 'SKU-1', itemName: 'Widget', baseUnitId: 'unit-1',
-        baseUnitCode: 'EA', warehouseId: 'wh-1', warehouseCode: 'MAIN',
-        receivedQuantity: '4.000', unitCost: '5.000', totalCost: '20.000', movementId: 'mv-seed',
-      }],
-    });
+    seedPostedReceipt(order, '4.000', '20.000');
 
     render(<GoodsReceiptsPage />);
     await waitFor(() => expect(screen.getByText('GR-2026-0001')).toBeTruthy());
@@ -279,26 +251,15 @@ describe('a durable subscriber receives ordered stock', () => {
 describe('the received-not-invoiced schedule', () => {
   it('shows the server figure and its reconciliation to the ledger', async () => {
     const order = seedIssuedOrder('4', '5.000');
-    server.receipts.push({
-      id: 'gr-seed', receiptNumber: 'GR-2026-0001', orderId: order.id,
-      orderNumber: order.orderNumber, supplierId: order.supplierId,
-      supplierName: order.supplierName, receiptDate: '2026-03-05', postingDate: '2026-03-05',
-      deliveryNoteReference: '', memo: '', status: 'posted', totalValue: '20.000',
-      inventoryDocumentId: 'doc-seed', inventoryDocumentNumber: 'PRC-2026-0001',
-      journalEntryId: 'je-seed', reversalDocumentId: null, reversalReason: '', reversedAt: null,
-      matched: false, version: 1, createdAt: null, idempotencyKey: 'seed',
-      lines: [{
-        id: 'grl-seed', lineNumber: 1, orderLineId: order.lines[0]!.id, orderLineNumber: 1,
-        itemId: 'item-1', itemCode: 'SKU-1', itemName: 'Widget', baseUnitId: 'unit-1',
-        baseUnitCode: 'EA', warehouseId: 'wh-1', warehouseCode: 'MAIN',
-        receivedQuantity: '4.000', unitCost: '5.000', totalCost: '20.000', movementId: 'mv-seed',
-      }],
-    });
+    seedPostedReceipt(order, '4.000', '20.000');
 
     render(<ReceivedNotInvoicedPage />);
     await waitFor(() => expect(screen.getByText('GR-2026-0001')).toBeTruthy());
     expect(screen.getByText(/Reconciled/i)).toBeTruthy();
-    expect(screen.getByText(/awaiting a supplier invoice/i)).toBeTruthy();
+    /* AP2 changed what the page says: matching exists, and a line leaves the
+     * schedule when a bill clears it. Returns are still named as absent. */
+    expect(screen.getByText(/not yet been invoiced for/i)).toBeTruthy();
+    expect(screen.getByText(/not implemented/i)).toBeTruthy();
   });
 
   it('reads EMPTY rather than stale when the server cannot answer', async () => {

@@ -275,7 +275,8 @@ export async function writePurchasingAudit(
   trx: Executor,
   actor: InventoryActor,
   input: {
-    subjectType: 'order' | 'receipt';
+    /* `match` arrives with AP2: an accrual becoming a debt is neither. */
+    subjectType: 'order' | 'receipt' | 'match';
     subjectId: string;
     action: string;
     detail?: Record<string, unknown>;
