@@ -14,6 +14,7 @@ import { useEntitlementStore } from '@/store/entitlementStore';
 import { useInventoryStore } from '@/store/inventoryStore';
 import { useManufacturingStore } from '@/store/manufacturingStore';
 import { useFixedAssetStore } from '@/store/fixedAssetStore';
+import { fixedAssetsAreServerAuthoritative } from '@/services/fixedAssets/fixedAssetsBackend';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Badge } from '@/components/ui/Badge';
 
@@ -46,8 +47,16 @@ export function AppLayout({ children }: { children: ReactNode }) {
     if (modules.includes('manufacturing_core')) {
       useManufacturingStore.getState().ensureSeeded();
     }
-    // Seed fixed-asset categories only for entitled organizations.
-    if (modules.includes('fixed_assets')) {
+    /*
+     * Seed fixed-asset categories only for entitled organizations, and only in
+     * Free Demo.
+     *
+     * On durable books the categories live on the server, and seeding the
+     * browser's would create records the register then has to report as
+     * stranded — nine categories a subscriber never made, whose account
+     * mappings were resolved by NAME against a chart this server never held.
+     */
+    if (modules.includes('fixed_assets') && !fixedAssetsAreServerAuthoritative()) {
       useFixedAssetStore.getState().ensureSeeded();
     }
   }, []);

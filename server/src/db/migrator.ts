@@ -54,6 +54,7 @@ import * as stockedInvoices from './migrations/040_stocked_invoices.js';
 import * as stockCounts from './migrations/041_stock_counts.js';
 import * as purchaseOrders from './migrations/042_purchase_orders.js';
 import * as receiptMatching from './migrations/043_receipt_matching.js';
+import * as fixedAssetRegister from './migrations/044_fixed_asset_register.js';
 
 const MIGRATIONS: Record<string, Migration> = {
   '001_initial_schema': initialSchema,
@@ -99,6 +100,7 @@ const MIGRATIONS: Record<string, Migration> = {
   '041_stock_counts': stockCounts,
   '042_purchase_orders': purchaseOrders,
   '043_receipt_matching': receiptMatching,
+  '044_fixed_asset_register': fixedAssetRegister,
 };
 
 class StaticMigrationProvider implements MigrationProvider {

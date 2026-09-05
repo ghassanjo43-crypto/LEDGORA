@@ -1,6 +1,20 @@
 /**
- * Asset categories & accounting mappings + module settings.
+ * Asset categories — durable on the server, disposable in Free Demo.
  *
+ * ══ Two engines, and the screen does not choose ══════════════════════════════
+ *
+ * A durable subscriber's categories live in PostgreSQL and are reached only
+ * through the gateway; Free Demo keeps the local store below, which is
+ * disposable by design and unchanged. The verdict comes from
+ * `fixedAssetsAreServerAuthoritative`, which reads `booksEngine` — a screen that
+ * decided for itself is a screen that gets forgotten when the next domain
+ * migrates.
+ *
+ * There is no fallback between them. A durable subscriber whose save failed is
+ * told so; nothing is written to the browser "so the work is not lost", because
+ * the next hydration would delete it without a word.
+ *
+ * ── The demo module below ────────────────────────────────────────────────────
  * Every category maps to chart-of-accounts posting accounts (cost, accumulated
  * depreciation, depreciation expense, impairment, disposal gain/loss, AUC,
  * recoverable tax, revaluation). Nothing is hard-coded: administrators pick
@@ -8,6 +22,8 @@
  * missing.
  */
 import { useState } from 'react';
+import { fixedAssetsAreServerAuthoritative } from '@/services/fixedAssets/fixedAssetsBackend';
+import { DurableAssetCategoriesPage } from './DurableAssetCategoriesPage';
 import { useFixedAssetStore } from '@/store/fixedAssetStore';
 import type { AssetCategory, AssetCategoryAccounts, FixedAssetApprovable } from '@/types/fixedAssets';
 import { generateId, nowIso } from '@/lib/utils';
@@ -61,6 +77,13 @@ function blankCategory(): AssetCategory {
 }
 
 export function FixedAssetCategoriesPage() {
+  /* Durable books go to the server and nowhere else. */
+  if (fixedAssetsAreServerAuthoritative()) return <DurableAssetCategoriesPage />;
+  return <DemoFixedAssetCategoriesPage />;
+}
+
+/** Free Demo: the local, disposable module, exactly as it was. */
+function DemoFixedAssetCategoriesPage() {
   const store = useFixedAssetStore();
   const { accountOptions, accountLabel } = useFaOptions();
   const [editing, setEditing] = useState<AssetCategory | null>(null);

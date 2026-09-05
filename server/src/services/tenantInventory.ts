@@ -562,6 +562,52 @@ export const TENANT_DEPENDENCIES: readonly TenantDependency[] = [
     crossTenantReachable: false,
     rationale: 'How items are counted. Deleted after the items that name them.',
   },
+  /*
+   * Fixed Assets F1, children first — see migration 044. Ordered BEFORE the
+   * business parties and the chart of accounts: an asset names a supplier and a
+   * category, and a category names three accounts, all under RESTRICT keys that
+   * would otherwise refuse to let their targets go.
+   */
+  {
+    table: 'fixed_asset_audit_events',
+    ownershipKey: 'organization_id',
+    kind: 'authoritative',
+    disposition: 'delete',
+    order: 40.71,
+    label: 'Fixed-asset audit events',
+    crossTenantReachable: false,
+    rationale: 'The history of a tenant asset register. Append-only in every other circumstance; the purge authorises DELETE alone for this transaction, never UPDATE, so no trail can be rewritten on the way past.',
+  },
+  {
+    table: 'fixed_assets',
+    ownershipKey: 'organization_id',
+    kind: 'authoritative',
+    disposition: 'delete',
+    order: 40.712,
+    label: 'Fixed asset register',
+    crossTenantReachable: false,
+    rationale: 'What the tenant owns. References its category and its supplier under RESTRICT keys, so it goes before both.',
+  },
+  {
+    table: 'fixed_asset_numbering',
+    ownershipKey: 'organization_id',
+    kind: 'authoritative',
+    disposition: 'delete',
+    order: 40.714,
+    label: 'Fixed-asset numbering',
+    crossTenantReachable: false,
+    rationale: 'The held asset-code sequence; meaningless once the register is gone.',
+  },
+  {
+    table: 'fixed_asset_categories',
+    ownershipKey: 'organization_id',
+    kind: 'authoritative',
+    disposition: 'delete',
+    order: 40.716,
+    label: 'Fixed asset categories',
+    crossTenantReachable: false,
+    rationale: 'Where a tenant maps asset cost, accumulated depreciation and depreciation expense to its chart. References accounts under RESTRICT keys, so it goes before them — and after the assets that name it.',
+  },
   {
     table: 'business_party_audit_events',
     ownershipKey: 'organization_id',
@@ -847,6 +893,12 @@ export const DIRECTLY_OWNED_TABLES = [
   'inventory_items',
   'warehouses',
   'units_of_measure',
+  /* Fixed Assets F1, children first — see migration 044. Before the business
+   * parties an asset names and the accounts a category maps. */
+  'fixed_asset_audit_events',
+  'fixed_assets',
+  'fixed_asset_numbering',
+  'fixed_asset_categories',
   'business_party_audit_events',
   'business_party_customer_profiles',
   'business_party_supplier_profiles',

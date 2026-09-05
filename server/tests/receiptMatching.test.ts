@@ -1336,6 +1336,11 @@ describe('who may match', () => {
 describe('migration 043', () => {
   it('rolls back and reapplies when nothing has been matched', async () => {
     const migrator = createMigrator(ctx.db);
+    /* 044 sits on top now, so it comes off first. */
+    const registered = await migrator.migrateDown();
+    expect(registered.error).toBeUndefined();
+    expect(registered.results?.[0]?.migrationName).toBe('044_fixed_asset_register');
+
     const down = await migrator.migrateDown();
     expect(down.error).toBeUndefined();
     expect(down.results?.[0]?.migrationName).toBe('043_receipt_matching');
@@ -1359,7 +1364,13 @@ describe('migration 043', () => {
     }]);
     await postBill(b, bill.json().bill.id, bill.json().bill.version);
 
-    const down = await createMigrator(ctx.db).migrateDown();
+    /* No asset was registered, so 044 comes off cleanly; 043 is the one
+     * holding the clearing this test is about. */
+    const migrator = createMigrator(ctx.db);
+    const registered = await migrator.migrateDown();
+    expect(registered.error).toBeUndefined();
+
+    const down = await migrator.migrateDown();
     expect(down.error).toBeDefined();
     expect(String((down.error as Error).message)).toMatch(/Refusing to roll back 043/);
 

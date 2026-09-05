@@ -709,6 +709,10 @@ describe('migration 037', () => {
     /* Each later migration comes off first. Asserting the name rather than a
      * count is what makes a new one fail here loudly instead of silently
      * rolling back something else. */
+    const registered = await migrator.migrateDown();
+    expect(registered.error).toBeUndefined();
+    expect(registered.results?.[0]?.migrationName).toBe('044_fixed_asset_register');
+
     const matched = await migrator.migrateDown();
     expect(matched.error).toBeUndefined();
     expect(matched.results?.[0]?.migrationName).toBe('043_receipt_matching');
@@ -763,9 +767,13 @@ describe('migration 037', () => {
     expect(created.statusCode, created.body).toBe(201);
 
     const migrator = createMigrator(ctx.db);
-    /* Nothing matched, ordered, counted, sold, stocked or moved, so 043, 042,
-     * 041, 040, 039 and 038 come off without complaint; 037 is the one holding
-     * the catalogue this test is about. */
+    /* No asset was registered and nothing was matched, ordered, counted, sold,
+     * stocked or moved, so 044, 043, 042, 041, 040, 039 and 038 come off
+     * without complaint; 037 is the one holding the catalogue this test is
+     * about. */
+    const registered = await migrator.migrateDown();
+    expect(registered.error).toBeUndefined();
+
     const matched = await migrator.migrateDown();
     expect(matched.error).toBeUndefined();
     const purchased = await migrator.migrateDown();
@@ -794,6 +802,10 @@ describe('migration 037', () => {
     await call('GET', '/api/inventory/units', user);
 
     const migrator = createMigrator(ctx.db);
+    const registered = await migrator.migrateDown();
+    expect(registered.error).toBeUndefined();
+    expect(registered.results?.[0]?.migrationName).toBe('044_fixed_asset_register');
+
     const matched = await migrator.migrateDown();
     expect(matched.error).toBeUndefined();
     expect(matched.results?.[0]?.migrationName).toBe('043_receipt_matching');

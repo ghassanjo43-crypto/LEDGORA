@@ -780,7 +780,11 @@ describe('workspace deletion', () => {
 describe('migration 040', () => {
   it('rolls back and reapplies when nothing was sold', async () => {
     const migrator = createMigrator(ctx.db);
-    /* 042 and 041 sit on top now, so they come off first. */
+    /* 044, 043, 042 and 041 sit on top now, so they come off first. */
+    const registered = await migrator.migrateDown();
+    expect(registered.error).toBeUndefined();
+    expect(registered.results?.[0]?.migrationName).toBe('044_fixed_asset_register');
+
     const matched = await migrator.migrateDown();
     expect(matched.error).toBeUndefined();
     expect(matched.results?.[0]?.migrationName).toBe('043_receipt_matching');
@@ -813,8 +817,12 @@ describe('migration 040', () => {
     await draftAndIssue(b, [soldLine(b, '4', '12.000')]);
 
     const migrator = createMigrator(ctx.db);
-    /* Nothing was ordered or counted, so 042 and 041 come off cleanly; 040 is
-     * the one holding the stocked sale this test is about. */
+    /* No asset was registered and nothing was matched, ordered or counted, so
+     * 044, 043, 042 and 041 come off cleanly; 040 is the one holding the
+     * stocked sale this test is about. */
+    const registered = await migrator.migrateDown();
+    expect(registered.error).toBeUndefined();
+
     const matched = await migrator.migrateDown();
     expect(matched.error).toBeUndefined();
 

@@ -681,7 +681,11 @@ describe('reconciliation', () => {
 describe('migration 041', () => {
   it('rolls back and reapplies when nothing has been counted', async () => {
     const migrator = createMigrator(ctx.db);
-    /* 042 sits on top now, so it comes off first. */
+    /* 044, 043 and 042 sit on top now, so they come off first. */
+    const registered = await migrator.migrateDown();
+    expect(registered.error).toBeUndefined();
+    expect(registered.results?.[0]?.migrationName).toBe('044_fixed_asset_register');
+
     const matched = await migrator.migrateDown();
     expect(matched.error).toBeUndefined();
     expect(matched.results?.[0]?.migrationName).toBe('043_receipt_matching');
@@ -710,8 +714,12 @@ describe('migration 041', () => {
     await countIt(b, [{ itemId: b.item, countedQuantity: '8' }]);
 
     const migrator = createMigrator(ctx.db);
-    /* Nothing was matched or ordered, so 043 and 042 come off cleanly; 041 is
-     * the one holding the count this test is about. */
+    /* No asset was registered and nothing was matched or ordered, so 044, 043
+     * and 042 come off cleanly; 041 is the one holding the count this test is
+     * about. */
+    const registered = await migrator.migrateDown();
+    expect(registered.error).toBeUndefined();
+
     const matched = await migrator.migrateDown();
     expect(matched.error).toBeUndefined();
 

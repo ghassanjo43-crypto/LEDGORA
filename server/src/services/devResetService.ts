@@ -483,6 +483,39 @@ const RESET_PLAN: readonly PlanEntry[] = [
     label: 'Units of measure',
     why: 'Deleted after the items that name them.',
   },
+  /*
+   * Fixed Assets F1, children first — see migration 044. Before the business
+   * parties an asset names and the accounts a category maps, both of which are
+   * RESTRICT keys that would otherwise abort the reset halfway.
+   */
+  {
+    table: 'fixed_asset_audit_events',
+    action: 'scoped_delete',
+    order: 30.71,
+    label: 'Fixed-asset audit events',
+    why: 'The history of an asset register; meaningless once the register is gone. Append-only, so the reset authorises DELETE for its transaction only.',
+  },
+  {
+    table: 'fixed_assets',
+    action: 'scoped_delete',
+    order: 30.712,
+    label: 'Fixed asset register',
+    why: 'References its category and its supplier under RESTRICT keys, so it goes before both.',
+  },
+  {
+    table: 'fixed_asset_numbering',
+    action: 'scoped_delete',
+    order: 30.714,
+    label: 'Fixed-asset numbering',
+    why: 'The held asset-code sequence; meaningless once the register is gone.',
+  },
+  {
+    table: 'fixed_asset_categories',
+    action: 'scoped_delete',
+    order: 30.716,
+    label: 'Fixed asset categories',
+    why: 'References accounts under RESTRICT keys, so it goes before them — and after the assets that name it.',
+  },
   {
     table: 'bill_audit_events',
     action: 'scoped_delete',
@@ -1038,6 +1071,14 @@ export async function executeReset(
      * destroyed is the one circumstance where they must go with it.
      */
     await sql`SET LOCAL ledgora.allow_stock_purge = 'on'`.execute(trx);
+    /*
+     * And the fixed-asset trail, for the same reason and on the same terms. The
+     * register's history is append-only in every other circumstance; a workspace
+     * being destroyed is the one circumstance where it must go with it. DELETE
+     * alone — UPDATE stays refused unconditionally, so no record of who
+     * configured what can be quietly rewritten under cover of a purge.
+     */
+    await sql`SET LOCAL ledgora.allow_fixed_asset_purge = 'on'`.execute(trx);
 
     for (const entry of RESET_SEQUENCE) {
       if (entry.action === 'truncate') {

@@ -1128,6 +1128,14 @@ async function deleteAccountTransaction(
      * destroyed is the one circumstance where they must go with it.
      */
     await sql`SET LOCAL ledgora.allow_stock_purge = 'on'`.execute(trx);
+    /*
+     * And the fixed-asset trail, for the same reason and on the same terms. The
+     * register's history is append-only in every other circumstance; a workspace
+     * being destroyed is the one circumstance where it must go with it. DELETE
+     * alone — UPDATE stays refused unconditionally, so no record of who
+     * configured what can be quietly rewritten under cover of a purge.
+     */
+    await sql`SET LOCAL ledgora.allow_fixed_asset_purge = 'on'`.execute(trx);
     const user = await trx
       .selectFrom('users')
       .selectAll()
@@ -1635,6 +1643,14 @@ async function purgeSubscriberTransaction(
      * destroyed is the one circumstance where they must go with it.
      */
     await sql`SET LOCAL ledgora.allow_stock_purge = 'on'`.execute(trx);
+    /*
+     * And the fixed-asset trail, for the same reason and on the same terms. The
+     * register's history is append-only in every other circumstance; a workspace
+     * being destroyed is the one circumstance where it must go with it. DELETE
+     * alone — UPDATE stays refused unconditionally, so no record of who
+     * configured what can be quietly rewritten under cover of a purge.
+     */
+    await sql`SET LOCAL ledgora.allow_fixed_asset_purge = 'on'`.execute(trx);
 
     const organization = await trx
       .selectFrom('organizations')

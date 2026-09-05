@@ -38,6 +38,7 @@ import {
   clearInventoryCache, clearStockCache, clearCountCache,
 } from '@/services/inventory/inventoryBackend';
 import { clearPurchasingCache } from '@/services/purchasing/purchasingBackend';
+import { clearFixedAssetCache } from '@/services/fixedAssets/fixedAssetsBackend';
 import { useInvoiceStore } from '@/store/invoiceStore';
 import { useServerTaxCodeStore } from '@/store/serverTaxCodeStore';
 import { useCompanyStore } from '@/store/companyStore';
@@ -137,6 +138,13 @@ export function enterCompanyScope(reference: string | null): void {
    * bookkeeper acts on.
    */
   clearPurchasingCache();
+  /*
+   * And the fixed-asset register with its categories: the previous company's
+   * assets on screen is how somebody edits the wrong machine's useful life, and
+   * a category from another company's chart would offer account mappings this
+   * company's ledger has never had.
+   */
+  clearFixedAssetCache();
 
   /*
    * And the invoices, for the same reason: on server books they are a cache of

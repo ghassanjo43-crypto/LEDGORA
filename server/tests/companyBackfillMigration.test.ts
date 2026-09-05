@@ -39,6 +39,7 @@ afterEach(async () => { await ctx.close(); });
  */
 async function rollBackCompanyScoping(): Promise<void> {
   for (const expected of [
+    '044_fixed_asset_register',
     '043_receipt_matching',
     '042_purchase_orders',
     '041_stock_counts',

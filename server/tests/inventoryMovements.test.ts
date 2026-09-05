@@ -901,7 +901,11 @@ describe('migration 038', () => {
   it('rolls back and reapplies when the ledger is empty', async () => {
     const migrator = createMigrator(ctx.db);
 
-    /* 042, 041, 040 and 039 sit on top now, so they come off first. */
+    /* 044, 043, 042, 041, 040 and 039 sit on top now, so they come off first. */
+    const registered = await migrator.migrateDown();
+    expect(registered.error).toBeUndefined();
+    expect(registered.results?.[0]?.migrationName).toBe('044_fixed_asset_register');
+
     const matched = await migrator.migrateDown();
     expect(matched.error).toBeUndefined();
     expect(matched.results?.[0]?.migrationName).toBe('043_receipt_matching');
@@ -941,9 +945,13 @@ describe('migration 038', () => {
     await receipt(b, '2', '1.000');
 
     const migrator = createMigrator(ctx.db);
-    /* Nothing was ordered, counted, sold on an invoice or bought on a bill
-     * here, so 042, 041, 040 and 039 come off cleanly; 038 is the one holding
-     * the movements this test is about. */
+    /* No asset was registered, and nothing was matched, ordered, counted, sold
+     * on an invoice or bought on a bill here, so 044, 043, 042, 041, 040 and
+     * 039 come off cleanly; 038 is the one holding the movements this test is
+     * about. */
+    const registered = await migrator.migrateDown();
+    expect(registered.error).toBeUndefined();
+
     const matched = await migrator.migrateDown();
     expect(matched.error).toBeUndefined();
 

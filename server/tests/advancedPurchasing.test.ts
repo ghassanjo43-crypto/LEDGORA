@@ -1508,7 +1508,11 @@ describe('who may do what', () => {
 describe('migration 042', () => {
   it('rolls back and reapplies when nothing has been ordered', async () => {
     const migrator = createMigrator(ctx.db);
-    /* 043 sits on top now, so it comes off first. */
+    /* 044 and 043 sit on top now, so they come off first. */
+    const registered = await migrator.migrateDown();
+    expect(registered.error).toBeUndefined();
+    expect(registered.results?.[0]?.migrationName).toBe('044_fixed_asset_register');
+
     const matched = await migrator.migrateDown();
     expect(matched.error).toBeUndefined();
     expect(matched.results?.[0]?.migrationName).toBe('043_receipt_matching');
@@ -1535,7 +1539,11 @@ describe('migration 042', () => {
     await receive(b, order.id, [{ orderLineId: order.lineIds[0]!, quantity: '2' }]);
 
     const migrator = createMigrator(ctx.db);
-    /* Nothing was matched, so 043 comes off cleanly; 042 holds the commitment. */
+    /* No asset was registered and nothing was matched, so 044 and 043 come off
+     * cleanly; 042 holds the commitment. */
+    const registered = await migrator.migrateDown();
+    expect(registered.error).toBeUndefined();
+
     const matched = await migrator.migrateDown();
     expect(matched.error).toBeUndefined();
 

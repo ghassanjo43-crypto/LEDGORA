@@ -1,5 +1,12 @@
 /**
- * Fixed Asset Register — the source-document workbench.
+ * Fixed Asset Register — durable on the server, disposable in Free Demo.
+ *
+ * A durable subscriber's register lives in PostgreSQL and is reached only
+ * through the gateway (see `DurableAssetRegisterPage`); Free Demo keeps the
+ * local posting workbench below, which is disposable by design and unchanged.
+ *
+ * ── The demo workbench below ─────────────────────────────────────────────────
+ * The source-document workbench.
  *
  * Every transaction screen (purchase, capitalize, transfer, impair, revalue,
  * dispose, reverse) shows the generated journal preview BEFORE posting, and
@@ -7,6 +14,8 @@
  * closed period, or otherwise invalid (the store re-validates everything).
  */
 import { useMemo, useState } from 'react';
+import { fixedAssetsAreServerAuthoritative } from '@/services/fixedAssets/fixedAssetsBackend';
+import { DurableAssetRegisterPage } from './DurableAssetRegisterPage';
 import { useFixedAssetStore, makeBlankAsset } from '@/store/fixedAssetStore';
 import { useStore } from '@/store/useStore';
 import { useEntityStore } from '@/store/useEntityStore';
@@ -30,6 +39,18 @@ type ActionKey = 'purchase' | 'capitalize' | 'transfer' | 'intercompany' | 'impa
 const today = (): string => new Date().toISOString().slice(0, 10);
 
 export function FixedAssetRegisterPage() {
+  /*
+   * Durable books go to the server and nowhere else. The workbench below —
+   * purchase, capitalize, impair, revalue, dispose — posts vouchers into the
+   * browser's journal store, which is right for Free Demo and would be a
+   * fabricated set of books for a subscriber.
+   */
+  if (fixedAssetsAreServerAuthoritative()) return <DurableAssetRegisterPage />;
+  return <DemoFixedAssetRegisterPage />;
+}
+
+/** Free Demo: the local, disposable workbench, exactly as it was. */
+function DemoFixedAssetRegisterPage() {
   const store = useFixedAssetStore();
   const baseCurrency = useStore((s) => s.settings.baseCurrency);
   const entities = useEntityStore((s) => s.entities);

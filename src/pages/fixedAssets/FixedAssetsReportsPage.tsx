@@ -1,10 +1,19 @@
 /**
- * Fixed-asset reports: register, additions, disposals, depreciation schedule,
+ * Fixed-asset reports — durable on the server, disposable in Free Demo.
+ *
+ * A durable subscriber gets the register reports this release can honestly
+ * produce (see `DurableAssetReportsPage`) and NOT the reconciliation, which
+ * would compare nothing to nothing and announce that the books balance.
+ *
+ * ── The demo reports below ───────────────────────────────────────────────────
+ * Register, additions, disposals, depreciation schedule,
  * groupings (category/location/custodian/cost center/project), fully
  * depreciated, impaired, held for sale, gain/loss on disposal, movement
  * roll-forward and the reconciliation of the register to the General Ledger.
  */
 import { useMemo, useState } from 'react';
+import { fixedAssetsAreServerAuthoritative } from '@/services/fixedAssets/fixedAssetsBackend';
+import { DurableAssetReportsPage } from './DurableAssetReportsPage';
 import { useFixedAssetStore } from '@/store/fixedAssetStore';
 import { useJournalStore } from '@/store/journalStore';
 import { useStore } from '@/store/useStore';
@@ -46,6 +55,20 @@ const REPORTS: Array<{ value: ReportKey; label: string }> = [
 ];
 
 export function FixedAssetsReportsPage() {
+  /*
+   * Durable books get the register reports, and NOT the reconciliation.
+   *
+   * Every report below derives from browser postings. For a subscriber they
+   * would all read zero — including the reconciliation, which would announce
+   * that the register ties to the ledger because it compared nothing to
+   * nothing. That is a green tick somebody signs under.
+   */
+  if (fixedAssetsAreServerAuthoritative()) return <DurableAssetReportsPage />;
+  return <DemoFixedAssetsReportsPage />;
+}
+
+/** Free Demo: the local, disposable reports, exactly as they were. */
+function DemoFixedAssetsReportsPage() {
   const store = useFixedAssetStore();
   const entries = useJournalStore((s) => s.entries);
   const accounts = useStore((s) => s.accounts);

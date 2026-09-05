@@ -1,5 +1,12 @@
 /**
- * Depreciation runs — preview → validate → (approve) → post → reverse.
+ * Depreciation runs — Free Demo only.
+ *
+ * A durable subscriber sees why runs are not available yet rather than an empty
+ * list: this release posts nothing, so there is no schedule to show and nothing
+ * missing. The workbench below is the local, disposable one.
+ *
+ * ── The demo workbench below ─────────────────────────────────────────────────
+ * Preview → validate → (approve) → post → reverse.
  *
  * A run is scoped by company, branch, cost center, project, category or an
  * explicit asset list, computes each asset's charge with its own method, and
@@ -8,6 +15,9 @@
  * posted run reverses with a mirrored voucher restoring the register.
  */
 import { useMemo, useState } from 'react';
+import { fixedAssetsAreServerAuthoritative } from '@/services/fixedAssets/fixedAssetsBackend';
+import { useFixedAssetRegister } from '@/services/fixedAssets/useFixedAssetRegister';
+import { DeferredAccountingPanel } from './DeferredAccounting';
 import { useFixedAssetStore } from '@/store/fixedAssetStore';
 import { useStore } from '@/store/useStore';
 import type { DepreciationRun } from '@/types/fixedAssets';
@@ -32,6 +42,35 @@ const RUN_TONE: Record<DepreciationRun['status'], 'slate' | 'amber' | 'green' | 
 };
 
 export function FixedAssetsDepreciationPage() {
+  /*
+   * Durable books get the honest answer, not an empty run list.
+   *
+   * The workbench below previews a charge and posts a voucher into the
+   * browser's journal store. Rendering it for a subscriber would offer to
+   * depreciate assets the server has never costed, into books it does not
+   * keep — and the run would look posted.
+   */
+  if (fixedAssetsAreServerAuthoritative()) return <DurableDepreciationDeferred />;
+  return <DemoFixedAssetsDepreciationPage />;
+}
+
+/** What a durable subscriber sees where the runs will be. */
+function DurableDepreciationDeferred() {
+  const { capabilities } = useFixedAssetRegister();
+  return (
+    <div className="space-y-4">
+      <Alert variant="info" title="Depreciation runs are not available yet">
+        Your asset register and its depreciation policy are kept on the Ledgora service. No
+        schedule is generated and no charge is posted, so there is nothing here to show — and
+        nothing missing. The policy you record now is what the first run will use.
+      </Alert>
+      <DeferredAccountingPanel capabilities={capabilities} />
+    </div>
+  );
+}
+
+/** Free Demo: the local, disposable depreciation workbench, exactly as it was. */
+function DemoFixedAssetsDepreciationPage() {
   const store = useFixedAssetStore();
   const currency = useStore((s) => s.settings.baseCurrency);
   const { costCenterOptions, projectOptions } = useFaOptions();

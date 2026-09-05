@@ -805,6 +805,12 @@ export interface Database {
   inventory_items: InventoryItemsTable;
   inventory_settings: InventorySettingsTable;
   inventory_audit_events: InventoryAuditEventsTable;
+
+  /* Fixed Assets F1 — register and configuration, no posted figure anywhere. */
+  fixed_asset_categories: FixedAssetCategoriesTable;
+  fixed_assets: FixedAssetsTable;
+  fixed_asset_numbering: FixedAssetNumberingTable;
+  fixed_asset_audit_events: FixedAssetAuditEventsTable;
   inventory_documents: InventoryDocumentsTable;
   inventory_movements: InventoryMovementsTable;
   inventory_document_numbering: InventoryDocumentNumberingTable;
@@ -2247,5 +2253,105 @@ export interface BillReceiptMatchesTable {
   reversed_at: Timestamp | null;
   reversed_by: string | null;
   matched_by: string | null;
+  created_at: Generated<Timestamp>;
+}
+
+/* ══ Fixed Assets F1 — the register and its configuration (migration 044) ════
+ *
+ * There is no cost, no accumulated depreciation, no carrying amount and no
+ * schedule in any of these shapes, because there is none in the tables. Every
+ * one of those figures is the result of a posting F1 does not perform.
+ */
+
+export interface FixedAssetCategoriesTable {
+  id: Generated<string>;
+  organization_id: string;
+  company_id: string;
+  code: string;
+  name: string;
+  description: Generated<string>;
+  /** straight_line | none — the only two F1 can evaluate. */
+  default_method: Generated<string>;
+  /** NULL exactly when the method is `none`. */
+  default_useful_life_months: number | null;
+  /** A PERCENTAGE, matching the product's category field. Never an amount. */
+  default_residual_percent: Generated<string>;
+  /** full_month, and nothing else is implemented. */
+  depreciation_convention: Generated<string>;
+  asset_cost_account_id: string | null;
+  accumulated_depreciation_account_id: string | null;
+  depreciation_expense_account_id: string | null;
+  /** active | archived */
+  status: Generated<string>;
+  version: Generated<number>;
+  created_by: string | null;
+  updated_by: string | null;
+  created_at: Generated<Timestamp>;
+  updated_at: Generated<Timestamp>;
+}
+
+export interface FixedAssetsTable {
+  id: Generated<string>;
+  organization_id: string;
+  company_id: string;
+  asset_code: string;
+  name: string;
+  description: Generated<string>;
+  category_id: string;
+  /** A calendar date. Read back through `toCalendarDate`, never `toISOString`. */
+  acquisition_date: string;
+  depreciation_start_date: string | null;
+  /** Frozen from the category at creation; a later category edit never moves it. */
+  depreciation_method: Generated<string>;
+  useful_life_months: number | null;
+  depreciation_convention: Generated<string>;
+  /** An AMOUNT at the engine's scale, matching the product's asset-level field. */
+  residual_value: Generated<string>;
+  /** Identical units this one record represents. Not a quantity on hand. */
+  quantity: Generated<number>;
+  location: Generated<string>;
+  custodian: Generated<string>;
+  branch: Generated<string>;
+  department: Generated<string>;
+  /** Source information. Creates no bill, settles nothing, capitalises nothing. */
+  supplier_party_id: string | null;
+  purchase_reference: Generated<string>;
+  notes: Generated<string>;
+  /** draft | archived — every other status asserts a posting that does not exist. */
+  status: Generated<string>;
+  version: Generated<number>;
+  created_by: string | null;
+  updated_by: string | null;
+  created_at: Generated<Timestamp>;
+  updated_at: Generated<Timestamp>;
+}
+
+export interface FixedAssetNumberingTable {
+  organization_id: string;
+  company_id: string;
+  /** Only 'asset' today; a CHECK keeps it that way. */
+  kind: string;
+  prefix: Generated<string>;
+  sequence_length: Generated<number>;
+  next_sequence: Generated<number>;
+  created_at: Generated<Timestamp>;
+  updated_at: Generated<Timestamp>;
+}
+
+export interface FixedAssetAuditEventsTable {
+  id: Generated<string>;
+  organization_id: string;
+  company_id: string;
+  /** category | asset */
+  subject_type: string;
+  subject_id: string | null;
+  action: string;
+  previous_version: number | null;
+  resulting_version: number | null;
+  reason: Generated<string>;
+  detail: Generated<string>;
+  actor_user_id: string | null;
+  actor_name: Generated<string>;
+  request_id: Generated<string>;
   created_at: Generated<Timestamp>;
 }
